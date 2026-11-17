@@ -39,7 +39,7 @@ class _FakePrinterApi:
         self.fail_creds = False
         self.rows = [
             {"location_id": "RCOI", "name": INDX, "ip_address": "", "api_key": "", "toolhead_count": 2},
-            {"location_id": "XL", "name": "🦝 XL", "ip_address": "192.168.1.121",
+            {"location_id": "XL", "name": "🦝 XL", "ip_address": "192.0.2.11",
              "api_key": SENTINEL, "toolhead_count": 1},
         ]
         self.entries = [
@@ -110,21 +110,21 @@ def _pm_name(page: Page, loc_id: str):
 @pytest.mark.usefixtures("require_server")
 def test_save_toolheads_also_saves_a_typed_connection(page: Page, base_url: str, reset_dom_state_js: str):
     api = _open_editor(page, base_url, reset_dom_state_js)
-    _conn(page, "RCOI", ".pc-ip").fill("192.168.1.120")
+    _conn(page, "RCOI", ".pc-ip").fill("192.0.2.12")
     _conn(page, "RCOI", ".pc-key").fill("INDXKEY")
     page.locator("#pm-save").click()
     # The reload re-renders from the fake server — the saved IP must be what shows.
     page.wait_for_function(
         f"""() => {{ const el = document.querySelector('{HOST} .pc-row[data-location-id="RCOI"] .pc-ip');
-                    return el && el.getAttribute('data-initial') === '192.168.1.120'; }}""",
+                    return el && el.getAttribute('data-initial') === '192.0.2.12'; }}""",
         timeout=10000)
-    expect(_conn(page, "RCOI", ".pc-ip")).to_have_value("192.168.1.120")
+    expect(_conn(page, "RCOI", ".pc-ip")).to_have_value("192.0.2.12")
     expect(_conn(page, "RCOI", ".pc-key-badge")).to_be_visible()
     paths = [c[1] for c in api.calls]
     assert paths == ["/api/printer_creds", "/api/printer_map"], paths
     creds_body = api.calls[0][2]
     assert creds_body["location_id"] == "RCOI"
-    assert creds_body["ip_address"] == "192.168.1.120"
+    assert creds_body["ip_address"] == "192.0.2.12"
     assert creds_body["api_key"] == "INDXKEY"
 
 
@@ -132,7 +132,7 @@ def test_save_toolheads_also_saves_a_typed_connection(page: Page, base_url: str,
 def test_row_save_keeps_unsaved_toolhead_edits(page: Page, base_url: str, reset_dom_state_js: str):
     api = _open_editor(page, base_url, reset_dom_state_js)
     _pm_name(page, "RCOI-1").fill("🦝 Core One+ INDX")
-    _conn(page, "RCOI", ".pc-ip").fill("192.168.1.120")
+    _conn(page, "RCOI", ".pc-ip").fill("192.0.2.12")
     _conn(page, "RCOI", ".pc-save").click()
     expect(_conn(page, "RCOI", ".pc-status")).to_have_text("✓ Saved", timeout=10000)
     assert [c[1] for c in api.calls] == ["/api/printer_creds"]
@@ -151,7 +151,7 @@ def test_missing_connection_is_called_out_until_saved(page: Page, base_url: str,
     expect(missing).to_be_visible()
     expect(missing).to_contain_text("Core One INDX")
     expect(missing).not_to_contain_text("XL")
-    _conn(page, "RCOI", ".pc-ip").fill("192.168.1.120")
+    _conn(page, "RCOI", ".pc-ip").fill("192.0.2.12")
     _conn(page, "RCOI", ".pc-save").click()
     expect(missing).to_be_hidden(timeout=10000)
 
@@ -189,12 +189,12 @@ def test_failed_connection_save_stops_before_the_toolhead_save(page: Page, base_
     # connection save would throw away what the user typed.
     api = _open_editor(page, base_url, reset_dom_state_js)
     api.fail_creds = True
-    _conn(page, "RCOI", ".pc-ip").fill("192.168.1.120")
+    _conn(page, "RCOI", ".pc-ip").fill("192.0.2.12")
     _conn(page, "RCOI", ".pc-key").fill("INDXKEY")
     page.locator("#pm-save").click()
     expect(page.locator("#pm-status")).to_have_text("Not saved", timeout=10000)
     assert [c[1] for c in api.calls] == ["/api/printer_creds"]
-    expect(_conn(page, "RCOI", ".pc-ip")).to_have_value("192.168.1.120")
+    expect(_conn(page, "RCOI", ".pc-ip")).to_have_value("192.0.2.12")
     expect(_conn(page, "RCOI", ".pc-key")).to_have_value("INDXKEY")
 
 
@@ -203,11 +203,11 @@ def test_untouched_new_toolhead_row_does_not_block_the_save(page: Page, base_url
                                                            reset_dom_state_js: str):
     api = _open_editor(page, base_url, reset_dom_state_js)
     page.locator("#pm-add").click()
-    _conn(page, "RCOI", ".pc-ip").fill("192.168.1.120")
+    _conn(page, "RCOI", ".pc-ip").fill("192.0.2.12")
     page.locator("#pm-save").click()
     page.wait_for_function(
         f"""() => {{ const el = document.querySelector('{HOST} .pc-row[data-location-id="RCOI"] .pc-ip');
-                    return el && el.getAttribute('data-initial') === '192.168.1.120'; }}""",
+                    return el && el.getAttribute('data-initial') === '192.0.2.12'; }}""",
         timeout=10000)
     assert [c[1] for c in api.calls] == ["/api/printer_creds", "/api/printer_map"]
 

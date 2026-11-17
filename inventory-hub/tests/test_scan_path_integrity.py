@@ -40,23 +40,26 @@ def _read(p: Path) -> str:
 # the user is expected to scan. The confirm overlays are the dangerous ones: they
 # render a "Scan to Cancel" QR while focusing the YES button, so before the fix
 # the CANCEL scan's terminating Enter performed the CONFIRM instead.
+# The guard is window.enterIsAScan() for an Enter and window.scanIsArriving()
+# for a printable key (Group 57 review, round 4): isScanInFlight alone counts
+# 500 ms from a scan's FIRST key, so a slower scanner's ~30-character "Scan to
+# Cancel" outlasted it and confirmed again. Behaviour: test_slow_scan_confirms_js.py.
 ENTER_OWNERSHIP_SITES = [
-    # (file, label, minimum expected guard count)
+    # (file, label, guard, minimum expected guard count)
     # The count matters: a bare "is the string present" check is VACUOUS for a
-    # file that uses isScanInFlight for something ELSE. It counts guard LINES:
-    # one guard reads `window.isScanInFlight && window.isScanInFlight()`, so
-    # counting occurrences let inv_cmd.js's Shift+B line alone satisfy a
-    # minimum of 2 (found 2026-10-13).
+    # file that uses the guard for something ELSE. It counts guard LINES: one
+    # guard reads `window.enterIsAScan ? window.enterIsAScan() : …`, so counting
+    # occurrences let one line satisfy a minimum of 2 (found 2026-10-13).
     # The Location Manager assign and scan-assign confirms render through the
     # shared window.confirmActivePrint since Group 39.4; its guard is pinned by
     # test_the_shared_active_print_confirm_owns_the_enter_guard below.
-    (JS / "inv_quickswap.js", "Quick-Swap confirm overlay + slot grid", 2),
-    (JS / "inv_cmd.js", "Shift+B closure", 1),
+    (JS / "inv_quickswap.js", "Quick-Swap confirm overlay + slot grid", "enterIsAScan", 2),
+    (JS / "inv_cmd.js", "Shift+B closure", "scanIsArriving", 1),
 ]
 
 
-def _guard_lines(src: str) -> int:
-    return sum(1 for line in src.splitlines() if "isScanInFlight" in line and "//" not in line.split("isScanInFlight")[0])
+def _guard_lines(src: str, guard: str) -> int:
+    return sum(1 for line in src.splitlines() if guard in line and "//" not in line.split(guard)[0])
 
 
 def _function_body(src: str, header: str) -> str:
@@ -65,9 +68,9 @@ def _function_body(src: str, header: str) -> str:
     return src[start:src.index("\n};", start)]
 
 
-@pytest.mark.parametrize("path,label,minimum", ENTER_OWNERSHIP_SITES,
-                         ids=[p.name for p, _, _ in ENTER_OWNERSHIP_SITES])
-def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str, minimum: int):
+@pytest.mark.parametrize("path,label,guard,minimum", ENTER_OWNERSHIP_SITES,
+                         ids=[p.name for p, _, _, _ in ENTER_OWNERSHIP_SITES])
+def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str, guard: str, minimum: int):
     """Each Enter handler must bail while a scan is in flight.
 
     Without it, the Enter that terminates a scan is treated as a press of the
@@ -76,10 +79,10 @@ def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str, minim
     toolhead.
     """
     src = _read(path)
-    found = _guard_lines(src)
+    found = _guard_lines(src, guard)
     assert found >= minimum, (
-        f"{path.name} ({label}) has {found} isScanInFlight guard(s), expected "
-        f">= {minimum}. One of its scan-in-flight guards was removed — if that "
+        f"{path.name} ({label}) has {found} {guard} guard(s), expected "
+        f">= {minimum}. One of its scan guards was removed or weakened — if that "
         "is the confirm-overlay one, scanning 'Scan to Cancel' performs the "
         "CONFIRM and yanks a spool off a live toolhead."
     )
@@ -91,13 +94,13 @@ def test_the_shared_active_print_confirm_owns_the_enter_guard():
     their Enter guard now. Pin that the shared one has it, and that both overlays
     still route through it: a re-inlined copy would need its own guard again."""
     core = _function_body(_read(JS / "inv_core.js"), "window.confirmActivePrint = ")
-    assert "isScanInFlight" in core, "window.confirmActivePrint lost its scan-in-flight Enter guard"
+    assert "enterIsAScan()" in core, "window.confirmActivePrint lost its enterIsAScan Enter guard"
     for path, fn in ((JS / "inv_loc_mgr.js", "const _confirmActivePrintAssign = "),
                      (JS / "inv_cmd.js", "const _confirmActivePrintScan = ")):
         body = _function_body(_read(path), fn)
         assert "window.confirmActivePrint(" in body, (
             f"{path.name}: {fn.strip()} no longer routes through window.confirmActivePrint; "
-            "a copy of the overlay needs its own isScanInFlight Enter guard")
+            "a copy of the overlay needs its own enterIsAScan Enter guard")
 
 
 def test_quickswap_guards_both_its_enter_handlers():
@@ -107,9 +110,9 @@ def test_quickswap_guards_both_its_enter_handlers():
     unrequested swap confirm — which then inherits the overlay bug above.
     """
     src = _read(JS / "inv_quickswap.js")
-    assert src.count("isScanInFlight") >= 2, (
-        "expected a scan-in-flight guard on BOTH the confirm overlay and the "
-        f"Quick-Swap slot grid; found {src.count('isScanInFlight')}"
+    assert _guard_lines(src, "enterIsAScan") >= 2, (
+        "expected an enterIsAScan guard on BOTH the confirm overlay and the "
+        f"Quick-Swap slot grid; found {_guard_lines(src, 'enterIsAScan')}"
     )
 
 
@@ -183,11 +186,12 @@ def test_accumulator_modifier_guard_does_not_include_shift():
 # Focus-holding controls that look like buttons
 # ---------------------------------------------------------------------------
 
-# `id` -> the file it lives in. Each is a checkbox/radio that RENDERS as a
-# button or switch, so nothing on screen hints that a focus-holding <input> is
-# active and the scanner has gone deaf.
+# `id` -> the file it lives in. Each is a radio that RENDERS as a button, so
+# nothing on screen hints that a focus-holding <input> is active and the scanner
+# has gone deaf. The weigh-out list's Auto-Archive switch left this list in
+# Group 57's review, round 7: a checkbox's keys reach the scan accumulator
+# since round 6, and its blur left the focus on the page (see the test after).
 BLUR_ON_CHANGE_CONTROLS = [
-    ("weigh-auto-archive", TPL / "modals_weigh_out.html"),
     ("feeds-slot-order-ltr", TPL / "modals_loc_mgr.html"),
     ("feeds-slot-order-rtl", TPL / "modals_loc_mgr.html"),
 ]
@@ -210,6 +214,23 @@ def test_focus_holding_control_blurs_on_change(ctrl_id: str, path: Path):
     )
 
 
+def test_the_weigh_out_switch_keeps_the_focus_and_its_keys_go_to_a_box():
+    """The weigh-out list's Auto-Archive switch keeps the focus when clicked
+    (Group 57 review, round 7): a scan typed on it reaches the scan accumulator,
+    which reads a checkbox's keys since round 6, and a reading typed on it goes
+    into a weight box, because its window says so (data-fcc-weight-keys,
+    inv_core.js's weight capture). Its old blur left the focus on the page,
+    where the reading typed next went to the scan path as a spool id."""
+    src = _read(TPL / "modals_weigh_out.html")
+    idx = src.find('id="weigh-auto-archive"')
+    tag = src[src.rfind("<", 0, idx):src.find(">", idx)]
+    assert "blur" not in tag, tag
+    modal = src[src.find('<div class="modal fade" id="weighOutModal"'):]
+    assert "data-fcc-weight-keys" in modal[:modal.find(">")], "the weigh-out window lost data-fcc-weight-keys"
+    accumulator = _read(TPL / "scripts.html")
+    assert "t.type !== 'checkbox'" in accumulator, "the scan accumulator no longer reads a checkbox's keys"
+
+
 # ---------------------------------------------------------------------------
 # Shortcut handlers must not poison the buffer
 # ---------------------------------------------------------------------------
@@ -229,9 +250,9 @@ def test_wizard_shortcuts_yield_to_an_in_flight_scan():
     """Shift+E / Shift+C are indistinguishable from a scanner sending the
     uppercase letters 'E' and 'C', which appear in ordinary labels."""
     src = _read(JS / "inv_wizard.js")
-    assert "isScanInFlight" in src, (
-        "inv_wizard.js lost its scan-in-flight guard; a scanned label "
-        "containing E or C would fire expand/collapse and corrupt the scan"
+    assert "scanIsArriving" in src, (
+        "inv_wizard.js lost its scanIsArriving guard; a scanned label "
+        "containing E or C would fire expand/collapse (a slower scanner's too)"
     )
 
 
@@ -259,9 +280,10 @@ def test_weigh_out_captures_a_scan_from_a_focused_weight_field_e2e(page):
 
     Driven against a synthetic .weigh-input rather than a real weigh-out
     session: the capture listener is bound to `document` and keys only off the
-    element's class, so this exercises the real code path without needing spools
-    in the buffer — and without mutating dev inventory. processScan is stubbed
-    for the same reason.
+    class every weight box carries (fcc-weight-box, inv_core.js's weight
+    capture since Group 57's review, round 6), so this exercises the real code
+    path without needing spools in the buffer — and without mutating dev
+    inventory. processScan is stubbed for the same reason.
     """
     page.goto("http://localhost:8000/", wait_until="domcontentloaded")
     page.wait_for_function("typeof state !== 'undefined'", timeout=15000)
@@ -271,7 +293,7 @@ def test_weigh_out_captures_a_scan_from_a_focused_weight_field_e2e(page):
         window.processScan = (text, source) => window.__scanned.push([text, source]);
         const inp = document.createElement('input');
         inp.type = 'text';
-        inp.className = 'weigh-input';
+        inp.className = 'weigh-input fcc-weight-box';
         inp.id = '__probe_weigh_input';
         document.body.appendChild(inp);
         inp.focus();
@@ -299,23 +321,44 @@ def test_weigh_out_captures_a_scan_from_a_focused_weight_field_e2e(page):
         "barcode AS A WEIGHT"
     )
 
-    # 2. HUMAN: a plain numeric weight must NOT be hijacked, even if typed fast.
-    page.evaluate("""
-        window.__scanned = [];
-        const inp = document.getElementById('__probe_weigh_input');
-        inp.value = '';
-        for (const ch of '1234') {
-            inp.dispatchEvent(new KeyboardEvent('keydown', {key: ch, bubbles: true}));
-            inp.value += ch;
-        }
-        inp.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
-    """)
+    # 2. HUMAN: a plain numeric weight typed at a person's pace is never
+    #    hijacked.
+    def _type(text, gap_ms):
+        page.evaluate("""async ([txt, gap]) => {
+            window.__scanned = [];
+            const inp = document.getElementById('__probe_weigh_input');
+            inp.value = '';
+            for (const ch of txt) {
+                inp.dispatchEvent(new KeyboardEvent('keydown', {key: ch, bubbles: true}));
+                inp.value += ch;
+                if (gap) await new Promise((r) => setTimeout(r, gap));
+            }
+            inp.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+        }""", [text, gap_ms])
+
+    _type("1234", 70)
     assert page.evaluate("window.__scanned.length") == 0, (
-        "a numeric weight was misrouted to processScan — weights must never be "
-        "treated as scans, however fast they are typed"
+        "a numeric weight typed at a person's pace was misrouted to processScan"
     )
     assert page.evaluate("document.getElementById('__probe_weigh_input').value") == "1234", (
         "a typed weight was cleared out of the field"
+    )
+
+    # 3. A reading with a '.' arriving at scanner speed (a scale that types it)
+    #    stays a weight too.
+    _type("645.5", 0)
+    assert page.evaluate("window.__scanned.length") == 0, "a scale's reading with a '.' was misrouted to processScan"
+    assert page.evaluate("document.getElementById('__probe_weigh_input').value") == "645.5"
+
+    # 4. Digits alone faster than a person types are a scan, never a weight:
+    #    an old digits-only label (Derek, 2026-10-28: "I'd love to safe guard
+    #    against barcode scans adding data to the weight field"; it said
+    #    "weights must never be treated as scans, however fast they are typed"
+    #    until then).
+    _type("1234", 0)
+    assert page.evaluate("window.__scanned") == [["1234", "barcode"]], page.evaluate("window.__scanned")
+    assert page.evaluate("document.getElementById('__probe_weigh_input').value") == "", (
+        "a digits-only label was left in the weight field, where Enter would save it as a weight"
     )
 
     page.evaluate("document.getElementById('__probe_weigh_input').remove()")

@@ -11,6 +11,7 @@ description: Start working on a batched task group. Usage: /project:work-group <
 
 **Step 2: Git Prep**
 * Execute: `git checkout dev && git pull`
+* Leftover check: `git branch --merged dev` and `git branch -r --merged origin/dev`. Delete every work branch they list, here and on GitHub, each name written out in the command; never `main`, `dev`, or one under "Branches kept" in `working-groups.md` (CLAUDE.md, "Branches: delete at merge").
 * Create a feature branch: `git checkout -b feature/<group-short-name>` (e.g., `feature/weight-unification`)
 
 **Step 3: Understand Scope**

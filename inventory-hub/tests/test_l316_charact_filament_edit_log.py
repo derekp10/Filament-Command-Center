@@ -253,7 +253,10 @@ def test_update_filament_committed_write_survives_raising_logger(client):
 # ---------------------------------------------------------------------------
 # 3. _handle_prusament_url_scan — failure sub-branches by DIRECT call.
 # The matcher happy paths live in test_prusament_scan.py; these pin only the
-# write-failure handling and the product_url-upgrade idempotence.
+# write-failure handling and the product_url-upgrade idempotence. The handler
+# reads the filament through spoolman_api.get_filament_answer (Group 53 review,
+# r3-5), so that is the stub; a read that isn't the filament is pinned in
+# test_filament_answer_53.py.
 # ---------------------------------------------------------------------------
 
 _URL = "https://prusament.com/spool/17705/5b1a183b26/"
@@ -310,7 +313,7 @@ def test_prusament_temps_write_rejection_returns_error_payload_and_skips_spool_w
                  "settings_bed_temp": None, "extra": {}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
          patch("spoolman_api.get_all_spools", return_value=[matched]), \
-         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_filament_answer", return_value=(blank_fil, True)), \
          patch("spoolman_api.update_filament_or_raise",
                side_effect=spoolman_api.SpoolmanRejection("HTTP 400: nope")), \
          patch("spoolman_api.update_spool") as upd_spool, \
@@ -341,7 +344,7 @@ def test_prusament_spool_extras_write_failure_warns_with_spoolman_body():
                "filament": {"id": 7}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
          patch("spoolman_api.get_all_spools", return_value=[matched]), \
-         patch("spoolman_api.get_filament", return_value=_FIL_SYNCED), \
+         patch("spoolman_api.get_filament_answer", return_value=(_FIL_SYNCED, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[]), \
          patch("spoolman_api.update_filament_or_raise") as upd_fil, \
          patch("spoolman_api.update_spool", return_value=None) as upd_spool, \
@@ -383,7 +386,7 @@ def test_prusament_product_url_upgrade_skips_when_already_canonical():
                "filament": {"id": 7}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
          patch("spoolman_api.get_all_spools", return_value=[matched]), \
-         patch("spoolman_api.get_filament", return_value=_FIL_SYNCED), \
+         patch("spoolman_api.get_filament_answer", return_value=(_FIL_SYNCED, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[]), \
          patch("spoolman_api.update_filament_or_raise") as upd_fil, \
          patch("spoolman_api.update_spool") as upd_spool, \
@@ -414,7 +417,7 @@ def test_prusament_product_url_upgrade_skips_when_stored_has_trailing_slash():
                "filament": {"id": 7}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
          patch("spoolman_api.get_all_spools", return_value=[matched]), \
-         patch("spoolman_api.get_filament", return_value=_FIL_SYNCED), \
+         patch("spoolman_api.get_filament_answer", return_value=(_FIL_SYNCED, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[]), \
          patch("spoolman_api.update_filament_or_raise") as upd_fil, \
          patch("spoolman_api.update_spool") as upd_spool, \

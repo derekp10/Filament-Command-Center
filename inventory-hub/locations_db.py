@@ -57,10 +57,19 @@ def locations_write_lock():
 # dev testing kept accidentally committing locations.json and pull on prod
 # would clobber live bindings. Moving to a dedicated subtree lets us
 # blanket-ignore everything that isn't tracked documentation.
-_DATA_DIR = 'data'
+#
+# FCC_DATA_DIR (Group 45.9) moves the folder: a host test run (tests/conftest.py)
+# points it at a copy made for that run, so importing app from inventory-hub/
+# no longer migrates dev's live file. Dev's container and prod never set it, so
+# every path below is exactly what it always was there ('data', relative to the
+# working directory). Each is read once, here, and stays a module attribute that
+# the functions read when called: tests monkeypatch them.
+_DATA_DIR = os.environ.get('FCC_DATA_DIR') or 'data'
 JSON_FILE = os.path.join(_DATA_DIR, 'locations.json')
-_LEGACY_JSON_FILE = 'locations.json'  # former root-level path, auto-migrated below
-CSV_FILE = '3D Print Supplies - Locations.csv'
+# The two legacy sources sit one level above the data folder: the working
+# directory itself when FCC_DATA_DIR is unset, beside the override when set.
+_LEGACY_JSON_FILE = os.path.join(os.path.dirname(_DATA_DIR), 'locations.json')  # former root-level path, auto-migrated below
+CSV_FILE = os.path.join(os.path.dirname(_DATA_DIR), '3D Print Supplies - Locations.csv')
 
 # Location Type constants used for Dryer Box / Toolhead logic.
 DRYER_BOX_TYPE = 'Dryer Box'
@@ -658,6 +667,52 @@ def build_parent_map(loc_list=None):
             continue
         pmap[lid] = resolve_parent(r)  # immediate parent (upper) or None
     return pmap
+
+
+def child_row_counts(parent_map):
+    """{parent_id_upper: how many rows name it as their immediate parent}, from a
+    build_parent_map answer. The one count behind "has child rows": /api/locations
+    shows such a row as a parent ("N Total (K floating)") and the loose list files
+    its spools as loose (Group 58.4). A pseudo prefix (PM/PJ/TST) never counts as
+    a real parent."""
+    counts = {}
+    for parent in parent_map.values():
+        if parent and parent not in PSEUDO_ROOM_PREFIXES:
+            counts[parent] = counts.get(parent, 0) + 1
+    return counts
+
+
+def loose_place_ids(rows, printer_map):
+    """The LocationIDs (upper-cased) a spool can be filed at with no more exact
+    place to be (Group 58.4; the study's rule, Claude's call for veto): a Room, a
+    Virtual Room, a dash-less row with no Type (the shape /api/locations shows as
+    "<id> (Room)"), or any row with child rows, so a cart with rows counts and the
+    rows don't.
+
+    Never a toolhead type, a Dryer Box (a spool in one has its slot) or a head of a
+    printer, a Printer row that is its own head included, even with child rows.
+    A cart with no rows isn't loose: it is as exact as that place gets. Type can't
+    be the rule: a cart's rows are Type Cart too.
+
+    Pure: `rows` are locations.json's, `printer_map` is get_active_printer_map's.
+    A spool counts by its own `location`, exactly: never through spoolman_api's
+    matcher, whose prefix match would pull a room's rows in."""
+    children = child_row_counts(build_parent_map(rows))
+    heads = {str(k).strip().upper() for k in (printer_map or {})}
+    loose = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        lid = str(row.get('LocationID', '')).strip().upper()
+        if not lid or lid in heads:
+            continue
+        rtype = str(row.get('Type', '')).strip()
+        if rtype in TOOLHEAD_TYPES or rtype == DRYER_BOX_TYPE:
+            continue
+        if (rtype.lower() in ('room', 'virtual room') or (not rtype and '-' not in lid)
+                or children.get(lid)):
+            loose.add(lid)
+    return loose
 
 
 def _parent_of(loc_upper, parent_map, strict=False):

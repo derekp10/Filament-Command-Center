@@ -6,12 +6,24 @@ for toast + buffer + Activity Log updates) to catch frontend regressions
 that API-path tests can't. Lightweight suite: covers the three failure
 paths + the no-buffer pickup fallback. The happy-path (real spool move)
 is covered by the API-path test + the unit tests.
+
+Group 45 (2026-11-13): every test owns the page's buffer (conftest.own_the_buffer,
+an empty start), so nothing a test puts in the page's buffer (the bad-slot
+test's made-up #999, a spool the pickup test picks up) is saved to dev's shared
+one, and the page is closed before its routes come off. Only the pickup test
+still empties dev's SERVER buffer (clean_buffer): the server reads its own
+buffer to choose between loading a spool into the slot and a pickup, so a spool
+left there would be loaded into LR-MDB-1 slot 1. The bad-target and bad-slot
+scans are refused before the server reads its buffer.
 """
 from __future__ import annotations
 
 import pytest
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 from playwright.sync_api import TimeoutError as PWTimeoutError
+
+from conftest import own_the_buffer
 
 
 # Toast-visibility tolerance. The scan POSTs to /api/identify_scan and the error
@@ -25,6 +37,19 @@ from playwright.sync_api import TimeoutError as PWTimeoutError
 _TOAST_WAIT_MS = 8000
 
 
+@pytest.fixture(autouse=True)
+def held(page: Page):
+    """The page's own buffer, starting empty (installed before any goto), and
+    the page closed FIRST at teardown: un-routed, a live page's next buffer poll
+    within 3 s of a change saves its buffer to dev's."""
+    stored = own_the_buffer(page, [])
+    yield stored
+    try:
+        page.close()
+    except PlaywrightError:
+        pass
+
+
 def _goto_and_wait(page: Page, base_url: str) -> None:
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
@@ -36,7 +61,7 @@ def _fire_scan(page: Page, text: str) -> None:
     page.evaluate(f"window.processScan({text!r}, 'test')")
 
 
-@pytest.mark.usefixtures("clean_buffer", "require_server")
+@pytest.mark.usefixtures("require_server")
 def test_ui_slot_scan_bad_target_shows_error_toast(page: Page, base_url: str):
     _goto_and_wait(page, base_url)
     _fire_scan(page, "LOC:NOT-A-REAL-PLACE:SLOT:1")
@@ -46,15 +71,19 @@ def test_ui_slot_scan_bad_target_shows_error_toast(page: Page, base_url: str):
     expect(toast).to_contain_text("valid load target")
 
 
-@pytest.mark.usefixtures("clean_buffer", "require_server")
-def test_ui_slot_scan_bad_slot_shows_error_toast(page: Page, base_url: str):
+@pytest.mark.usefixtures("require_server")
+def test_ui_slot_scan_bad_slot_shows_error_toast(page: Page, base_url: str, held):
     _goto_and_wait(page, base_url)
-    # Seed the buffer with a dummy held spool so the scan hits the load path
-    # (without a buffered spool, an out-of-range slot falls through to the
-    # pickup lookup instead — that's correct behavior, just different test).
+    # A held spool, as a load scan would have. The server refuses the slot as
+    # out of range before it reads its buffer (routes_scan.py's assignment
+    # branch), so it needn't see this made-up #999: it stays in the page's own
+    # buffer (own_the_buffer) and never reaches dev's.
     page.evaluate("state.heldSpools = [{id: 999, display: 'Test', color: 'ff0000'}]; renderBuffer();")
-    # Force a persistence so backend sees it before the scan.
-    page.wait_for_timeout(400)
+    for _ in range(50):
+        if [s.get("id") for s in held["buffer"]] == [999]:
+            break
+        page.wait_for_timeout(100)
+    assert [s.get("id") for s in held["buffer"]] == [999], held["buffer"]
     _fire_scan(page, "LOC:LR-MDB-1:SLOT:99")
     toast = page.locator(".toast-msg.toast-error")
     expect(toast).to_be_visible(timeout=_TOAST_WAIT_MS)
@@ -69,7 +98,9 @@ def test_ui_slot_scan_no_buffer_triggers_pickup_flow(page: Page, base_url: str):
     Spoolman, so we only assert the flow is triggered (manager opens or
     a toast appears) — not the specific outcome."""
     _goto_and_wait(page, base_url)
-    # Buffer is already clean from the fixture (server-side /api/buffer/clear).
+    # The SERVER's buffer is clean from the fixture (/api/buffer/clear): the
+    # server reads its own buffer to choose a load or a pickup. The page's is its
+    # own and empty (own_the_buffer), so a spool picked up stays in this page.
     # Stamp lastLocalBufferChange so a stray loadBuffer poll can't repopulate the
     # buffer between page-load and scan (which would push the scan down the LOAD
     # path instead of the empty-buffer PICKUP path we mean to exercise).
@@ -96,7 +127,7 @@ def test_ui_slot_scan_no_buffer_triggers_pickup_flow(page: Page, base_url: str):
     )
 
 
-@pytest.mark.usefixtures("clean_buffer", "require_server")
+@pytest.mark.usefixtures("require_server")
 def test_ui_slot_scan_toast_error_is_long_enough_to_read(page: Page, base_url: str):
     """Error toasts should stick around long enough to read (>= 3 s) but
     not so long they get in the way — since round-8 the Activity Log is
@@ -110,7 +141,7 @@ def test_ui_slot_scan_toast_error_is_long_enough_to_read(page: Page, base_url: s
     expect(toast).to_be_visible()
 
 
-@pytest.mark.usefixtures("clean_buffer", "require_server")
+@pytest.mark.usefixtures("require_server")
 def test_ui_toast_click_dismisses_immediately(page: Page, base_url: str):
     """Clicking a toast should dismiss it on the spot — zero-cost escape
     hatch when the user has already absorbed the message."""

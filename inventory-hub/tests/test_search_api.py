@@ -308,10 +308,10 @@ def test_untagged_filaments_are_unaffected(mock_get):
 
 @patch('spoolman_api.requests.get')
 def test_a_non_json_attribute_value_does_not_crash_and_is_searchable(mock_get):
-    """49.1 — a non-JSON attribute string ("Silk, Matte", which Group 54.3 will
-    split) and odd types (a number, a dict) never break the search: the string
-    is still searchable text, the odd values are ignored, and every other
-    filament still comes back."""
+    """49.1 — a non-JSON attribute string ("Silk, Matte", which Group 54.3
+    splits into Silk and Matte) and odd types (a number, a dict) never break the
+    search: the string is still searchable text, the odd values are ignored, and
+    every other filament still comes back."""
     odd = [
         _attr_filament(301, "Comma", "PLA", 'Silk, Matte'),
         _attr_filament(302, "Number", "PLA", 42),
@@ -338,7 +338,8 @@ def test_filament_attribute_list_cleans_like_the_cards():
     assert f({"extra": {"filament_attributes": [" For Infill ", "'Silk'", '"Matte"', "", "  "]}}) \
         == ["For Infill", "Silk", "Matte"]
     assert f({"extra": {"filament_attributes": '["One-off"]'}}) == ["One-off"]
-    assert f({"extra": {"filament_attributes": "Silk, Matte"}}) == ["Silk, Matte"]
+    # Group 54.3: a non-JSON comma string is a comma list (it used to be one tag).
+    assert f({"extra": {"filament_attributes": "Silk, Matte"}}) == ["Silk", "Matte"]
     assert f({"extra": {}}) == []
     assert f({"extra": None}) == []
     assert f({"extra": "nope"}) == []

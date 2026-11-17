@@ -29,20 +29,25 @@ def _needs_label(item):
     return str(v).strip().strip('"').lower() == 'true'
 
 
-def backlog_count(spools, spools_error=None):
+def backlog_count(spools, spools_error=None, filaments_read=None):
     """The 🏷️ Backlog button's count for the dashboard heartbeat (Group 52.1a).
     `spools` is the heartbeat's own non-archived spool list (the records
     /api/print_queue/pending reads), or None when that read failed. Reads the
     filament list once and counts the records whose `needs_label_print` is set,
     with the same `_needs_label` test the backlog list uses (works on raw and
-    parsed extras alike: "true" or True).
+    parsed extras alike: "true" or True). `filaments_read` (Group 57.2): the
+    tick's shared spoolman_api.FilamentListRead, which the low_stock section
+    counts from too; without one it reads the list itself.
 
     Answers {'read_ok': True, 'count', 'spools', 'filaments'}, or
     {'read_ok': False, 'read_error'} when either list couldn't be read, so the
     page keeps the count it shows instead of a false number."""
     if spools is None:
         return {'read_ok': False, 'read_error': f"couldn't read Spoolman's spools ({spools_error})"}
-    filaments, err = spoolman_api.read_filament_list()
+    if filaments_read is not None:
+        filaments, err = filaments_read.get(), filaments_read.error
+    else:
+        filaments, err = spoolman_api.read_filament_list()
     if filaments is None:
         return {'read_ok': False, 'read_error': f"couldn't read Spoolman's filaments ({err})"}
     n_spools = sum(1 for s in spools if isinstance(s, dict) and _needs_label(s))
@@ -214,10 +219,11 @@ def api_flag_spool_labels(fid):
     """23.3 follow-up — a filament edit changed a SPOOL-label-visible field
     (Brand / Type / Color-name), so the printed labels on that filament's
     physical spools are now stale. Light touch (no prompt, per Derek): raise
-    needs_label_print on the filament's UNARCHIVED spools so the spool details
-    badge + print queue surface them as needing a reprint. Hex/RGB are NOT
-    printed on the spool label, so the caller only invokes this for non-hex
-    changes. Best-effort + per-spool error surfacing."""
+    needs_label_print on the filament's UNARCHIVED spools so the 🏷️ Backlog lists
+    them as needing a reprint (the spool window shows no label status; only the
+    filament window has a badge). Hex/RGB are NOT printed on the spool label, so
+    the caller only invokes this for non-hex changes. Best-effort + per-spool
+    error surfacing."""
     try:
         try:
             fid_int = int(fid)

@@ -33,8 +33,8 @@ import config_schema
 import locations_db
 
 
-XL_CREDS = {"ip_address": "192.168.1.121", "api_key": "XLKEY"}
-INDX_CREDS = {"ip_address": "192.168.1.120", "api_key": "INDXKEY"}
+XL_CREDS = {"ip_address": "192.0.2.11", "api_key": "XLKEY"}
+INDX_CREDS = {"ip_address": "192.0.2.12", "api_key": "INDXKEY"}
 INDX_NAME = "🦝 Core One INDX"
 
 
@@ -569,10 +569,10 @@ def test_put_printer_creds_blank_ip_and_kept_key_still_clears_by_id(client):
 
 def test_put_printer_creds_by_id_sentinel_keeps_the_stored_key(client):
     store = _Store(_prod_like_rows())
-    res = _put_creds(client, store, {"location_id": "XL", "ip_address": "192.168.1.99",
+    res = _put_creds(client, store, {"location_id": "XL", "ip_address": "192.0.2.13",
                                      "api_key": config_schema.SECRET_SENTINEL})
     assert res.status_code == 200 and res.get_json()["ok"]
-    assert store.row("XL")["printer_creds"] == {"ip_address": "192.168.1.99", "api_key": "XLKEY"}
+    assert store.row("XL")["printer_creds"] == {"ip_address": "192.0.2.13", "api_key": "XLKEY"}
 
 
 def test_settings_removed_toolhead_loses_its_now_empty_row(client):
@@ -747,7 +747,10 @@ def _smart_load(rows, target, residents, with_result=False):
             return {"id": 8, "location": "", "extra": {}}
         return {"id": sid, "location": residents.get(sid, ""), "extra": {}}
 
+    # The save too (Group 45.9): a single-slot box attach would write these rows
+    # over the run's locations.json.
     with patch.object(locations_db, "load_locations_list", return_value=copy.deepcopy(rows)), \
+         patch.object(locations_db, "save_locations_list", return_value=True), \
          patch.object(spoolman_api, "get_spools_at_location", return_value=list(residents)), \
          patch.object(spoolman_api, "get_spools_at_location_detailed_strict",
                       return_value=[{"id": sid, "is_ghost": False, "location": loc}

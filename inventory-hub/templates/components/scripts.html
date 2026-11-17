@@ -19,8 +19,9 @@
     // registerShortcut SHIM — must run before ANY module (2026-08-05).
     //
     // shortcuts_registry.js loads well down this list, but modules above it
-    // (inv_cmd, inv_wizard, inv_details, inv_loc_mgr, …) register shortcuts at
-    // module-eval time. They all guard with `if (window.registerShortcut)`, so
+    // register shortcuts at module-eval time (inv_cmd, inv_wizard, inv_stock,
+    // inv_loose and inv_audit_find in 2026-11; tests/test_load_order_canary_js.py
+    // names each one if this shim goes). They all guard with `if (window.registerShortcut)`, so
     // the call was silently DROPPED — the shortcut still worked, it just never
     // appeared in the `?` help overlay, quietly breaking the rule that the
     // overlay stays complete. L298's Shift+B hit this exactly.
@@ -36,57 +37,72 @@
 </script>
 
 <script src="{{ url_for('static', filename='js/NoSleep.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/modules/overlay_mount.js') }}?v=1.0"></script>
+<script src="{{ url_for('static', filename='js/modules/overlay_mount.js') }}?v=1.3"></script>
 <script src="{{ url_for('static', filename='js/modules/choice_validation.js') }}?v=1.0"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_core.js') }}?v=1.5"></script>
-<script src="{{ url_for('static', filename='js/modules/ui_builder.js') }}?v=2.2"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_core.js') }}?v=2.5"></script>
+<script src="{{ url_for('static', filename='js/modules/ui_builder.js') }}?v=2.4"></script>
 <script src="{{ url_for('static', filename='js/modules/weight_utils.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/modules/empty_weight_field.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/modules/weight_entry.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_wizard.js') }}?v=11"></script>
+<script src="{{ url_for('static', filename='js/modules/weight_entry.js') }}?v=2"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_wizard.js') }}?v=19"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_details.js') }}?v=2"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_details.js') }}?v=3.7"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_queue.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_queue.js') }}?v=1.1"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}?v=1.1"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}?v=1.2"></script>
 
 <!-- Item 3.6: shared spool-disambiguation picker. Loads after inv_queue.js so
      the picker's "🖨️ Print new label" path can call window.addToQueue. -->
-<script src="{{ url_for('static', filename='js/modules/duplicate_picker.js') }}?v=1.0"></script>
+<script src="{{ url_for('static', filename='js/modules/duplicate_picker.js') }}?v=1.6"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}?v=1.7"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_search.js') }}?v=1.1"></script>
-<!-- Group 49.2a: the ⚠️ Low-stock list, opened by the search panel's button. -->
-<script src="{{ url_for('static', filename='js/modules/inv_stock.js') }}?v=1.0"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.2"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_weigh_out.js') }}?v=2.2"></script>
+<!-- Group 49.2a: the ⚠️ Low-stock list, opened by the title bar's ⚠️ count
+     (Group 57.2) and the search panel's button. -->
+<script src="{{ url_for('static', filename='js/modules/inv_stock.js') }}?v=1.5"></script>
+<!-- Group 58.4: the 🧺 Loose spools list, opened from the Locations window (and,
+     with tier 'confirm', from the audit panel). -->
+<script src="{{ url_for('static', filename='js/modules/inv_loose.js') }}?v=1.3"></script>
+<!-- Group 58 (Derek's answers of 2026-11-03, A2): 🔎 Find a spool, opened over the
+     audit panel (its button and its / key). -->
+<script src="{{ url_for('static', filename='js/modules/inv_audit_find.js') }}?v=1.2"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=3.1"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_weigh_out.js') }}?v=2.8"></script>
 
 <!-- Phase 3: Quick-Swap + keyboard shortcuts registry. Must load after
      inv_loc_mgr.js since it hooks into state.printerMap. -->
-<script src="{{ url_for('static', filename='js/modules/inv_quickswap.js') }}?v=1.4"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_quickswap.js') }}?v=1.6"></script>
 <!-- Group 40.1: the shared slot picker (box / printer / return). After inv_cmd.js
      (processScan calls window.routePickerScan at scan time) and before
      shortcuts_registry.js (it registers its keys after DOMContentLoaded). -->
-<script src="{{ url_for('static', filename='js/modules/slot_picker.js') }}?v=1.0"></script>
+<script src="{{ url_for('static', filename='js/modules/slot_picker.js') }}?v=1.2"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_printer_status.js') }}?v=1.8"></script>
 <!-- Cancelled-print partial-deduct preview/confirm overlay (FilaBridge §9.7). -->
 <script src="{{ url_for('static', filename='js/modules/cancel_review.js') }}?v=1.1"></script>
-<script src="{{ url_for('static', filename='js/modules/shortcuts_registry.js') }}?v=1.0"></script>
+<script src="{{ url_for('static', filename='js/modules/shortcuts_registry.js') }}?v=1.9"></script>
+<!-- Group 55.3: the in-app help's words, one entry per daily dialog. After
+     shortcuts_registry.js, whose window.registerHelp each entry calls. -->
+<script src="{{ url_for('static', filename='js/modules/help_texts.js') }}?v=1.2"></script>
 <!-- Shared drag-to-park engine for the search FAB + Activity-Log pill. Must load
      before fab_drag.js, which wires both affordances to window.makeDraggablePill. -->
-<script src="{{ url_for('static', filename='js/modules/draggable_pill.js') }}?v=1.1"></script>
+<script src="{{ url_for('static', filename='js/modules/draggable_pill.js') }}?v=1.2"></script>
 <!-- Draggable search FAB + Activity-Log pill + global search shortcuts (buglist
      21.1 + movable log pill 2026-06-15). Loads after inv_search.js (SearchEngine),
      shortcuts_registry.js (registerShortcut), and draggable_pill.js. -->
-<script src="{{ url_for('static', filename='js/modules/fab_drag.js') }}?v=1.2"></script>
+<script src="{{ url_for('static', filename='js/modules/fab_drag.js') }}?v=1.5"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_config.js') }}?v=1.5"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_settings.js') }}?v=1.8"></script>
 <!-- Readability (2026-10-21): the per-browser Text size, changed live from
      Settings -> 🖥️ This Browser. dashboard.html's <head> applies the stored size
      before the first paint; this module only handles a change. -->
 <script src="{{ url_for('static', filename='js/modules/text_size.js') }}?v=1.0"></script>
+<!-- Group 57.3: the title bar's per-browser settings (Title bar buttons, Low
+     stock count, When the title bar is full), changed live from Settings ->
+     🖥️ This Browser.
+     dashboard.html's <head> applies them before the first paint. -->
+<script src="{{ url_for('static', filename='js/modules/titlebar_prefs.js') }}?v=1.2"></script>
 
 <script>
     // Module Initialization
@@ -94,31 +110,11 @@
         // Bootstrapping
         requestWakeLock();
 
-        // L42 — Replace server-rendered UTC build stamp with a local-time
-        // version so users in PDT/EST/etc don't see "tomorrow's date" when
-        // the container clock is UTC. Round 2 also threads the commit SHA
-        // (when known) into the badge so the dashboard advertises the
-        // actual git revision that's running, not just a freshness mtime.
-        const verEl = document.getElementById('fcc-build-version');
-        if (verEl) {
-            const pad = (n) => String(n).padStart(2, '0');
-            const fmt = (unix) => {
-                const d = new Date(unix * 1000);
-                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-            };
-            const sha = (verEl.dataset.buildCommitSha || '').trim();
-            const commitTs = parseInt(verEl.dataset.buildCommitTs || '0', 10);
-            const mtime = parseFloat(verEl.dataset.buildMtime || '0');
-            // Prefer the commit-aware label when the server resolved one.
-            if (sha) {
-                let label = `commit ${sha}`;
-                if (commitTs > 0) label += ` • ${fmt(commitTs)}`;
-                verEl.textContent = label;
-            } else if (mtime > 0) {
-                verEl.textContent = `build ${fmt(mtime)}`;
-            }
-            // Keep the original (UTC) text in the tooltip so it's recoverable.
-        }
+        // L42's local-time version badge (the container's clock is UTC, with
+        // the commit SHA when the server resolved one) is written by
+        // titlebar_fit.js, right after the bar and before its first fit
+        // (Group 57 review, round 2: written here, after the first paint, the
+        // shorter local text moved the bar's buttons on every load).
 
         // Initialize Modals
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal',
@@ -263,8 +259,109 @@
         });
 
         state.scanStartTime = 0;
+        // Scans read while FCC is busy (the focus guard up, or a scan or a save
+        // being answered) wait in ONE queue and go out in the order they were
+        // read (Group 57 review, round 11). Each used to wait on its own 250 ms
+        // poll, so when the busy answer came, the first poll to tick went
+        // first: a slot label scanned right after a spool could reach the
+        // server before the spool, and the spool scanned before them went into
+        // the slot. A scan read while the queue still holds one joins it too,
+        // so it never goes ahead of a scan read before it.
+        // (On `state`, and function declarations: the tests lift this block
+        // into a page as a script of its own.)
+        state.scanQueue = state.scanQueue || [];
+        state.scanQueueTimer = state.scanQueueTimer || null;
+        function scanFrozen() {
+            const g = document.getElementById('focus-guard');
+            return (g && g.style.display === 'flex') || state.processing;
+        }
+        function drainScanQueue() {
+            const queue = state.scanQueue;
+            // One at a time: a scan that goes to the server turns processing on
+            // at once (inv_cmd.js), so the next one waits for its answer.
+            while (queue.length && !scanFrozen()) {
+                const q = queue.shift();
+                console.log("UI unfrozen, processing queued scan:", q.text);
+                try {
+                    // A scan read during an audit never runs as a scan after it
+                    // (Group 58 review; `auditOf`, stamped as it was read).
+                    if (!window.auditScanOutlived || !window.auditScanOutlived(q)) {
+                        processScan(q.text, q.source, q.capturedAt, q.weighRead, q.auditOf);
+                    }
+                } catch (err) {
+                    console.error("Queued scan failed:", q.text, err);
+                } finally {
+                    // Answered without going out (a second read dropped,
+                    // a dialog's own QR): nothing to wait for.
+                    if (q.weighRead && !q.weighRead.sent && window.weighOutScanDone) window.weighOutScanDone(q.weighRead);
+                    // A queued Done that never went out has no answer to come.
+                    if (window.auditQueueMoved) window.auditQueueMoved();
+                }
+            }
+            if (!queue.length && state.scanQueueTimer) { clearInterval(state.scanQueueTimer); state.scanQueueTimer = null; }
+        }
+        // A press that goes out as a scan and acts on the scan before it (the audit's
+        // "Needs a label" marks the last spool found; its Done plans from the scans
+        // so far) takes its turn as a scan read now would, or it reaches the server
+        // ahead of the spool it means.
+        window.sendInScanOrder = function (text, source) {
+            if (!scanFrozen() && !state.scanQueue.length) { processScan(text, source); return; }
+            state.scanQueue.push({ text, source, capturedAt: Date.now(),
+                auditOf: state.auditActive ? (state.auditId || true) : null });
+            if (!state.scanQueueTimer) state.scanQueueTimer = setInterval(drainScanQueue, 250);
+        };
+        // Group 50.6: a person's Enter presses the button, link or [role=button]
+        // it is on, as a click or Space does (it used to do nothing: every
+        // Enter was cancelled below). Only where a mouse could click it now:
+        // never a held key's repeat (Chrome clicks a focused button on each
+        // one, so a key held a moment too long answered the next dialog under
+        // it; a scanner never repeats), never while a scan read earlier still
+        // waits to go out, never behind the overlay on top or under the
+        // processing dim, never in a Bootstrap window fading out or covered by
+        // its own inline overlay (the delete flow's, data-fcc-cover) or by the
+        // shortcut list, and in a gating dialog only once it is fully on screen.
+        // On window: a [role=button] that answers its own keys (a Printer Status
+        // head, a Quick-Swap tile) asks it too, or its press under the dim lifts
+        // the dim and lets the next scan past the queue (Group 50 review).
+        function personMayPress(e, el) {
+            if (e.repeat || state.scanQueue.length) return false;
+            return mouseCouldReach(el);
+        }
+        // A Space asks this part only: it presses as a click does, and a press that has
+        // to wait for the queue takes its turn there (window.sendInScanOrder), as a
+        // click's does. The shortcut list sits above every overlay, so while it is up
+        // only its own controls can be reached.
+        function mouseCouldReach(el) {
+            const shortcuts = document.getElementById('fcc-shortcuts-overlay');
+            if (shortcuts && shortcuts.getClientRects().length) return shortcuts.contains(el);
+            if (document.querySelector('[data-overlay-mount="1"]')) {
+                const root = el.closest('[data-overlay-mount="1"]');
+                if (!root || (window.isTopOverlay && !window.isTopOverlay(root))) return false;
+            } else if (scanFrozen()) {
+                return false;
+            }
+            const modal = el.closest('.modal');
+            if (modal && !modal.classList.contains('show')) return false;
+            if (modal && ['confirmModal', 'safetyModal', 'actionModal'].includes(modal.id)
+                && window.isGatingModalOnScreen && !window.isGatingModalOnScreen(modal.id)) return false;
+            const cover = modal && Array.from(modal.querySelectorAll('[data-fcc-cover="1"]'))
+                .find((c) => c.getClientRects().length);
+            if (cover && !cover.contains(el)) return false;
+            return !el.closest('.offcanvas.hiding');
+        }
+        window.personMayPress = personMayPress;
         document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            // A field keeps its own keys. A checkbox can't hold typed text, so
+            // a scan typed with the focus on one (the Quick-Weigh's Auto Archive
+            // switch, a Tab away from its weight) is a scan, as on a button: it
+            // was lost, and its Enter and its 'D' worked the window's keys
+            // (Group 57 review, round 6). A person's reading typed there would be
+            // one too (a spool id, round 7), so a weight window's controls send a
+            // weight key to its weight box before it gets here (inv_core.js's
+            // weight capture, data-fcc-weight-keys). A radio stays its own: the
+            // Low stock reasons read their scans themselves (inv_stock.js).
+            const t = e.target;
+            if (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return;
 
             // A modifier combo is an APP SHORTCUT, never scanner output — a
             // barcode scanner types plain characters. Without this, Ctrl+C to
@@ -277,6 +374,18 @@
             if (e.ctrlKey || e.altKey || e.metaKey) return;
 
             if (e.key === 'Enter') {
+                // A person's Enter on a button is the button's (above); a scan's
+                // Enter (window.enterIsAScan) still ends the scan, wherever the
+                // focus is, and presses nothing. A key a person left in the
+                // buffer goes with their press, so it can't start the next scan.
+                if (t.matches && t.matches('button, a[href], [role="button"], summary')
+                    && !(window.enterIsAScan && window.enterIsAScan())) {
+                    state.scanBuffer = "";
+                    state.scanStartTime = 0;
+                    clearTimeout(state.bufferTimeout);
+                    if (!personMayPress(e, t)) e.preventDefault();
+                    return;
+                }
                 e.preventDefault();
                 if (state.scanBuffer.length > 0) {
                     const elapsed = Date.now() - state.scanStartTime;
@@ -286,22 +395,27 @@
                     // location label read again while the first read was still being
                     // handled, which a queued scan replays only afterwards.
                     const capturedAt = Date.now();
+                    // A scanner set to end with CR LF sends two Enters: the
+                    // second finds the buffer empty and must not read as a
+                    // person's (enterIsAScan, Group 50 review).
+                    state.lastScanEnterAt = capturedAt;
 
-                    const g = document.getElementById('focus-guard');
-                    const isFrozen = (g && g.style.display === 'flex') || state.processing;
-
-                    if (isFrozen) {
-                        console.warn("UI frozen, queuing scan:", state.scanBuffer);
-                        const bffr = state.scanBuffer;
-                        const src = source;
-                        const tryProcess = setInterval(() => {
-                            const fg = document.getElementById('focus-guard');
-                            if (!state.processing && (!fg || fg.style.display !== 'flex')) {
-                                clearInterval(tryProcess);
-                                console.log("UI unfrozen, processing queued scan:", bffr);
-                                processScan(bffr, src, capturedAt);
-                            }
-                        }, 250);
+                    if (scanFrozen() || state.scanQueue.length) {
+                        console.warn("UI busy, queuing scan:", state.scanBuffer);
+                        // The weigh-out list hears of the scan as it is read, not
+                        // as it goes out (Group 57 review, round 9): until then
+                        // the earlier scan's answer counted as the latest, moved
+                        // the focus and took the reading typed for this one.
+                        const weighRead = window.weighOutScanStart ? window.weighOutScanStart() : null;
+                        // `auditOf`: the audit it is read for, now: it may be over
+                        // by the time this goes out (a park holds a scan for as
+                        // long as it takes).
+                        state.scanQueue.push({ text: state.scanBuffer, source, capturedAt, weighRead,
+                            auditOf: state.auditActive ? (state.auditId || true) : null });
+                        if (!state.scanQueueTimer) state.scanQueueTimer = setInterval(drainScanQueue, 250);
+                        // Not busy any more (the queue only held scans its poll
+                        // hadn't sent yet): those go now, then this one.
+                        drainScanQueue();
                     } else {
                         processScan(state.scanBuffer, source, capturedAt);
                     }
@@ -310,6 +424,32 @@
                 state.scanStartTime = 0;
             }
             else if (e.key.length === 1) {
+                // A Space with nothing collected is a person's (it pressed a
+                // focused button): no label starts with one. Kept, it sat in
+                // front of the next scan for 2 s (" CMD:WEIGH", a Malformed
+                // Command), started that scan's 500 ms early, and two of them
+                // made a person's Enter in a dialog a scan of "  " (Group 57
+                // review, rounds 2 and 5). It presses what it lands on, so only where a
+                // mouse could click it now (Group 58 review: a Space pressed Cancel
+                // Audit behind the shortcut list, where nobody could see the focus, and
+                // the audit's scans went with it).
+                if (e.key === ' ' && !state.scanBuffer) {
+                    if (t.matches && t.matches('button, a[href], [role="button"], summary, input[type="checkbox"]')
+                        && !mouseCouldReach(t)) e.preventDefault();
+                    return;
+                }
+                // A Space inside a scan (a LocationID may hold one) is the scan's:
+                // the browser would press the button or tick the box it lands on
+                // (Group 50 review: "LOC:Bin 2" pressed "I loaded it"). And a
+                // person's Space after a key they left in the buffer still presses
+                // only where a mouse could click (Group 58 re-review: a stray N, then
+                // a Space, pressed Cancel Audit or Park behind the shortcut list).
+                // Kept from the browser only: it still joins the buffer below.
+                if (e.key === ' ' && t.matches
+                    && t.matches('button, a[href], [role="button"], summary, input[type="checkbox"]')
+                    && ((window.scanIsArriving && window.scanIsArriving()) || !mouseCouldReach(t))) {
+                    e.preventDefault();
+                }
                 if (state.scanBuffer.length === 0) {
                     state.scanStartTime = Date.now();
                 }

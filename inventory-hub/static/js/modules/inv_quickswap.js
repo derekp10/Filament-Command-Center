@@ -10,11 +10,10 @@
 // ---------------------------------------------------------------------------
 
 (function () {
-    // Toolhead types get the grid directly. Printer-type locations (e.g. the
-    // "🦝 XL" virtual printer) also get it so binding edits / Quick-Swap work
-    // from either view — the grid aggregates every toolhead that belongs to
-    // that printer.
-    const TOOLHEAD_TYPES = new Set(['Tool Head', 'MMU Slot', 'No MMU Direct Load']);
+    // Toolhead types (window.isToolheadType, inv_core.js) get the grid directly.
+    // Printer-type locations (e.g. the "🦝 XL" virtual printer) also get it so
+    // binding edits / Quick-Swap work from either view — the grid aggregates
+    // every toolhead that belongs to that printer.
     const PRINTER_TYPE = 'Printer';
 
     // Group 42.5c — a single-slot box (a PolyDryer) is bound to a head because
@@ -144,6 +143,10 @@
         if (grid) clearKbActive(grid);
         btn.classList.add('kb-active');
         btn.focus({ preventScroll: true });
+        // A disabled tile takes no focus: the last tile keeps it, and Enter would
+        // press that one, not the one highlighted (Group 50 review). Let it go,
+        // so Enter answers the highlight (it says why the slot can't be used).
+        if (document.activeElement !== btn && document.activeElement) document.activeElement.blur();
     };
 
     // Track the currently-viewed location so bindings edit / return-to-slot
@@ -159,7 +162,7 @@
         const section = document.getElementById('manage-quickswap-section');
         if (!section) return;
 
-        const isToolhead = TOOLHEAD_TYPES.has(loc.Type);
+        const isToolhead = window.isToolheadType(loc.Type);
         const isPrinter = loc.Type === PRINTER_TYPE;
 
         if (!isToolhead && !isPrinter) {
@@ -190,10 +193,16 @@
             if (!silent) grid.innerHTML = '';
             if (!printerName) {
                 empty.style.display = 'block';
-                empty.innerHTML = '⚠️ This location is not registered in ' +
-                    '<span class="text-info fw-bold">printer_map</span>. ' +
-                    'Add an entry for its toolhead LocationID(s) in ' +
-                    '<span class="text-info fw-bold">config.json</span> to enable Quick-Swap.';
+                // Group 55: a printer's toolheads are set on its Printer row in the ⚙️
+                // window (config.json's printer_map, which this used to name, only seeds
+                // an install that has no Printer row with toolheads yet). A Printer row
+                // with no toolheads is told to add them, a toolhead no printer lists to
+                // be added to its printer (Group 55 review, R2-7).
+                const where = '<span class="text-info fw-bold">⚙️</span> window, under ' +
+                    '<span class="text-info fw-bold">🖨️ Printers &amp; Toolheads</span>, to use Quick-Swap.';
+                empty.innerHTML = isPrinter
+                    ? '⚠️ This printer has no toolheads yet. Add them in the ' + where
+                    : '⚠️ No printer lists this place as one of its toolheads yet. Add it to its printer in the ' + where;
                 return;
             }
 
@@ -578,11 +587,13 @@
         const defaultBody = 'This moves the spool currently in that slot into the active toolhead. ' +
                             'Any spool already on the toolhead will be auto-ejected back to its source.';
         const bodyHtml = warningBanner + noteHtml + (opts.body || defaultBody);
+        // Its ? (Group 55 review, R4-3): the swap question's own help, top right.
+        const helpBtn = window.fccCornerHelpHtml ? window.fccCornerHelpHtml('fcc-quickswap-confirm-overlay') : '';
 
         const panelHtml = `
-            <div class="bg-dark border border-info rounded p-4 shadow-lg"
-                 style="min-width:min(26.25rem,94vw); max-width:33.75rem;">
-                <div class="text-info fw-bold mb-3" style="font-size:1.25rem;"
+            <div class="bg-dark border border-info rounded p-4 shadow-lg position-relative"
+                 style="min-width:min(26.25rem,94vw); max-width:33.75rem;">${helpBtn}
+                <div class="text-info fw-bold mb-3" style="font-size:1.25rem;${helpBtn ? ' padding-right:2.5rem;' : ''}"
                      id="fcc-quickswap-confirm-title">${_escapeHtml(titleText)}</div>
                 <div class="text-light mb-3" style="font-size:1.05rem;"
                      id="fcc-quickswap-confirm-body">${bodyHtml}</div>
@@ -643,13 +654,24 @@
                 // Bail out and let it bubble so the CMD:CONFIRM / CMD:CANCEL
                 // payload routes properly. Keyboard use is unaffected: pressing
                 // Enter by hand leaves scanBuffer empty.
-                if (window.isScanInFlight && window.isScanInFlight()) return;
+                // window.enterIsAScan, not isScanInFlight alone (Group 57 review,
+                // rounds 3 and 4): that counts 500 ms from a scan's FIRST key, and
+                // the ~30-character CANCEL payload outlasts it on any scanner
+                // slower than about 17 ms a key, so its Enter pressed YES again.
+                // Every caller of this overlay shares the rule: the swap, the
+                // deposit, the Return and the server's re-ask.
+                if (window.enterIsAScan ? window.enterIsAScan()
+                    : (window.isScanInFlight && window.isScanInFlight())) return;
                 const active = document.activeElement;
+                // A person's Enter: a key they left in the scan buffer goes
+                // with it, so it can't start the next scan (round 5).
                 if (active === yes) {
                     e.preventDefault(); e.stopPropagation();
+                    if (window.clearScanBuffer) window.clearScanBuffer();
                     doConfirm();
                 } else if (active === no) {
                     e.preventDefault(); e.stopPropagation();
+                    if (window.clearScanBuffer) window.clearScanBuffer();
                     close();
                 }
                 return;
@@ -679,7 +701,14 @@
             content: panelHtml,
             tier: 'confirm',  // sits above the Location Manager modal
             focusGuard: true,
-            initialFocus: '#fcc-quickswap-yes',
+            // On a printing head it opens on "No, cancel", as the printing
+            // yes / no does (Group 50.6; Derek, 2026-10-29: "I don't want an
+            // accidental double press to mess things up"): a swap that disrupts
+            // the print takes a deliberate Tab or click. So does a head FCC can't
+            // vouch for (the note: the printer didn't answer, and the server's
+            // own probe fails open; Group 50 review). An idle head's swap keeps
+            // Yes first (Undo covers it).
+            initialFocus: (stateInfo || note) ? '#fcc-quickswap-no' : '#fcc-quickswap-yes',
             onEscape: close,
         });
         const ov = handle.element;
@@ -739,13 +768,16 @@
     // refreshManageView has a content-hash cache for anti-wiggle polling;
     // we bust it explicitly here because we *know* the contents changed.
     const _refreshAfterMove = () => {
-        if (!currentLoc) return;
-        const id = currentLoc.LocationID;
+        // No head's view opened yet (Printer Status's "I loaded it"): nothing to
+        // redraw here, but the rest of the page still hears of the move.
+        const id = currentLoc ? currentLoc.LocationID : null;
         const doRefresh = () => {
-            try { if (typeof state !== 'undefined') state.lastLocRenderHash = null; } catch (e) { /* noop */ }
-            if (window.refreshManageView) window.refreshManageView(id);
-            if (window.renderQuickSwapSection && currentLoc) {
-                window.renderQuickSwapSection(currentLoc);
+            if (id) {
+                try { if (typeof state !== 'undefined') state.lastLocRenderHash = null; } catch (e) { /* noop */ }
+                if (window.refreshManageView) window.refreshManageView(id);
+                if (window.renderQuickSwapSection && currentLoc) {
+                    window.renderQuickSwapSection(currentLoc);
+                }
             }
             document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
         };
@@ -1176,8 +1208,12 @@
         showConfirmOverlay({
             ...opts,
             title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
+            // Escaped (Group 50.4): a spool's name is free text, and the
+            // label is plain text wherever it comes from (the card's
+            // data-spool-label, the tile's innerText, Printer Status's
+            // "I loaded it").
             body: (spoolLabel
-                    ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
+                    ? `<div class="text-warning fw-bold mb-2">Spool: ${_escapeHtml(spoolLabel)}</div>`
                     : '')
                 + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
                 + 'Any spool currently on the toolhead goes back to <em>its own</em> recorded source box — '
@@ -1508,7 +1544,7 @@
             // the full Feeds editor just to clear a slot.
             const unbindBtn = s.target
                 ? `<button type="button" class="fcc-bind-picker-unbind btn btn-sm btn-outline-warning fw-bold ms-2"
-                        data-idx="${i}" title="Clear this slot's binding without rebinding it">
+                        data-idx="${i}" tabindex="-1" title="Clear this slot's binding without rebinding it">
                         🔗✖ Unbind
                     </button>`
                 : '';
@@ -1776,6 +1812,13 @@
             } else if (e.key === 'Enter') {
                 e.preventDefault();
                 _pickerCommit();
+            } else if (e.key === 'Delete' && e.shiftKey) {
+                // Unbind by keyboard, a deliberate chord: the row's button left
+                // the Tab order, since search, Tab, Enter (Enter now presses a
+                // focused button) cleared a slot that may feed another head,
+                // under text saying Enter selects (Group 50 review).
+                e.preventDefault();
+                _pickerUnbind();
             }
         };
         close.onclick = window.closeBindSlotPicker;
@@ -1838,6 +1881,9 @@
         // used to move this grid's focus behind it, and a later Enter then ran
         // quickSwapTap on a tile nobody could see (Group 40.3 / 40.1 review).
         if (document.querySelectorAll('[data-overlay-mount="1"]').length) return;
+        // So does the help window (Group 55.3): Q moved the keyboard off it, onto a
+        // tile under it.
+        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
 
         const tag = (e.target && e.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
@@ -1851,11 +1897,20 @@
         const currentIdx = buttons.findIndex(b => b.classList.contains('kb-active'));
 
         if (e.key === 'q' || e.key === 'Q') {
+            // A 'q' inside a scan is the scan's (a confirm's session id
+            // carries one), however slow the scanner; a person's Q leaves no
+            // 'q' behind for the next scan to start with (Group 57 review,
+            // round 4: a label scanned within 2 s of Q arrived as "qLOC:…",
+            // an unknown code). The standing order's idiom, as Shift+B's.
+            if (window.scanIsArriving ? window.scanIsArriving()
+                : (window.isScanInFlight && window.isScanInFlight())) return;
             // Jump focus into the grid on Q. Scroll the section into view
             // first — Quick-Swap often sits below the fold when a toolhead
             // also has a long Feeds editor / contents list above it. Without
             // the scroll the cyan kb-active focus glow appears off-screen.
             e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
             const section = document.getElementById('manage-quickswap-section');
             if (section && section.scrollIntoView) {
                 section.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1875,11 +1930,41 @@
             // scan a spool label, and without this the scan's terminating Enter
             // opened an unrequested "Load <box> slot N into <toolhead>?" confirm
             // — which then inherited the confirm-overlay Enter bug on top.
-            if (window.isScanInFlight && window.isScanInFlight()) return;
-            if (currentIdx >= 0) {
+            // window.enterIsAScan, so a slower scanner's label counts too (Group
+            // 57 review, round 4: a Prusament URL at 26 ms a key opened the
+            // confirm, and the next such scan answered it).
+            if (window.enterIsAScan ? window.enterIsAScan()
+                : (window.isScanInFlight && window.isScanInFlight())) return;
+            // Group 50.6: Enter presses the tile that has the focus. The
+            // highlight alone can be stale (left from the last toolhead's view,
+            // or from before the focus moved on), and it took the Enter meant
+            // for any other button in the window and opened a swap. With the
+            // focus on another button or control, that one's Enter is its own;
+            // with it on nothing (the window itself), the highlighted tile's.
+            if (!grid.getClientRects().length) return;   // its section is hidden: another view
+            const ae = document.activeElement;
+            const tile = buttons.includes(ae) ? ae
+                : ((!ae || ae === document.body || ae === modal) && currentIdx >= 0 ? buttons[currentIdx] : null);
+            if (!tile) return;
+            // Only where a mouse could click it now (the accumulator's rule;
+            // this handler runs first and stops the event).
+            if (window.personMayPress && !window.personMayPress(e, tile)) {
                 e.preventDefault();
-                window.quickSwapTap(buttons[currentIdx]);
+                e.stopImmediatePropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                return;
             }
+            // A person's Enter, and theirs alone: the accumulator mustn't
+            // also submit a key left in the buffer (Group 57 review, round
+            // 5: Q, then 2, then Enter opened the swap AND put spool #2 in
+            // the scan buffer behind it). The standing order's idiom.
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            // Its own click (a swap, or a deposit from the buffer); a disabled
+            // tile can't be clicked, so it says why.
+            if (tile.disabled) window.quickSwapTap(tile);
+            else tile.click();
         }
     });
 

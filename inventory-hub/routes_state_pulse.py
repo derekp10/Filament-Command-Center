@@ -13,6 +13,8 @@ Wiring notes:
   (module-qualified), the body of /api/locations, handing it the tick's
   shared spool list (Group 52.1a).
 - _pulse_section_label_backlog counts through routes_print_queue.backlog_count.
+- _pulse_section_low_stock counts through stock_report.glance (Group 57.2),
+  from the same spool list and the same filament list as label_backlog.
 - state.GLOBAL_BUFFER / GLOBAL_QUEUE are read AND whole-replaced as
   attributes of the state module (never from-imported).
 - No dependency on print_monitor (verified by scan) — the pulse
@@ -33,18 +35,32 @@ import prusalink_api  # type: ignore
 
 import routes_locations  # type: ignore
 import routes_print_queue  # type: ignore
+import stock_report  # type: ignore
 
 from app_core import app
 
 @app.route('/api/audit_session', methods=['GET'])
 def api_audit_session():
     """L154 / 18.2 Part B — current audit session snapshot for the visual
-    audit panel. Returns the location being audited plus enriched expected/
-    scanned/rogue lists (each with the spool's display label, color,
-    remaining weight, and slot if known) so the frontend can render a
-    grid of tiles without doing per-id Spoolman lookups itself.
+    audit panel. Returns the location being audited plus its expected, Extra
+    (`rogue`) and loaded-from-here (`trail`) spools, each row with the spool's
+    display label, color, remaining weight, slot and where FCC has it (`where`),
+    so the frontend can render a grid of tiles without per-id lookups. An Extra
+    an earlier audit lost also carries `lost_from`, and its `where` says so.
 
-    Cheap when no audit is active (returns {active: False} immediately).
+    Group 58: the rows are the ones the session stored at each scan, so a 2 s
+    poll reads no Spoolman and a blip can't blank a tile. Only a row with no
+    stored data is read (`_enrich`). `note` is the start note: what this audit
+    doesn't check.
+
+    Group 58.2: each row says `label_status` (True, False or None), `label_read`
+    (it was found by a real read of its label) and `flagged_here` (it was marked
+    as needing a label in this audit, so it can be undone). `last_found` is the
+    row of the spool "Needs a label" acts on, or None.
+
+    Cheap when no audit is active: {active: False, audit_end}, with no read.
+    `audit_end` is the heartbeat's: this poll sees an end first, and the page
+    says why from it (_syncAuditSignal).
 
     Runs the idle-timeout watchdog first so even a direct poll heals a
     stale session — the dashboard's heartbeat hits /api/logs every 5s,
@@ -53,19 +69,26 @@ def api_audit_session():
     _check_audit_idle_timeout()
     sess = state.AUDIT_SESSION
     if not sess.get('active'):
-        return jsonify({"active": False})
+        return jsonify({"active": False, "audit_end": state.AUDIT_LAST_END})
 
     expected = list(sess.get('expected_items') or [])
     scanned = set(sess.get('scanned_items') or [])
     rogue = list(sess.get('rogue_items') or [])
+    trail = list(sess.get('trail_items') or [])
+    stored = sess.get('rows') or {}
+    found_by = sess.get('found_by') or {}
+    flagged = sess.get('label_flagged') or {}
 
     def _enrich(sid):
         try:
             sp = spoolman_api.get_spool(sid) or {}
         except Exception:
             sp = {}
+        if sp.get('id') is None:     # Spoolman's 404 body is a truthy dict
+            sp = {}
         info = spoolman_api.format_spool_display(sp) if sp else {}
         fil = (sp.get('filament') or {})
+        slot = (sp.get('extra') or {}).get('container_slot') or ''
         return {
             "id": int(sid),
             "display": info.get('text') or f"#{sid}",
@@ -73,19 +96,32 @@ def api_audit_session():
             "color_direction": fil.get('multi_color_direction') or 'longitudinal',
             "multi_color_hexes": fil.get('multi_color_hexes') or '',
             "remaining_weight": sp.get('remaining_weight'),
-            "slot": (sp.get('extra') or {}).get('container_slot') or '',
+            "slot": slot,
+            "where": logic.audit_where(sp.get('location'), slot) if sp else '',
+            "label_status": spoolman_api.label_flag(sp.get('extra')),
         }
+
+    def _row(sid):
+        row = dict(stored.get(str(sid)) or _enrich(sid))
+        row['label_read'] = found_by.get(str(sid)) == logic.AUDIT_FOUND_BY_LABEL
+        row['flagged_here'] = str(sid) in flagged
+        return row
 
     expected_rows = []
     for sid in expected:
-        row = _enrich(sid)
+        row = _row(sid)
         row['found'] = (sid in scanned)
         expected_rows.append(row)
-    rogue_rows = [{**_enrich(sid), 'found': True, 'rogue': True} for sid in rogue]
+    rogue_rows = [{**_row(sid), 'found': True, 'rogue': True} for sid in rogue]
+    trail_rows = [{**_row(sid), 'found': True, 'trail': True} for sid in trail]
+    last_found = next((r for r in expected_rows + rogue_rows + trail_rows
+                       if r.get('found') and r.get('id') == sess.get('last_found')), None)
 
     return jsonify({
         "active": True,
+        "audit_id": sess.get('audit_id'),
         "location_id": sess.get('location_id'),
+        "note": sess.get('start_note') or '',
         # Same contract as the bulk-move snapshot (L298 Phase 3): tell the user
         # the session expires, DERIVED from the constant so the UI text can't
         # drift from the watchdog that enforces it. An audit that silently
@@ -93,11 +129,14 @@ def api_audit_session():
         "idle_timeout_min": int(state.AUDIT_IDLE_TIMEOUT_SECONDS // 60),
         "expected": expected_rows,
         "rogue": rogue_rows,
+        "trail": trail_rows,
+        "last_found": last_found,
         "stats": {
             "total_expected": len(expected),
             "found": sum(1 for r in expected_rows if r['found']),
             "missing": sum(1 for r in expected_rows if not r['found']),
             "rogue": len(rogue),
+            "trail": len(trail),
         },
     })
 
@@ -145,35 +184,10 @@ def api_log_event():
     return jsonify({"success": True})
 
 def _check_audit_idle_timeout():
-    """Auto-cancel an audit session that's gone stale.
-
-    A closed tab, browser crash, or server-restart-then-relaunch can
-    leave AUDIT_SESSION.active=True with no real user behind the wheel.
-    Without this watchdog the audit panel keeps auto-opening on every
-    subsequent dashboard load until someone explicitly scans CMD:CANCEL
-    or the process restarts. Checked on every /api/logs poll (every 5s
-    from the dashboard heartbeat), so the recovery latency is ≤ 5s
-    after the timeout window expires.
-    """
-    if not state.AUDIT_SESSION.get('active'):
-        return
-    last = float(state.AUDIT_SESSION.get('last_activity_ts') or 0.0)
-    if last <= 0:
-        # No timestamp at all (legacy session from before this watchdog
-        # landed). Plant `now` so the timer starts NOW rather than
-        # auto-cancelling immediately.
-        state.AUDIT_SESSION['last_activity_ts'] = time.time()
-        return
-    if (time.time() - last) > state.AUDIT_IDLE_TIMEOUT_SECONDS:
-        loc = state.AUDIT_SESSION.get('location_id') or ''
-        state.add_log_entry(
-            f"🕒 Audit auto-cancelled after "
-            f"{state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min of inactivity"
-            + (f" (was on {loc})" if loc else "")
-            + " — no spools moved.",
-            "WARNING", "ffaa00",
-        )
-        state.reset_audit()
+    """The audit's idle watchdog, on every /api/logs poll (5 to 30 s from the
+    dashboard heartbeat) and every /api/audit_session poll. It lives in logic
+    (logic.check_audit_idle_timeout), since the scan gate needs it too."""
+    logic.check_audit_idle_timeout()
 
 
 def _check_bulk_move_idle_timeout():
@@ -240,6 +254,14 @@ def api_get_logs_route():
         "logs": state.RECENT_LOGS,
         "undo_available": len(state.UNDO_STACK) > 0,
         "audit_active": state.AUDIT_SESSION.get('active', False),
+        # Group 58: which audit runs (None when none does): a hidden panel has no
+        # poll, and this keeps the id a page stamps its scans with current.
+        "audit_id": state.AUDIT_SESSION.get('audit_id'),
+        # The place being audited ('' until one is scanned), and how the last
+        # audit ended ({id, why, location}, None since a restart), so a page
+        # still believing in an audit can say why it is gone.
+        "audit_location": state.AUDIT_SESSION.get('location_id') or '',
+        "audit_end": state.AUDIT_LAST_END,
         "bulk_move_active": state.BULK_MOVE_SESSION.get('active', False),
         # The STAGE rides along so a reloaded page / second tab can paint the
         # deck tile correctly. Without it the tile fell back to 'idle' for an
@@ -273,9 +295,12 @@ def api_get_logs_route():
 # used to read the whole list three times in the pulse, plus twice more for the
 # label backlog's own /api/print_queue/pending poll. It lives for this one
 # request only (no cross-request cache: a read right after a move must see it).
+# Group 57.2: the filament list likewise, read once (spoolman_api.
+# FilamentListRead) for the two sections that count from it, label_backlog
+# and low_stock (the ⚠️ Low stock button's count).
 _VALID_PULSE_SECTIONS = frozenset({
     'logs', 'status', 'locations', 'buffer', 'manage', 'printer_status',
-    'label_backlog',
+    'label_backlog', 'low_stock',
 })
 
 
@@ -342,14 +367,26 @@ def _pulse_spool_read(reader):
             'error': None if ok else (reader.error or "Spoolman's spool list couldn't be read")}
 
 
-def _pulse_section_label_backlog(spools=None):
+def _pulse_section_label_backlog(spools=None, filaments=None):
     """The 🏷️ Backlog button's count (Group 52.1a), from the tick's shared spool
     list plus one filament read: the page used to poll
     /api/print_queue/pending on every tick for it, two more whole-list reads.
     Counted by routes_print_queue.backlog_count, the same flag filter the
-    backlog list uses (in FCC: Spoolman ignores an `extra=` filter)."""
+    backlog list uses (in FCC: Spoolman ignores an `extra=` filter).
+    `filaments`: the tick's shared FilamentListRead (57.2)."""
     reader = spools if spools is not None else spoolman_api.SpoolListRead()
-    return routes_print_queue.backlog_count(reader.get(), reader.error)
+    return routes_print_queue.backlog_count(reader.get(), reader.error, filaments_read=filaments)
+
+
+def _pulse_section_low_stock(spools=None, filaments=None):
+    """The ⚠️ Low stock button's count (Group 57.2): how many filaments are on
+    the list's Low and Out tabs, by its own rule (stock_report.glance), from the
+    tick's shared spool list and filament list, so it reads nothing of its own
+    when label_backlog is in the tick too. The list itself (/api/stock_report)
+    is still read only when it opens. A read that failed answers read_ok:
+    false, and the page keeps the count it shows."""
+    reader = spools if spools is not None else spoolman_api.SpoolListRead()
+    return stock_report.glance(reader.get(), reader.error, filaments_read=filaments)
 
 
 def _pulse_section_printer_status(spools=None):
@@ -378,7 +415,9 @@ def _pulse_section_printer_status(spools=None):
     from concurrent.futures import ThreadPoolExecutor
 
     cfg = config_loader.load_config()
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
+    # Group 50.1: one read of the rows serves the map and each printer's id.
+    loc_rows = locations_db.load_locations_list()
+    printer_map = locations_db.get_active_printer_map(loc_rows)  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     _, fb_url = config_loader.get_api_urls()
     grouped = {}
     for loc_id, info in printer_map.items():
@@ -405,7 +444,9 @@ def _pulse_section_printer_status(spools=None):
     # (direct location + physical_source ghost).
     all_tids = [str(loc_id).upper() for loc_id in printer_map.keys()]
     if spools is None:
-        spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids)
+        # The read bucket_spools_by_location would make itself, kept for the
+        # stored spools below (Group 50.4).
+        tick_list = spoolman_api.get_all_spools(allow_archived=False)
     else:
         # Group 52.1a: the tick's shared list. A failed read buckets nothing,
         # every head empty, as the fail-open read did before; answering
@@ -413,12 +454,42 @@ def _pulse_section_printer_status(spools=None):
         # (one more whole-list read per head) just when Spoolman is slow. The
         # pulse says the read failed in its sibling `spool_read` key (reads-1),
         # so the widget keeps the tiles it drew instead of drawing these empties.
-        spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids, spools=spools.get() or [])
+        tick_list = spools.get() or []
+    spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids, spools=tick_list)
+
+    def stored_for(feeds, box_items):
+        """Group 50.4 ("stored, not loaded"): the spools stored in a box slot
+        that feeds this head and not loaded on it, as a mid-print "Just store
+        it" leaves one (Derek, 2026-10-30: every such spool, a slot prepped on
+        purpose included). Only a multi-slot box's own slot: a single-slot box's
+        slot-1 binding follows its spool onto the head (Group 42), and a
+        Printer Pool slot feeds no one head (not listed here). A spool counts
+        only while its own record files it in that very slot (a deployed
+        spool's trail there is a ghost, and an archived one waits for no load)."""
+        out = []
+        for b in feeds:
+            box = str(b.get('box', '')).strip().upper()
+            slot = logic._norm_slot(b.get('slot'))
+            if not box or not slot:
+                continue
+            for it in box_items.get(box, []):
+                if it.get('is_ghost') or it.get('archived'):
+                    continue
+                if str(it.get('location') or '').strip().upper() != box or logic._norm_slot(it.get('slot')) != slot:
+                    continue
+                out.append({'id': it.get('id'), 'display': it.get('display'), 'box': str(b.get('box', '')).strip(),
+                            'slot': slot})
+        return out
 
     def fetch_for_printer(item):
         name, entries = item
         bindings_result = locations_db.get_bindings_for_machine(name, printer_map)
         bindings = bindings_result.get('toolheads', {})
+        # Group 50.4: the multi-slot box slots feeding each head, and their
+        # boxes' spools from the same list (one pass, no read of its own).
+        feeds = {tid: [b for b in (bindings.get(tid) or []) if not b.get('single_slot')] for tid in bindings}
+        feed_boxes = sorted({str(b.get('box', '')).strip().upper() for lst in feeds.values() for b in lst} - {''})
+        box_items = (spoolman_api.bucket_spools_by_location(feed_boxes, spools=tick_list) if feed_boxes else {})
         toolheads = []
         for entry in entries:
             tid = entry['location_id']
@@ -440,6 +511,9 @@ def _pulse_section_printer_status(spools=None):
             }
             if len(direct) > 1:
                 th_out['loaded_ids'] = [c.get('id') for c in direct]
+            waiting = stored_for(feeds.get(tid, []), box_items)
+            if waiting:
+                th_out['waiting'] = waiting
             toolheads.append(th_out)
         toolheads.sort(key=lambda t: (t['position'], t['id']))
         # Direct PrusaLink probe — runs regardless of dryer-box bindings,
@@ -451,7 +525,12 @@ def _pulse_section_printer_status(spools=None):
             state_info = prusalink_api.get_printer_state(fb_url, name)
         except Exception:
             state_info = None
-        return name, {'toolheads': toolheads, 'state': state_info}
+        # Group 50.1: the printer's own id (its Printer row's LocationID), for
+        # the folded strip's "By ID" setting. The row that lists the printer's
+        # first head decides, so two rows sharing a Name still give one id;
+        # '' when no row lists it (the strip then shows the name).
+        printer_id = locations_db.printer_owning_toolhead(loc_rows, entries[0]['location_id']) if entries else None
+        return name, {'toolheads': toolheads, 'state': state_info, 'id': printer_id or ''}
 
     out = {}
     max_workers = max(1, min(8, len(grouped)))
@@ -467,18 +546,23 @@ def api_dashboard_pulse():
 
     Query params:
       include   comma-separated section names. Valid: logs, status,
-                locations, buffer, manage, printer_status, label_backlog.
-                Unknown names are silently ignored (forward-compat).
+                locations, buffer, manage, printer_status, label_backlog,
+                low_stock. Unknown names are silently ignored (forward-compat).
       manage_id required when 'manage' is in include - the LocationID
                 whose contents to fetch.
 
     Group 52.1a: the sections that need Spoolman's spool list share ONE read
     (`tick_spools`, read lazily by the first section that asks), so a tick
     costs one whole-list read however many of them are on screen.
+    Group 57.2: label_backlog and low_stock share one filament-list read
+    (`tick_filaments`) the same way.
     Body (POST): {"refresh_spool_ids": [123, 124, ...]} - if present
                 and non-empty, the response includes a "spools_refresh"
-                section keyed by spool id, equivalent to a POST to
-                /api/spools/refresh.
+                section keyed by spool id, in /api/spools/refresh's shape,
+                answered from the tick's own spool-list read (Group 57.5;
+                read before the printer probes, and an outage stops at the
+                first spool Spoolman doesn't answer: logic.get_live_spools_data),
+                or with one GET per spool when no section read the list.
 
     Returns: {section_name: payload, ...}. Sections that error
     individually return {"error": "..."} in their slot; the response
@@ -504,6 +588,7 @@ def api_dashboard_pulse():
     # One spool-list read for this tick, shared by every section below that
     # needs it (52.1a). Nothing is read until a section asks.
     tick_spools = spoolman_api.SpoolListRead()
+    tick_filaments = spoolman_api.FilamentListRead()
 
     # logs and status share the underlying Spoolman+FilaBridge health
     # check, so we invoke the handler at most once per request.
@@ -527,6 +612,11 @@ def api_dashboard_pulse():
                 out['status'] = {
                     'spoolman': logs_payload['status'].get('spoolman', False),
                     'audit_active': logs_payload.get('audit_active', False),
+                    # Group 58: as the bulk-move signal below, or a tab with a
+                    # paused Activity Log can't say why its audit is gone.
+                    'audit_id': logs_payload.get('audit_id'),
+                    'audit_location': logs_payload.get('audit_location', ''),
+                    'audit_end': logs_payload.get('audit_end'),
                     'undo_available': logs_payload.get('undo_available', False),
                     # L298 Phase 3 — the bulk-move signal must ride the DERIVED
                     # status section too. A paused Activity Log swaps 'logs' out
@@ -561,13 +651,25 @@ def api_dashboard_pulse():
 
     if 'label_backlog' in include:
         try:
-            out['label_backlog'] = _pulse_section_label_backlog(spools=tick_spools)
+            out['label_backlog'] = _pulse_section_label_backlog(spools=tick_spools, filaments=tick_filaments)
         except Exception as e:
             out['label_backlog'] = {'error': str(e), 'read_ok': False}
 
+    if 'low_stock' in include:
+        try:
+            out['low_stock'] = _pulse_section_low_stock(spools=tick_spools, filaments=tick_filaments)
+        except Exception as e:
+            out['low_stock'] = {'error': str(e), 'read_ok': False}
+
     if refresh_spool_ids:
         try:
-            out['spools_refresh'] = logic.get_live_spools_data(refresh_spool_ids)
+            # 57.5: from the list a section above already read (one GET only
+            # for an id it lacks); a tick that read no list keeps one GET per id
+            # rather than start a whole-list read for the buffer alone.
+            if tick_spools.reads:
+                out['spools_refresh'] = logic.get_live_spools_data(refresh_spool_ids, spools=tick_spools)
+            else:
+                out['spools_refresh'] = logic.get_live_spools_data(refresh_spool_ids)
         except Exception as e:
             out['spools_refresh'] = {'error': str(e)}
 

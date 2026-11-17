@@ -78,7 +78,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><style>{css}</style><
             <span class="fcc-ps-title">🖨️ Printer Status</span>
             <span class="fcc-ps-hint">click to collapse</span>
         </div>
-        <div class="fcc-ps-header-chips d-flex flex-wrap align-items-center gap-1 ms-3"></div>
+        <div class="fcc-ps-header-chips"></div>
     </div>
     <div class="fcc-ps-body">
         <div class="fcc-ps-skeleton text-secondary fw-bold" style="padding: 0.5rem 0;">Loading printer status…</div>
@@ -174,7 +174,8 @@ WIDGET_JS = r"""() => {
     const squash = (s) => String(s || '').replace(/\s+/g, ' ').trim();
     const tiles = [...w.querySelectorAll('.fcc-ps-body .fcc-ps-th')].map((t) => ({
         head: t.dataset.toolhead, spool: t.dataset.spoolId || null, text: squash(t.textContent) }));
-    const minis = [...w.querySelectorAll('.fcc-ps-header-chips .fcc-ps-mini')].map((m) => squash(m.textContent));
+    const minis = [...w.querySelectorAll('.fcc-ps-header-chips .fcc-ps-mini')].map((m) => ({
+        text: squash(m.textContent), title: m.title }));
     const badge = squash((w.querySelector('.fcc-ps-body .fcc-ps-state') || {}).textContent);
     const n = document.getElementById('printer-status-read-notice');
     const notice = n ? { shown: getComputedStyle(n).display !== 'none', text: n.textContent, title: n.title,
@@ -266,7 +267,11 @@ def test_a_failed_first_tick_draws_no_head_empty(pg):
     assert [t["head"] for t in w["tiles"]] == ["ZR-1", "ZR-2"], w
     for t in w["tiles"]:
         assert "not read" in t["text"] and "empty" not in t["text"] and t["spool"] is None, t
-    assert len(w["minis"]) == 2 and all("not read" in m and "empty" not in m for m in w["minis"]), w
+    # Folded (Group 50.1), an unread head is its label and a "?", and its
+    # tooltip says Spoolman didn't answer; never "empty".
+    assert len(w["minis"]) == 2 and all(
+        m["text"].endswith("?") and "didn't answer" in m["title"] and "empty" not in m["text"] + m["title"]
+        for m in w["minis"]), w
     assert _shown(w["notice"]) and "Spoolman didn't answer" in w["notice"]["text"], w
     assert "last answer" not in w["notice"]["text"], w
     # The next good tick draws the real tiles.
@@ -323,6 +328,64 @@ def test_the_fan_out_reads_strictly_and_keeps_a_head_it_couldnt_read(pg):
     assert reads and all(u.endswith("&strict=1") for u in reads), reads
     assert second["tiles"] == first["tiles"], "a failed read redrew the head"
     assert _shown(second["notice"]) and "These tiles are from its last answer" in second["notice"]["text"], second
+
+
+# --- Group 50.4: the "stored, not loaded" mark, through a failed read and the fan-out -------
+
+W93 = {"id": 93, "display": "#93 Waits", "box": "ZZ-BOX", "slot": "2"}
+
+
+def _with_waiting(status, head=1, waiting=(W93,)):
+    out = {name: dict(info, toolheads=[dict(th) for th in info["toolheads"]]) for name, info in status.items()}
+    out[PRINTER]["toolheads"][head]["waiting"] = list(waiting)
+    return out
+
+
+def _marks(page):
+    return page.evaluate("""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-th'))
+        .filter((t) => t.querySelector('.fcc-ps-th-waiting')).map((t) => t.dataset.toolhead)""")
+
+
+def test_a_failed_read_keeps_the_waiting_mark_with_its_tile(pg):
+    """The mark going away says the spool was loaded or left the slot, and a
+    failed read said neither, under a notice saying the tiles are the last
+    answer (reads-1's rule; Group 50 review)."""
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [_with_waiting(GOOD), UP])
+    assert _marks(pg) == ["ZR-2"]
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [FAILED, DOWN])
+    assert _marks(pg) == ["ZR-2"]
+    # A good read that doesn't list it says it left.
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [GOOD, UP])
+    assert _marks(pg) == []
+
+
+def test_the_fan_out_keeps_the_waiting_mark(pg):
+    """Only the heartbeat works `waiting` out: every local change's fan-out wiped
+    the line, "I loaded it" and the amber dot for up to 15 s (Group 50 review)."""
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [_with_waiting(GOOD), UP])
+    pg.evaluate("(a) => { window.__answers = a; }", FANOUT)
+    pg.evaluate(_REFRESH)
+    assert _marks(pg) == ["ZR-2"]
+
+
+def test_the_fan_out_drops_a_mark_whose_spool_it_finds_on_the_head(pg):
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [_with_waiting(GOOD), UP])
+    answers = dict(FANOUT)
+    answers["/api/get_contents?id=ZR-2&strict=1"] = [{"body": [_item(93)]}]
+    pg.evaluate("(a) => { window.__answers = a; }", answers)
+    pg.evaluate(_REFRESH)
+    assert _marks(pg) == []
+
+
+def test_the_fan_out_gives_each_printer_its_id(pg):
+    """The folded strip's "By ID" reads it, and the fan-out builds its own rows."""
+    answers = dict(FANOUT)
+    answers["/api/printer_map"] = [{"body": dict(FANOUT["/api/printer_map"][0]["body"],
+                                                 printer_rows=[{"name": PRINTER, "location_id": "ZRP"}])}]
+    pg.evaluate("(a) => { window.__answers = a; }", answers)
+    pg.evaluate(_REFRESH)
+    got = pg.evaluate("() => document.querySelector('#printer-status-widget .fcc-ps-strip-name').title")
+    assert got == f"{PRINTER} · ID ZRP", got
 
 
 # --- the Locations table -------------------------------------------------------
@@ -460,7 +523,7 @@ def test_the_widget_notice_and_unread_tiles_are_readable(pg, assert_contrast):
     pg.evaluate("document.getElementById('printer-status-widget').classList.add('collapsed')")
     assert pg.locator("#printer-status-read-notice").is_visible()
     assert not pg.locator("#printer-status-widget .fcc-ps-body").is_visible()
-    assert pg.locator("#printer-status-widget .fcc-ps-mini-unread").first.is_visible()
+    assert pg.locator("#printer-status-widget .fcc-ps-ring-unread").first.is_visible()
     assert_contrast(widget)
 
 

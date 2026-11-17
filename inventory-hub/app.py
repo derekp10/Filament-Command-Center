@@ -169,6 +169,11 @@ def dashboard():
     port = cfg.get('spoolman_port', 7912)
     sm_url = f"http://{ip}:{port}"
     buy_more_url_template = cfg.get('buy_more_url_template', '')
+    # Always text (Group 57 review): the page now reads it as JSON (|tojson), which
+    # keeps a number's or a boolean's type, and the windows call .replace() on it.
+    # A null, a number or true typed into config.json is no template.
+    if not isinstance(buy_more_url_template, str):
+        buy_more_url_template = ''
     
     # Re-read .build_info on every dashboard render so a post-commit hook
     # update (host-side) takes effect without needing a container restart.
@@ -235,7 +240,8 @@ from routes_scan import (  # noqa: E402,F401
     api_manage_contents, api_bulk_move, api_bulk_move_session_action, _pm_norm,
     _PM_TEMP_LABELS, _PM_WEIGHT_TOL,
     _pm_num, _pm_first_pos, _compute_prusament_spool_weight_diff,
-    _handle_prusament_url_scan, api_identify_scan, api_buffer_clear,
+    _handle_prusament_url_scan, api_identify_scan, api_buffer_clear, api_audit_park,
+    api_audit_report, api_audit_found, api_audit_needs_label, api_audit_needs_label_undo,
 )
 
 # (external-parser search + /api/search moved to routes_inventory.py — L316 step 5)
@@ -249,6 +255,7 @@ from routes_locations import (  # noqa: E402,F401
     api_get_locations, api_save_location, api_delete_location,
     api_delete_spool, api_delete_filament, api_merge_filament,
     api_undo, api_get_contents_route, api_spool_details, api_filament_details,
+    api_loose_spools,
 )
 
 # (scan pipeline + update_filament + manage_contents moved to routes_scan.py — L316 step 6)

@@ -87,6 +87,7 @@ def test_cancel_review_dismiss_drops_card(page, require_server, base_url):
     # Discard is a two-click confirm (arm → "⚠️ Confirm discard") so an
     # accidental click can't drop a review (slice 5.1).
     page.click("#fcc-cancel-review-overlay .fcc-cr-discard")   # arm
+    page.wait_for_timeout(750)                                 # a second press under 700 ms is a double press
     page.click("#fcc-cancel-review-overlay .fcc-cr-discard")   # confirm → fires dismiss
     page.wait_for_function("() => !document.getElementById('fcc-cancel-review-overlay')", timeout=5000)
     assert dismissed["hit"] is True
@@ -127,6 +128,7 @@ def test_cancel_review_dismiss_already_handled_closes_cleanly(page, require_serv
     page.evaluate("() => window.openCancelReview()")
     page.wait_for_selector("#fcc-cancel-review-overlay .fcc-cr-card", timeout=5000)
     page.click("#fcc-cancel-review-overlay .fcc-cr-discard")   # arm
+    page.wait_for_timeout(750)                                 # a second press under 700 ms is a double press
     page.click("#fcc-cancel-review-overlay .fcc-cr-discard")   # confirm → fires dismiss
     page.wait_for_function("() => !document.getElementById('fcc-cancel-review-overlay')", timeout=5000)
 

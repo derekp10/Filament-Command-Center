@@ -1,0 +1,44 @@
+# The README demo: its own FCC and Spoolman with made-up data, for the README's pictures
+# (Group 55.1). Bound to this PC only (127.0.0.1). Nothing here touches dev or prod.
+# How to start, refresh, shoot and stop it: README.md in this folder.
+# It is kept stopped between uses (Derek, 2026-11-11). Remove it only with
+#   docker compose -p fcc-readme-demo down -v
+# never with --rmi: it runs dev's own image, inventory-hub-inventory-hub.
+name: fcc-readme-demo
+services:
+  spoolman:
+    image: ghcr.io/donkie/spoolman:0.27.1
+    container_name: fcc_readme_demo_spoolman
+    ports:
+      - "127.0.0.1:7999:8000"
+    volumes:
+      - spoolman-data:/home/app/.local/share/spoolman
+    environment:
+      - TZ=UTC
+  fakelink:
+    # A stand-in for two printers' PrusaLink: one printing, one idle.
+    image: inventory-hub-inventory-hub:latest
+    container_name: fcc_readme_demo_fakelink
+    command: ["python", "/fakelink/fakelink.py"]
+    volumes:
+      - ./fakelink:/fakelink
+  fcc:
+    image: inventory-hub-inventory-hub:latest
+    container_name: fcc_readme_demo
+    depends_on:
+      - spoolman
+      - fakelink
+    ports:
+      - "127.0.0.1:8100:8000"
+    volumes:
+      # A copy of FCC's code (refresh_app.py), with the demo's own made-up data/.
+      - ./app:/app
+      # setup_fields.py finds FCC's modules at ../inventory-hub from its own folder.
+      - ./app:/inventory-hub
+      - ./setup-and-rebuild:/setup-and-rebuild
+      - ./config.json:/config.json
+      - ./labels:/output
+    environment:
+      - PYTHONUNBUFFERED=1
+volumes:
+  spoolman-data:

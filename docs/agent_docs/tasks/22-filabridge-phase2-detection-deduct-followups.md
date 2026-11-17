@@ -1,6 +1,6 @@
 # Group 22: FilaBridge Phase-2 — Detection & Deduct-Attribution Follow-ups
 
-**Branch name (when started):** `feature/filabridge-phase2-followups` (off `dev`) — the prior `feature/filabridge-phase2-creds-gate` is merged + DELETED (22.1/22.2 already shipped to prod; 22.3 + 22.4 remain)
+**Branch name (when started):** `feature/filabridge-phase2-followups` (off `dev`) — the prior `feature/filabridge-phase2-creds-gate` is merged + DELETED (22.1/22.2 shipped to prod; 22.4 and 22.3 (a), (c) and the run-out half of (b) were done since; only 22.3(b)'s M600 single-extruder multi-colour split remains, waiting on a real M600 print: a ⏸️ PENDING DEREK item since 2026-11-16)
 **Estimated effort:** ~7–11 hours (22.1+22.2 share one fix — DONE; 22.3 is an investigation; 22.4 is a cluster of small polish/robustness fixes on the same deduct surface)
 **Risk:** **MEDIUM-HIGH.** Touches the live print-deduct path (`_cancel_monitor` / `_track_print_edge` / cancel-review pipeline / completion deduct / `_apply_usage_to_printer`) — the system that writes real weights to Spoolman. Validate against real `.bgcode` + live printer state, not just unit tests. See `[[feedback_adversarial_review_runtime_lens]]` and `[[project_filabridge_absorption_active]]`.
 

@@ -76,10 +76,9 @@ CONFIG_SCHEMA = [
           help="Pause between Spoolman sync operations."),
     Field("fcc_owns_completion_deduct", "FCC owns completed-print deduct", "bool", False,
           section="behavior", scope="server",
-          help="Phase-2 cutover: when ON, FCC deducts filament on FINISHED prints "
-               "(the slicer footer, same as FilaBridge billed). Turn this ON the "
-               "SAME moment you stop the FilaBridge container — otherwise completed "
-               "prints double-deduct (FilaBridge + FCC)."),
+          help="When ON, FCC takes each finished print's filament off the spools it "
+               "used, from the print file's own totals. A new install starts with it "
+               "off."),
     Field("path_filament_g", "Runout path filament (g)", "float", 0,
           section="behavior", scope="server", min=0, max=50,
           help="Grams of filament between the runout SENSOR and the nozzle that you pull "
@@ -102,22 +101,48 @@ CONFIG_SCHEMA = [
           section="behavior", scope="server", min=0, max=10000,
           help="A filament counts as low when its in-stock spools (not archived, not "
                "empty) add up to less than this many grams: per filament, across all its "
-               "spools. The ⚠️ Low stock list in the search panel uses it, and so does the "
-               "one Activity Log warning when a print or a weigh-out takes a filament "
-               "under it. 0 = nothing is ever low (a filament with no stock left still "
-               "shows as out)."),
+               "spools. The ⚠️ Low stock list (the title bar's ⚠️ count opens it) uses it, "
+               "and so does the one Activity Log warning when a print or a weigh-out takes "
+               "a filament under it. 0 = nothing is ever low (a filament with no stock left "
+               "still shows as out)."),
     Field("fcc.weighEntry.defaultMode", "Default weigh-in mode", "select", "additive",
           section="client", scope="client",
           choices=["gross", "net", "additive", "set_used"],
           help="Which input mode the weight-entry overlay opens in."),
-    # Group 46.3. The choices are what XL-3's tile would read, so the dropdown
-    # shows the result; inv_printer_status.js keys on these exact strings.
-    Field("fcc.printerStatus.toolheadLabel", "Printer Status toolhead labels", "select", "XL-3",
+    # Group 46.3; the choices renamed by Group 50.1 (Derek, 2026-10-29: they
+    # were "XL-3" / "3" / "Tool 3", his own head's id, which means nothing on
+    # another install; no setup's own names in Settings). inv_printer_status.js
+    # keys on these exact strings and moves a browser's old choice to its new
+    # name on load. Like the two below, a pick applies at once, with no Save.
+    Field("fcc.printerStatus.toolheadLabel", "Printer Status toolhead labels", "select", "By ID",
           section="client", scope="client",
-          choices=["XL-3", "3", "Tool 3"],
-          help="How each toolhead tile is labelled in Printer Status: its full id (XL-3), just "
-               "its number (3), or Tool and its number, counting from 1 like the printer's "
-               "own screen (Tool 3). The collapsed strip always shows the full id."),
+          choices=["By ID", "By number", "By Tool + number"],
+          help="How each toolhead is labelled in Printer Status, open or folded. By ID: its ID, "
+               "as named in the Location Manager. By number: its number on its printer (1, 2, "
+               "3…). By Tool + number: Tool and its number (Tool 1, Tool 2…), counting from 1 "
+               "like a printer's own screen. It changes as soon as you pick it, with no Save "
+               "needed."),
+    # Group 50.1 (Derek, 2026-10-29): "I'd like the full name, but I also want
+    # an option to switch it to just use printer ids". The ID is the Printer
+    # row's LocationID (the heartbeat's printer_status gives it as `id`).
+    Field("fcc.printerStatus.printerName", "Printers in the folded Printer Status", "select", "By name",
+          section="client", scope="client",
+          choices=["By name", "By ID"],
+          help="How each printer is shown when Printer Status is folded: by its name, or by its "
+               "ID from the Location Manager, which takes less room. Hover over a printer to see "
+               "the other. It changes as soon as you pick it, with no Save needed."),
+    # Group 50.1 (Derek, 2026-10-29): weights on by default ("it's kind of the
+    # point for me at least, but I can see why someone might not want it");
+    # beside each head by default (today's strip has its grams there), under
+    # it as the other look ("I really like C too").
+    Field("fcc.printerStatus.stripWeight", "Weights in the folded Printer Status", "select",
+          "Beside each toolhead",
+          section="client", scope="client",
+          choices=["Beside each toolhead", "Under each toolhead", "Off"],
+          help="Each loaded toolhead's grams left, in the colour of its ring: cyan, amber under "
+               "100 g, red when empty. Under each toolhead keeps the strip as wide as with no "
+               "weights, a line taller. Off: the ring's colour alone, and the grams are in each "
+               "toolhead's tooltip. It changes as soon as you pick it, with no Save needed."),
     # Readability (Derek, 2026-10-21). text_size.js keys on these exact
     # strings, and so does the script in dashboard.html's <head> that applies
     # the size before the first paint.
@@ -128,6 +153,36 @@ CONFIG_SCHEMA = [
                "under 13.6 px); Small is the compact look FCC had before that; Large and Extra "
                "Large make everything bigger together. It changes as soon as you pick it, with "
                "no Save needed."),
+    # Group 57.3 (Derek, 2026-10-28: look C as a setting, not hard-coded).
+    # titlebar_prefs.js keys on these exact strings, and so does the script in
+    # dashboard.html's <head> that applies them before the first paint.
+    Field("fcc.titleBar.buttons", "Title bar buttons", "select", "Automatic",
+          section="client", scope="client",
+          choices=["Automatic", "Always words", "Always icons"],
+          help="How Backlog, Queue and Low stock are labelled in the title bar. Automatic: with "
+               "their words while the bar has room (🏷️ Backlog (53)), and the icon and number "
+               "alone when it hasn't (🏷️ 53): in a narrow window, at a bigger Text size, or when "
+               "a count gets a digit longer. Always words and Always icons keep one look. Low and "
+               "Out keep their words in every look, as they tell the two numbers apart. It "
+               "changes as soon as you pick it, with no Save needed."),
+    Field("fcc.lowStock.count", "Low stock count", "select", "Low and Out",
+          section="client", scope="client",
+          choices=["Low and Out", "One number"],
+          help="What the title bar's ⚠️ button shows. Low and Out: the two lists apart, as the "
+               "Low stock window's tabs show them (Low 1, Out 11). One number: the two added up "
+               "(Low stock (12), or ⚠️ 12 with no room for the words). Excluded filaments never "
+               "count. It changes as soon as you pick it, with no Save needed."),
+    # Derek, 2026-10-29, on the bar short of room: "I like both, if we could
+    # option it". The default is option (c), as built in 57.3.
+    Field("fcc.titleBar.full", "When the title bar is full", "select", "Shorten the title",
+          section="client", scope="client",
+          choices=["Shorten the title", "Take a second line"],
+          help="What the title bar does when, with its other space savers taken (tighter "
+               "spacing, the icons, ADD, the version badge's date alone), the whole title still "
+               "doesn't fit. Shorten the title keeps one line: the title ends in … and its full "
+               "name is its tooltip. Take a second line keeps the title whole and puts the buttons "
+               "on a line of their own, which takes some room from the panels below on a small "
+               "screen. It changes as soon as you pick it, with no Save needed."),
     Field("fcc.bulkMove.enabled", "Enable Bulk Moves", "bool", False,
           section="behavior", scope="server",
           help="Show the 🔀 Bulk Move affordances and accept bulk-move scans. "

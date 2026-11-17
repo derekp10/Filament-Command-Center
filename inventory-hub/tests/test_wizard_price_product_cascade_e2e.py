@@ -5,6 +5,11 @@ price (mirrors the empty-weight cascade), BLANK-GATED so it never overwrites an
 explicit spool price (Derek's constraint: "as long as we aren't overwriting
 filaments/spools that have data for that field").
 
+Group 54.8 (Derek, 2026-11-07, (a)): the inherited price is shown marked as the
+filament's (`wizardState.spoolPriceFrom`, the "↩ from filament" badge), and Save
+never writes it as the spool's own; the spool's own price shows plain. These
+cases now pin the mark too (Save itself: test_wizard_price_mark_54_8.py).
+
 L351: the spool section of the wizard now has its own editable Product Link
 input (#wiz-spool-product_url), populated on a Prusament/import scan in parity
 with the existing Purchase Link input.
@@ -30,6 +35,12 @@ def _get_price(page: Page) -> str:
     return page.evaluate("document.getElementById('wiz-spool-price').value")
 
 
+def _marked(page: Page) -> list:
+    """[where the shown price came from, whether its "↩ from filament" badge shows]."""
+    return page.evaluate("() => [wizardState.spoolPriceFrom,"
+                         " document.getElementById('wiz-spool-price-inherited-badge').style.display !== 'none']")
+
+
 # ---------------- L349: price cascade (blank-gated) ----------------
 
 def test_price_inherits_filament_when_spool_blank(page: Page):
@@ -37,6 +48,7 @@ def test_price_inherits_filament_when_spool_blank(page: Page):
     _set_price(page, "")
     page.evaluate("window.wizardPrefillSpoolPrice(null, 25.5)")
     assert _get_price(page) == "25.5"
+    assert _marked(page) == ["filament", True]          # Group 54.8: marked as the filament's
 
 
 def test_price_prefers_spools_own_value(page: Page):
@@ -44,6 +56,7 @@ def test_price_prefers_spools_own_value(page: Page):
     _set_price(page, "")
     page.evaluate("window.wizardPrefillSpoolPrice(10, 25.5)")
     assert _get_price(page) == "10"
+    assert _marked(page) == [None, False]               # the spool's own: plain
 
 
 def test_price_never_overwrites_existing_typed_value(page: Page):
@@ -52,6 +65,7 @@ def test_price_never_overwrites_existing_typed_value(page: Page):
     _set_price(page, "99")
     page.evaluate("window.wizardPrefillSpoolPrice(null, 25.5)")
     assert _get_price(page) == "99"
+    assert _marked(page) == [None, False]
 
 
 def test_price_noop_when_no_source(page: Page):
@@ -59,6 +73,7 @@ def test_price_noop_when_no_source(page: Page):
     _set_price(page, "")
     page.evaluate("window.wizardPrefillSpoolPrice(null, null)")
     assert _get_price(page) == ""
+    assert _marked(page) == [None, False]
 
 
 # ---------------- L351: per-spool product_url input ----------------

@@ -1117,6 +1117,12 @@ The full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.
 > **2026-10-19:** the current list for 40.4–40.7 and Swap option C is the buglist's ⏸️ PENDING DEREK item "the
 > pickers and Swap option C" (C1–W2), which replaces F1, P1–P6, R1–R4 and W1–W2 below. R4 is one tap now (answer 6),
 > and P5 / W2 used `CORE1`, which dev no longer has (try an INDX head instead). S1–S7 stay in their own PENDING DEREK item.
+>
+> **2026-11-16:** B1–B6, T1, P3 (the pool slot) and P6 below never reached that list, and W2 went with CORE1. At
+> Derek's word (*"Just because I don't use it, regularly, doesn't mean someone else using the software won't"*) they
+> are in it now, as one sitting: B1–B6 and W3 (the old W2 on a loaded head) in the pickers item, the pool slot in its
+> B2, and P6 in the mid-print item's "INDX switched off" check. T1 is his everyday path. Its old P3 named XL-4,
+> which today's data can't run (XL-4's only feed slot belongs to the spool on it); it now names XL-2.
 
 Dev container, after the branch is merged to `dev`. Empty the scan buffer before each row unless it says otherwise.
 

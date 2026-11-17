@@ -58,7 +58,7 @@ window.updateManageTitle = (loc, itemArray = null) => {
     const t = loc.Type || '';
     if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
     else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
-    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
+    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; } // toolhead-type-ok: a badge colour only
     // L271 Phase 5 — Room > Wall Shelf > Row > Section (exact matches before the
     // generic 'Shelf' includes, since 'Wall Shelf' contains 'Shelf').
     else if (t === 'Wall Shelf') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #6dd5c9; background-color:#1f5a52 !important; color:#fff;'; }
@@ -66,7 +66,7 @@ window.updateManageTitle = (loc, itemArray = null) => {
     else if (t === 'Section') { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
     else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
-    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
+    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; } // toolhead-type-ok: a badge colour only
     else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
     // 18.1 — Unknown bucket: yellow caution band so it's instantly readable.
     else if (t.includes('Unknown')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #ffd54a; box-shadow: 0 0 6px rgba(255,193,7,0.6);'; }
@@ -79,9 +79,9 @@ window.updateManageTitle = (loc, itemArray = null) => {
     // by renderGrid, and renderList's `qr-eject-all-list` target doesn't exist
     // in the live template — so a button placed there would be invisible on
     // Rooms / Shelves / Carts, which are the most likely bulk-move sources.
-    // Suppressed on single-occupancy locations, where every spool would be
-    // skipped as "loaded in a toolhead slot" (a guaranteed no-op).
-    const SINGLE_OCC = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    // Suppressed on single-occupancy locations, a head or a Printer row
+    // (window.isHeadOrPrinterType), where every spool would be skipped as
+    // "loaded in a toolhead slot" (a guaranteed no-op).
     // The LocationID rides in a data- attribute and the handler reads it back via
     // dataset — it NEVER enters a JS string literal inside the onclick. escAttr
     // escapes for an HTML ATTRIBUTE, not for JS source, so interpolating into
@@ -105,7 +105,7 @@ window.updateManageTitle = (loc, itemArray = null) => {
     // button even when the flag is off, so a session armed before the flag was
     // turned off can still be found and cancelled rather than stranded.
     const bulkEnabled = (window.FCC_BULK_MOVE_ENABLED !== false);
-    const moveAllBtn = (SINGLE_OCC.includes(t) || (!bulkEnabled && !bulkArmed)) ? '' : (bulkArmed ? `
+    const moveAllBtn = (window.isHeadOrPrinterType(t) || (!bulkEnabled && !bulkArmed)) ? '' : (bulkArmed ? `
         <button class="btn btn-sm btn-info ms-auto" style="white-space:nowrap;"
                 title="A bulk move is already armed — reopen its preview panel"
                 onclick="window.openBulkMovePanel && window.openBulkMovePanel({ user: true })">
@@ -189,7 +189,7 @@ const _clearManageReadFailure = () => {
 };
 window._showManageReadFailure = _showManageReadFailure;
 // The grid (a multi-slot Dryer Box / MMU Slot) or the list, whichever `loc` uses.
-const _isGridLoc = (loc) => (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
+const _isGridLoc = (loc) => (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1; // toolhead-type-ok: an MMU unit's slots draw as a grid
 const _showManageView = (isGrid) => {
     document.getElementById('manage-grid-view').style.display = isGrid ? 'block' : 'none';
     document.getElementById('manage-list-view').style.display = isGrid ? 'none' : 'block';
@@ -238,6 +238,12 @@ window.openManage = (id) => {
         return;
     }
 
+    // Another place in the same window (a scan under its help, say): the help it had up
+    // was about the last place (Group 55 review, R1-8), so it goes.
+    const shownId = document.getElementById('manage-loc-id').value;
+    if (shownId && String(shownId) !== String(id) && window.fccCloseHelpFor) {
+        window.fccCloseHelpFor(document.getElementById('manageModal'));
+    }
     window.updateManageTitle(loc);
     document.getElementById('manage-loc-id').value = id;
     const input = document.getElementById('manual-spool-id');
@@ -897,7 +903,7 @@ const _ensureManageQRsFilled = () => {
         card.querySelectorAll("[id^='qr-pick-'],[id^='qr-print-'],[id^='qr-trash-']").forEach((div) => {
             if (div.querySelector('canvas,img,table')) return; // already drawn
             let text = null;
-            if (div.id.startsWith('qr-pick-')) text = 'ID:' + sid;
+            if (div.id.startsWith('qr-pick-')) text = window.fccSpoolCardQr(sid);
             else if (div.id.startsWith('qr-print-')) text = 'CMD:PRINT:' + sid;
             else if (div.id.startsWith('qr-trash-')) text = 'CMD:TRASH:' + sid;
             if (text) generateSafeQR(div.id, text, 70);
@@ -1118,7 +1124,10 @@ const _paintDepositCard = (card, item) => {
     const inner = card.querySelector('.list-inner-gold');
     if (inner) inner.style.background = styles.inner;
     const label = card.querySelector('.js-deposit-spool');
-    if (label) label.textContent = `#${item.id} - ${item.display}`;
+    // A display that already starts with the spool's number ("#8 Acme PLA ...", most of
+    // them) isn't given it twice (Group 55 review: the README's picture read "#8 - #8 ...").
+    const display = String(item.display == null ? '' : item.display);
+    if (label) label.textContent = display.startsWith(`#${item.id} `) || display === `#${item.id}` ? display : `#${item.id} - ${display}`;
 };
 
 const _buildDepositCard = (locId) => {
@@ -1151,7 +1160,7 @@ const _buildDepositCard = (locId) => {
             </div>
             <div id="qr-deposit-trigger" class="bg-white p-2 rounded mb-2 mt-2" style="box-shadow: 0 4px 10px rgba(0,0,0,0.5);"></div>
 
-            <div class="text-pop-light js-deposit-spool" style="color: #fff; margin-top: 5px; font-weight: bold;"></div>
+            <div class="text-pop js-deposit-spool" style="color: #fff; margin-top: 5px; font-weight: bold;"></div>
         </div>`;
     _paintDepositCard(depositCard, state.heldSpools[0]);
     return depositCard;
@@ -1189,7 +1198,7 @@ const _syncDepositCard = () => {
 // words (Claude's call 23).
 const _isOneSpoolHeadRow = (row, lid) => {
     if (!row) return false;
-    if (['Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(row.Type)) return true;
+    if (window.isToolheadType(row.Type)) return true;
     // A dual-role printer that is its own (only) head, the CORE1 shape (Group 42
     // review: its tile said "⚠️ 2 spools" while its view showed no banner).
     if (row.Type !== 'Printer') return false;
@@ -1383,7 +1392,9 @@ const renderBadgeHTML = (s, i, locId) => {
 };
 
 const renderBadgeQRs = (s, i) => {
-    generateSafeQR(`qr-pick-${i}`, "ID:" + s.id, 70);
+    // Never the printed label's ID: (inv_core.js fccSpoolCardQr): read off the screen, it
+    // would count as a label read.
+    generateSafeQR(`qr-pick-${i}`, window.fccSpoolCardQr(s.id), 70);
     generateSafeQR(`qr-print-${i}`, "CMD:PRINT:" + s.id, 70);
     generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:" + s.id, 70);
 };
@@ -1435,12 +1446,11 @@ window.handleSlotInteraction = (slot) => {
             // the slot feeds comes off into the buffer either way (the same-slot
             // swap); one loaded on any other head is refused by the server, so
             // nothing is offered; a stale record isn't moved.
-            const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
             const rowOf = (id) => (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === id);
             const boxRow = rowOf(String(locId).toUpperCase()) || {};
             const feed = String((((boxRow.extra || {}).slot_targets) || {})[String(slot)] || '').trim().toUpperCase();
             const on = String(item.deployed_to || '').trim().toUpperCase();
-            const onHead = !!(item.is_ghost && on && headTypes.includes((rowOf(on) || {}).Type));
+            const onHead = !!(item.is_ghost && on && window.isHeadOrPrinterType((rowOf(on) || {}).Type));
             if (onHead && on === feed) {
                 promptAction("Slot Occupied", `Put ${what} into Slot ${slot}?<br>`
                     + `<small>Slot ${slot}'s spool ${old} is loaded on ${esc(on)}: it comes off into your scan buffer, `
@@ -1510,7 +1520,7 @@ window.handleSlotInteraction = (slot) => {
             // explicit slot is an Overwrite). An MMU Slot row keeps its 0-based
             // explicit slot (dormant: no such rows exist).
             const row = (state.allLocations || []).find(l => l.LocationID === locId) || {};
-            if (row.Type === 'MMU Slot') doAssign(locId, newId, slot, true);
+            if (row.Type === 'MMU Slot') doAssign(locId, newId, slot, true); // toolhead-type-ok: an MMU Slot row numbers its slots from 0
             else doAssign(locId, newId, null, true, { pickedSlot: slot, shownEmpty: true });
         }
     } else if (item) {
@@ -1537,8 +1547,7 @@ const _ownHeadOf = (spool) => {
     const own = String((held.is_ghost ? held.deployed_to : held.location) || '').toUpperCase();
     if (!own) return null;
     const row = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === own);
-    const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
-    return row && headTypes.includes(row.Type) ? own : null;
+    return row && window.isHeadOrPrinterType(row.Type) ? own : null;
 };
 
 window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
@@ -1555,12 +1564,7 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
     // it's actively printing/paused. Fails open on any network hiccup —
     // we don't want to block moves on a cold printer.
     const locObjCheck = state.allLocations.find(l => l.LocationID === loc);
-    const isToolheadTarget = locObjCheck && (
-        locObjCheck.Type === 'Tool Head' ||
-        locObjCheck.Type === 'MMU Slot' ||
-        locObjCheck.Type === 'No MMU Direct Load' ||
-        locObjCheck.Type === 'Printer'
-    );
+    const isToolheadTarget = !!locObjCheck && window.isHeadOrPrinterType(locObjCheck.Type);
     // Group 39 review (engine-6): a spool LEAVING a printer head gets ONE answer
     // from the server, naming both heads in Derek's D6 wording. Confirming the
     // destination here first made a head -> head move on one printer ask twice
@@ -1645,7 +1649,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         const locObj = state.allLocations.find(l => l.LocationID === loc);
         // If Type is 'MMU Slot', we assume backend expects 0-based indexing (0..N-1)
         // Frontend grid is 1-based (1..N). So we subtract 1.
-        if (locObj && locObj.Type === 'MMU Slot') {
+        if (locObj && locObj.Type === 'MMU Slot') { // toolhead-type-ok: an MMU Slot row numbers its slots from 0
             finalSlot = parseInt(slot) - 1;
         }
     }
@@ -1839,6 +1843,10 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
 
 window.ejectSpool = (sid, loc, pickup) => {
     if (pickup) {
+        // Group 58 review: the buffer is kept during an audit, and this door's ID: goes
+        // to the audit as a scan, so a press would count as finding the spool. The
+        // CMD:CLEAR refusal's words, with no request.
+        if (window.auditPressRefused && window.auditPressRefused('CMD:CLEAR')) return;
         if (window._pickInFlight) return;   // no stacked identify_scan on a double-click (UI-lockout family)
         window._pickInFlight = true;
         window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: "ID:" + sid, source: 'keyboard' }) })
@@ -1980,8 +1988,10 @@ window.manualAddSpool = () => {
     // is a scan, so it takes the scan path: the same questions (a slot whose
     // toolhead runs a spool from elsewhere asks first) and the same outcome
     // toasts. It used to post as a manual entry, so a slot move that landed
-    // still toasted "Invalid Code". Only ids are looked up here.
-    if (/^(LOC|CMD):/i.test(val) && typeof window.processScan === 'function') {
+    // still toasted "Invalid Code". Only ids are looked up here. So does an id during
+    // an audit (Group 58 review): the audit answers it, which this door read as
+    // "Invalid Code" too.
+    if ((state.auditActive || /^(LOC|CMD):/i.test(val)) && typeof window.processScan === 'function') {
         const input = document.getElementById('manual-spool-id');
         input.value = '';
         input.focus();
@@ -2225,7 +2235,7 @@ const _syncParentBreadcrumb = () => {
 // toolheads-as-leaves are intentionally NOT excluded here (a toolhead CAN hold
 // a child box) except the synthetic buckets, which can't be a real parent.
 const _LOC_PARENT_KINDS = ['Room', 'Wall Shelf', 'Row', 'Cart', 'Printer', 'Section', 'Shelf',
-    'Storage', 'Dryer Box', 'Tool Head', 'No MMU Direct Load', 'MMU Slot'];
+    'Storage', 'Dryer Box', 'Tool Head', 'No MMU Direct Load', 'MMU Slot']; // toolhead-type-ok: the parent picker's kinds, in display order
 
 // L271 Phase 5 — the Type dropdown is now data-driven (built-ins + any custom
 // types you add) so it isn't capped at a hardcoded list. Built-in types + their
@@ -2241,9 +2251,9 @@ const _LOC_BUILTIN_TYPES = [
     { v: 'Cart', l: 'Cart' },
     { v: 'Sliding Drawer', l: 'Sliding Drawer' },
     { v: 'Printer', l: 'Printer' },
-    { v: 'Tool Head', l: 'Tool Head' },
-    { v: 'No MMU Direct Load', l: 'No MMU Direct Load' },
-    { v: 'MMU Slot', l: 'MMU Slot' },
+    { v: 'Tool Head', l: 'Tool Head' }, // toolhead-type-ok: an option of the Type dropdown
+    { v: 'No MMU Direct Load', l: 'No MMU Direct Load' }, // toolhead-type-ok: an option of the Type dropdown
+    { v: 'MMU Slot', l: 'MMU Slot' }, // toolhead-type-ok: an option of the Type dropdown
     { v: 'Virtual Room', l: 'Virtual Room / Zone' },
 ];
 const _LOC_CUSTOM_TYPES_KEY = 'fcc.locMgr.customTypes';
@@ -2483,16 +2493,53 @@ window.saveLocation = () => {
 // Enter then submitted it as a scan of "t".
 // Deliberately NOT a global "ignore SELECT" in the scanner: a focused dropdown
 // would then swallow a blind barcode scan. So a scan on a dropdown or a button
-// is left to the accumulator: a scanner-speed burst (window.isScannerBurst), or
-// a slower scanner's buffer that looks like a scan payload (a ':' or '/' that
-// no typeahead produces). A scan typed INTO a text field never reaches the
+// is left to the accumulator. Whose Enter it is there is judged on the keys
+// typed on that control while it has the focus, never on the accumulator's
+// buffer, which spans 2 s and every control (Group 61 review 2: a person's
+// "pr" on the Type select made their Enter on the Parent, or on Save, a
+// scan). An Enter on a control nothing was typed on is a person's, unless the
+// buffer is plainly a scan (a burst, a ':' or '/'). On a dropdown (Group 61
+// and its reviews), a scan is a burst, a ':' or '/' (no typeahead produces
+// one), or a search that matches the start of none of its options: the
+// search the browser holds, its keys since its own 1 s reset. A person types
+// to jump to an option ("dr" for Dryer Box, "3" for a custom type "3D Printer
+// Shelf" or a parent "2nd Floor", "d" and a second later "s" for Section),
+// while a slower scanner's bare-number label ("57") or old label with no
+// prefix ("PM-DB-1") saved the form. The scan's letters had moved the
+// dropdown by typeahead too ("CMD:NEXT" moved the Parent to the next place
+// starting with C), so it is put back to what it held before the scan's own
+// first key (a person's jump just before the scan stays, review 2), the scan
+// goes out without that jump glued in front, and a toast says so. On a
+// button, a scan is two keys or more typed on it, one under 500 ms ago, a
+// burst, or a ':' or '/' (window.enterIsAScan's rule, on its own keys). A
+// Space inside a scan presses no button, and on a dropdown none inside a
+// label (a LocationID may hold one: "LOC:GARAGE SHELF" clicked a focused
+// Cancel), while a person's Space stays part of their typeahead ("bin 2":
+// held off for 500 ms, review 2, the browser stopped on "Bin 1" and Enter
+// saved it). A person's own key (an arrow, Tab, Home, a held key's repeats)
+// ends the keys before it. A scan typed INTO a text field never reaches the
 // accumulator at all; the shared field-scan capture installed below hands it to
-// the scan path and restores the field before this handler could save it.
+// the scan path and restores the field before this handler could save it: any
+// burst (no name, id or count is typed 3 keys and an Enter inside 150 ms), a
+// whole FCC label at any speed, or digits faster than a person types (Group 61,
+// Derek 2026-10-29: "if a scan came in, it should go to a buffer or load a
+// card, but not input data"; a slower scanner's "LOC:LR-MDB-1" was saved as
+// the location's name).
 // Enter on a button activates that button. The accumulator cancels every Enter
 // outside INPUT/TEXTAREA, which also killed native button activation, and it
 // would have submitted leftover typeahead letters as a scan.
 // The parent tree picker mounts on document.body, so its keys never pass
 // through #locModal; it neutralises its own Enter.
+// Do these keys, typed on a dropdown, jump to one of its options? The start of
+// an option's text, or one letter again and again (which steps through the
+// options starting with it), as the browser's typeahead reads them.
+const _locTypeaheadMatches = (sel, typed) => {
+    const t = String(typed || '').trim().toLowerCase();
+    if (!t) return false;
+    const texts = Array.from(sel.options || []).map(o => String(o.textContent || '').trim().toLowerCase());
+    if (texts.some(x => x.startsWith(t))) return true;
+    return /^(.)\1+$/.test(t) && texts.some(x => x.startsWith(t[0]));
+};
 const _installLocEditorEnterToSave = () => {
     const modalEl = document.getElementById('locModal');
     if (!modalEl || modalEl._fccEnterToSave) return;
@@ -2500,20 +2547,118 @@ const _installLocEditorEnterToSave = () => {
     if (window.installFieldScanCapture) {
         window.installFieldScanCapture({
             match: (el) => el.tagName === 'INPUT' && !!(el.closest && el.closest('#locModal')),
-            isScanPayload: (txt) => !!(window.looksLikeScanPayload && window.looksLikeScanPayload(txt)),
+            isScanPayload: () => true,
+            labels: true,
         });
     }
+    const scanState = () => ((typeof state !== 'undefined') ? state : window.state) || null;
+    const scanBuf = () => { const st = scanState(); return st && typeof st.scanBuffer === 'string' ? st.scanBuffer : ''; };
+    const payload = (txt) => !!(txt && window.looksLikeScanPayload && window.looksLikeScanPayload(txt));
+    const BURST_MS = 150, IN_FLIGHT_MS = 500, TYPEAHEAD_MS = 1000, RESET_MS = 2000;
+    const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
+        'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
+    // The keys typed on the dropdown or button that has the focus, each with
+    // its time and the dropdown's value before it.
+    let run = null;   // { el, keys: [{ k, t, before }] }
+    const keysOn = (el, now) => (run && run.el === el && run.keys.length
+        && now - run.keys[run.keys.length - 1].t <= RESET_MS) ? run.keys : [];
+    const textOf = (keys) => keys.map((x) => x.k).join('');
+    // A burst at the end of the keys: 3 or more inside 150 ms of the first of
+    // them, the Enter (now) included (the accumulator's 'barcode' test).
+    const burstAt = (keys, now) => {
+        let i = keys.length - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t < BURST_MS) i--;
+        return keys.length - i >= 3 && now - keys[i].t < BURST_MS;
+    };
+    // The search the browser's typeahead holds after keys[end - 1]: the keys
+    // since its own 1 s reset.
+    const searchOf = (keys, end) => {
+        let i = end - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t <= TYPEAHEAD_MS) i--;
+        return textOf(keys.slice(Math.max(0, i), end));
+    };
+    // Where a scan starts among a dropdown's keys: after a pause (longer than
+    // the scan's own keys, twice over, and than a burst's 150 ms) that ends a
+    // person's jump to an option, else at the first of them.
+    const scanFrom = (sel, keys) => {
+        for (let k = keys.length - 1; k > 0; k--) {
+            let pace = 0;
+            for (let j = k + 1; j < keys.length; j++) pace = Math.max(pace, keys[j].t - keys[j - 1].t);
+            if (keys[k].t - keys[k - 1].t <= Math.max(BURST_MS, 2 * pace)) continue;
+            const theirs = searchOf(keys, k);
+            if (!payload(theirs) && _locTypeaheadMatches(sel, theirs)) return k;
+        }
+        return 0;
+    };
+    const putSelectBack = (sel, value) => {
+        if (sel.value === value) return;
+        sel.value = value;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));   // the breadcrumb, a suggested id
+        const opt = sel.options[sel.selectedIndex];
+        const what = sel.id === 'edit-parent' ? 'Parent' : (sel.id === 'edit-type' ? 'Type' : 'The dropdown');
+        if (window.showToast) window.showToast(
+            `${what} is back to "${opt ? opt.textContent.trim() : value}": the scan's letters had changed it`, 'info', 4000);
+    };
+    // The scan the accumulator sends at this Enter is the control's own keys
+    // from `from`: keys typed on another control first, or a person's jump
+    // just before the scan, are no part of it.
+    const scanIsOnly = (keys, from) => {
+        const st = scanState();
+        const own = textOf(keys.slice(from));
+        if (!st || typeof st.scanBuffer !== 'string' || st.scanBuffer === own || !st.scanBuffer.endsWith(own)) return;
+        st.scanBuffer = own;
+        st.scanStartTime = keys[from].t;
+    };
     modalEl.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
-        // A held key repeats keydown, and the modal stays focusable for its
-        // ~150 ms fade after a successful save: neither may save again.
-        if (e.repeat || !modalEl.classList.contains('show')) return;
+        if (e.isComposing) return;
         const tag = ((e.target && e.target.tagName) || '').toUpperCase();
-        if (tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'BUTTON') return;
-        if (tag !== 'INPUT') {
-            const st = (typeof state !== 'undefined') ? state : window.state;
-            if (window.isScannerBurst && window.isScannerBurst()) return;
-            if (st && st.scanBuffer && window.looksLikeScanPayload && window.looksLikeScanPayload(st.scanBuffer)) return;
+        const ctl = tag === 'SELECT' || tag === 'BUTTON';
+        const now = Date.now();
+        if (e.ctrlKey || e.altKey || e.metaKey || (e.key !== 'Enter' && (e.repeat || PERSON_KEYS.includes(e.key)))) {
+            if (ctl) run = null;
+            return;
+        }
+        if (ctl && e.key.length === 1) {
+            const keys = keysOn(e.target, now);
+            if (e.key === ' ') {
+                if (payload(textOf(keys)) || (tag === 'BUTTON' && keys.length && now - keys[0].t < IN_FLIGHT_MS)) {
+                    e.preventDefault();   // inside a scan: the scan accumulator still reads it
+                } else if (tag === 'BUTTON') {
+                    return;               // a person's press of the button
+                }
+            }
+            if (!keys.length) run = { el: e.target, keys: [] };
+            run.keys.push({ k: e.key, t: now, before: tag === 'SELECT' ? e.target.value : null });
+            return;
+        }
+        if (e.key !== 'Enter') return;
+        // A held key repeats keydown, and the modal stays focusable for its
+        // ~150 ms fade after a successful save: neither may save again, nor
+        // press a focused button (Group 50.6: Enter presses one now), so the
+        // editor cancels it itself instead of leaning on the accumulator.
+        if (e.repeat || !modalEl.classList.contains('show')) { e.preventDefault(); return; }
+        if (tag !== 'INPUT' && !ctl) return;
+        if (ctl) {
+            const keys = keysOn(e.target, now);
+            run = null;
+            let scan;
+            if (!keys.length) {
+                scan = (window.isScannerBurst && window.isScannerBurst()) || payload(scanBuf().trim());
+            } else if (tag === 'SELECT') {
+                scan = burstAt(keys, now) || payload(textOf(keys))
+                    || !_locTypeaheadMatches(e.target, searchOf(keys, keys.length));
+            } else {
+                const typed = textOf(keys).trim();
+                scan = typed.length >= 2 || now - keys[0].t < IN_FLIGHT_MS || payload(typed) || burstAt(keys, now);
+            }
+            if (scan) {
+                if (keys.length) {
+                    const from = tag === 'SELECT' ? scanFrom(e.target, keys) : 0;
+                    if (tag === 'SELECT') putSelectBack(e.target, keys[from].before);
+                    scanIsOnly(keys, from);
+                }
+                return;   // the scan accumulator has it
+            }
         }
         e.preventDefault();
         // The accumulator is a bubble-phase listener on `document`, so stopping
@@ -2732,6 +2877,7 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
         <span class="fw-bold text-info">🌳 Pick a parent location</span>
         <button type="button" class="btn-close btn-close-white" data-tp="cancel" title="Cancel"></button>
       </div>
+      <div class="px-3 pt-2 fcc-tp-flash" role="alert" style="color:#ffc107; min-height:1.5em;"></div>
       <div class="card-body p-0" style="overflow:auto;">
         <div class="list-group list-group-flush">
           <button type="button" class="list-group-item list-group-item-action bg-dark text-light fcc-tp-node" data-tp-val="${escA(_LOC_PARENT_NONE)}">— Top level (no parent) —</button>
@@ -2747,6 +2893,20 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
     panel.innerHTML = html;
 
     let handle;
+    // Group 61: a scan while the picker is open goes to the scan path, never to
+    // a node (its Enter picked the highlighted parent and the scan was thrown
+    // away). The picker holds scans as the slot picker does (processScan's open
+    // question): a location's own label picks it as the parent, CMD:CANCEL
+    // cancels, any other scan is refused with a note.
+    let question = null;
+    const unregister = () => {
+        if (!question) return;
+        const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
+        window._fccOpenMoveQuestions = open;
+        window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+        question = null;
+    };
+    const flash = (msg) => { const f = panel.querySelector('.fcc-tp-flash'); if (f) f.textContent = msg; };
     const nodes = () => Array.from(panel.querySelectorAll('.fcc-tp-node'));
     const setActive = (idx) => {
         const ns = nodes();
@@ -2767,26 +2927,41 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
             sel.value = opt.value;
         }
         sel.dispatchEvent(new Event('change'));   // sync breadcrumb (bound in _populateParentSelect)
+        unregister();
         if (handle) handle.cleanup();
     };
 
     panel.addEventListener('click', (e) => {
-        if (e.target.closest('[data-tp="cancel"]')) { if (handle) handle.cleanup(); return; }
+        if (e.target.closest('[data-tp="cancel"]')) { unregister(); if (handle) handle.cleanup(); return; }
         const node = e.target.closest('.fcc-tp-node');
         if (node) pick(node.dataset.tpVal);
     });
     panel.addEventListener('keydown', (e) => {
         const ns = nodes();
         const cur = ns.findIndex(n => n.classList.contains('kb-active'));
+        // A Space inside a scan (a location id may hold one) presses no node;
+        // the scan accumulator still reads it.
+        if (e.key === ' ' && window.scanIsArriving && window.scanIsArriving()) { e.preventDefault(); return; }
         if (e.key === 'ArrowDown') { e.preventDefault(); setActive(cur + 1); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(cur - 1); }
         else if (e.key === 'Enter') {
+            // A scan's Enter is the scan's (Group 61): the accumulator sends it
+            // to processScan, which brings it to this picker's question below.
+            if (window.enterIsAScan && window.enterIsAScan()) return;
             // Same class as Group 46.2: this Enter reached the scan accumulator,
             // which submitted any letters typed in the picker as a scan
             // ("Unknown Code"). Picking a node consumes it.
             e.preventDefault();
             e.stopImmediatePropagation();
             if (window.clearScanBuffer) window.clearScanBuffer();
+            // Group 50.6: Enter presses the button that has the focus (Cancel,
+            // or a node reached by Tab), as a click does; else the highlighted
+            // node, else the first. It picked a node even on a focused Cancel.
+            const ae = document.activeElement;
+            if (ae && panel.contains(ae) && ae.matches && ae.matches('button')) {
+                if (ae.matches('[data-tp="cancel"]')) { unregister(); if (handle) handle.cleanup(); return; }
+                if (ae.classList.contains('fcc-tp-node')) { pick(ae.dataset.tpVal); return; }
+            }
             const n = ns[cur] || ns[0]; if (n) pick(n.dataset.tpVal);
         }
     });
@@ -2799,7 +2974,38 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
         backdrop: true,
         backdropDismiss: true,
         occlude: ['#edit-parent', '#edit-type', '#edit-type-custom'],
+        onEscape: () => { unregister(); handle.cleanup(); },
     });
+    // (Closed any other way, its root leaves the page, and processScan drops a
+    // question whose dialog has gone.)
+    question = {
+        title: 'Pick a parent location',
+        element: handle.element,
+        hint: 'Answer the question on screen first: pick a parent (or scan its label), or Cancel',
+        cancel: () => { unregister(); handle.cleanup(); },
+        flash,
+        route: (text) => {
+            const last = window.lastScanLabel ? window.lastScanLabel(text) : String(text).trim().toUpperCase();
+            const m = /^LOC:(.+)$/.exec(last);
+            if (!m || /:SLOT:\d+$/.test(last)) return false;
+            const id = m[1].trim();
+            const node = nodes().find(n => n.dataset.tpVal !== _LOC_PARENT_NONE && n.dataset.tpVal !== _LOC_PARENT_AUTO
+                && _locUC(n.dataset.tpVal) === id);
+            if (!node) {
+                const why = `${id} isn't one of the parents offered here (this location itself, one inside it, or not a place): pick a parent, or Cancel`;
+                flash(why);
+                if (window.showToast) window.showToast(why, 'warning', 7000);
+                // The Activity Log draws its lines as HTML: the scan's text is escaped.
+                const esc = window.escHtml || ((s) => s);
+                if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${esc(String(text).trim())}" ignored: ${esc(why)}`, 'WARNING');
+                return 'refused';
+            }
+            pick(node.dataset.tpVal);
+            return true;
+        },
+    };
+    window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
+    window._fccOpenMoveQuestion = question;
     // Pre-highlight the currently-selected parent (or the first node) without
     // forcing a concrete node onto an Auto/unselectable-parent row.
     setTimeout(() => {
@@ -2814,7 +3020,7 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
 // printer map other views cache for the page's life (Quick-Swap, Feeds); after
 // changing one, drop the cache and tell them to refresh.
 function _isPrinterTopologyType(t) {
-    return ['Printer', 'Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(t);
+    return window.isHeadOrPrinterType(t);
 }
 function _announcePrinterMapChange() {
     state.printerMap = null;

@@ -8,7 +8,8 @@
 //   - live preview of the resulting used_weight + remaining
 //   - tare context line (with source badge from the cascade resolver)
 //   - optional Auto-archive toggle (Quick-Weigh has it; FilaBridge does not)
-//   - keyboard nav: ←/→ to swap modes, Enter to submit, Escape to cancel
+//   - keyboard nav: ←/→ to swap modes, Enter to submit (on a button, that
+//     button), Escape to cancel
 //
 // Math comes from computeUsedWeight() / parseAdditiveInput() in weight_utils.js.
 // On submit the component invokes the caller's onSubmit({...}) — it does NOT
@@ -28,6 +29,7 @@
 //       availableModes: ['gross','net','additive','set_used'],
 //       showAutoArchive: true,
 //       autoArchiveDefault: true,
+//       helpKey: 'quick-weigh',                    // optional: its ? (help_texts.js)
 //       onSubmit: ({ used_weight, mode, raw_value, auto_archive }) => {...},
 //       onCancel: () => {...},
 //   });
@@ -111,6 +113,10 @@
             // original net weight: gross/net then yield the available filament
             // directly (gross − tare) and report it via payload.derived_initial.
             allowUnknownInitial = false,
+            // Group 55.3: a help key (help_texts.js) draws a ? beside the × that opens
+            // this window's help: the Quick-Weigh's 'quick-weigh'. The wizard's Weigh
+            // from Scale passes none (that help's words are the Quick-Weigh's).
+            helpKey = '',
             onSubmit = null,
             onCancel = null,
         } = options;
@@ -152,15 +158,22 @@
                </div>`
             : '';
 
+        // data-fcc-weight-keys: a weight key typed on its other controls (the
+        // Auto Archive switch, a mode tab) goes into the field (inv_core.js's
+        // weight capture; Group 57 review, round 7: after a click on the switch
+        // the reading went to the scan path as a spool id).
         const panelHtml = `
-            <div role="dialog" aria-modal="true" aria-labelledby="fcc-we-title"
+            <div role="dialog" aria-modal="true" aria-labelledby="fcc-we-title" data-fcc-weight-keys
                  style="background:#1f2024;color:#eee;border:1px solid #555;
                         border-radius:8px;padding:0;min-width:min(23.75rem,92vw);
                         max-width:32.5rem;width:92vw;
                         box-shadow:0 8px 32px rgba(0,0,0,0.6);">
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             padding:14px 18px;border-bottom:1px solid #444;">
-                    <div id="fcc-we-title" style="font-weight:bold;font-size:1.05rem;">⚖️ ${escapeHtml(title)}</div>
+                    <div id="fcc-we-title" style="font-weight:bold;font-size:1.05rem;">⚖️ ${escapeHtml(title)}</div>${helpKey ? `
+                    <button type="button" class="fcc-help-btn" data-fcc-help="${escapeHtml(helpKey)}"
+                        style="margin-left:auto;margin-right:0.75rem;"
+                        title="How this window works (?)" aria-label="Help: how this window works">?</button>` : ''}
                     <button type="button" id="fcc-we-close"
                         style="background:none;border:none;color:#aaa;font-size:1.4rem;line-height:1;cursor:pointer;"
                         aria-label="Close">×</button>
@@ -193,7 +206,7 @@
                     <label id="fcc-we-input-label" for="fcc-we-input"
                            class="form-label small text-light mb-1"></label>
                     <div class="input-group input-group-sm" style="margin-bottom:6px;">
-                        <input id="fcc-we-input" class="form-control bg-dark text-white border-secondary"
+                        <input id="fcc-we-input" class="form-control bg-dark text-white border-secondary fcc-weight-box"
                                style="font-size:1.15rem;"
                                autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
@@ -248,6 +261,10 @@
             // Quick visual confirmation that the click registered.
             const original = setDefaultBtn.textContent;
             setDefaultBtn.textContent = `✓ ${MODE_DEFS[mode].label} is default`;
+            // Disabling the button drops a focus it has to the page, where the
+            // reading typed next went to the scan path as a spool id (Group 57
+            // review, round 7): the field takes it.
+            if (document.activeElement === setDefaultBtn) inputEl.focus();
             setDefaultBtn.disabled = true;
             setTimeout(() => {
                 setDefaultBtn.textContent = original;
@@ -372,7 +389,7 @@
                     color_hex: promptCtx.color_hex || spool.color_hex || null,
                     allowSkip: !allowUnknownInitial,
                 });
-                if (tare === null) return;  // user cancelled
+                if (tare === null) { inputEl.focus(); return; }  // user cancelled: back to the reading
                 let effectiveMode = mode;
                 if (tare === window.PROMPT_SKIP_TARE) {
                     // Downgrade Gross → Net for this submission only. No tare
@@ -431,10 +448,29 @@
 
         function onKey(e) {
             // Escape is owned by mountOverlay's onEscape — see openModal caller.
+            // An overlay over this one (the missing-tare prompt) answers its own
+            // keys (Group 57 review, round 6: the prompt's Enter ran this Save a
+            // second time, and its arrows switched this window's mode).
+            if (window.isTopOverlay && !window.isTopOverlay(overlay)) return;
+            // So does the help window over it (Group 55.3): D set the default and an
+            // arrow switched the mode under it.
+            if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
             if (e.key === 'Enter') {
-                if (e.target && e.target.classList && e.target.classList.contains('fcc-we-tab')) return;
+                // A scan's Enter with the focus off the field (on Save, say: its
+                // keys went to the scan accumulator) is the scan's, not a Save
+                // (Group 57 review, round 5: it saved the reading typed so far).
+                // A label scanned into the field is the weight capture's
+                // (inv_core.js), which takes its Enter before this sees it.
+                if (e.target !== inputEl && window.enterIsAScan && window.enterIsAScan()) return;
                 e.preventDefault();
-                attemptSave();
+                e.stopImmediatePropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                // Enter answers the control it is on (round 6: on Cancel, × or
+                // Set as default it saved): a button is pressed (a mode tab picks
+                // its mode); the field and the Auto Archive switch save.
+                const btn = e.target && e.target.closest ? e.target.closest('button') : null;
+                if (btn && overlay.contains(btn) && btn !== saveBtn) btn.click();
+                else attemptSave();
             } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
                 if (e.target === inputEl) return; // don't steal cursor nav inside input
                 e.preventDefault();
@@ -449,7 +485,18 @@
                 // so D is unused there; still, don't hijack when focus is on
                 // the input mid-edit.
                 if (e.target === inputEl) return;
+                // A scan's 'D' ("ID:57" with the focus on a mode tab) is the
+                // scan's: it set the stored default mode (round 5). One still
+                // arriving (scanIsArriving), or the D of a label's own start,
+                // typed after its I (ID:), CM (CMD:) or OL (OLD:) however slowly:
+                // taken after a pause, it cut the scan to ":57" (round 6).
+                const st = (typeof state !== 'undefined') ? state : window.state;
+                const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer.trim() : '';
+                if ((window.scanIsArriving ? window.scanIsArriving()
+                    : (window.isScanInFlight && window.isScanInFlight())) || /(?:I|CM|OL)$/i.test(buf)) return;
                 e.preventDefault();
+                e.stopImmediatePropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();   // nor start the next scan
                 persistCurrentModeAsDefault();
             }
         }
@@ -469,6 +516,14 @@
         applyMode(mode);
         // Initial focus is handled by mountOverlay's initialFocus option.
     }
+
+    // A label scanned while the window is open is the scan's, never a weight
+    // (Group 57 review, rounds 5 and 6: RED). The field has the focus from the
+    // moment the window opens, and a number field kept the digits of "ID:57",
+    // so Save stored 57 g: in Gross under the empty spool, so Auto Archive
+    // archived the spool. The field is a weight box (fcc-weight-box), which
+    // inv_core.js's weight capture serves: a label goes to the scan path and
+    // the field keeps what was typed before it.
 
     window.WeightEntry = { openModal };
 })();

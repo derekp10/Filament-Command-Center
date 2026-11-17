@@ -35,8 +35,31 @@ let wizardState = {
     // The dynamic extras the user changed in this session ("fil:<key>",
     // "spool:<key>"): edit mode sends a blank one as cleared only when it is
     // here, so a field drawn blank by the page itself never clears the record
-    // (2026-10-21 review: a clear now really clears on Spoolman 0.27).
+    // (2026-10-21 review: a clear now really clears on Spoolman 0.27), and the
+    // filament's label status box is sent only when it is here (Group 58.5).
     touchedExtras: new Set(),
+    // The plain number boxes the user changed in this session ("spool:price",
+    // "fil:settings_bed_temp", … WIZ_NATIVE_CLEARABLE has all five), read per key
+    // through wizardNativeTouched: edit mode sends one left empty as null, which
+    // clears the field, and only then (Group 54.5).
+    touchedNative: new Set(),
+    // Group 54.8: 'filament' while the price box shows the filament's price, the
+    // spool having none of its own (wizardPrefillSpoolPrice); null for the spool's
+    // own price or none. Typed over, the price is the spool's own
+    // (wizardSpoolPriceIsFilaments), and Save sends a price only then.
+    spoolPriceFrom: null,
+    // Group 54.8: 'filament' / 'vendor' while the spool's empty-weight box shows an
+    // inherited value (wizardSetSpoolEmptyWeightInherited); null for its own or
+    // none. Edit Spool doesn't save an inherited one untouched
+    // (wizardSpoolEmptyWeightIsInherited).
+    spoolEmptyWeightFrom: null,
+    // Group 54 review (R2-1, R2-3): true once New Spool or Clone has filled the
+    // spool's price and empty weight from its filament; those boxes then follow a
+    // filament picked afterwards (wizardFollowFilament). Reset by wizardReset.
+    spoolBoxesFollowFilament: false,
+    // The filaments wizardSearchExisting listed last (/api/filaments' records), so a
+    // pick from that list knows the picked filament's price and empty weight.
+    existingFilaments: [],
 };
 
 // Empty-spool-weight inheritance helper (resolveEmptySpoolWeight) lives in
@@ -72,6 +95,9 @@ window.wizardSetSpoolEmptyWeightInherited = (value, source) => {
     const sourceEl = document.getElementById('wiz-spool-empty-inherited-source');
     if (!inputEl) return;
     inputEl.value = (value !== null && value !== undefined) ? value : '';
+    // Group 54.8: where the value came from, for Edit Spool's Save.
+    const inherited = (source === 'filament' || source === 'vendor') && inputEl.value !== '';
+    wizardState.spoolEmptyWeightFrom = inherited ? source : null;
     if (badge && sourceEl && (source === 'filament' || source === 'vendor')) {
         sourceEl.textContent = source;
         badge.style.display = '';
@@ -80,9 +106,12 @@ window.wizardSetSpoolEmptyWeightInherited = (value, source) => {
     }
 };
 
+// The box holds a value of the spool's own from here on (or nothing): the badge
+// goes, and so does the mark Edit Spool's Save reads (Group 54.8).
 window.wizardClearSpoolEmptyWeightBadge = () => {
     const badge = document.getElementById('wiz-spool-empty-inherited-badge');
     if (badge) badge.style.display = 'none';
+    wizardState.spoolEmptyWeightFrom = null;
 };
 
 // --- WIZARD CLOSE → RE-OPEN DETAIL MODAL ---
@@ -166,6 +195,18 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
         // while the chip still sits in its box.
         wizEl.addEventListener('input', (e) => window.wizardNoteExtraTouched(e.target));
         wizEl.addEventListener('change', (e) => window.wizardNoteExtraTouched(e.target));
+        // Which plain boxes the user changed (window.wizardNoteNativeTouched,
+        // Group 54.5): `input` only. A number box fires `input` for every change a
+        // person makes (a key, a paste, the spinner, the wheel); its `change` comes
+        // at blur, and Chromium still fires it for an edit made before the wizard
+        // was reset for the next spool when the box kept the focus (the open moves
+        // the focus after the reset), which read as a touch of the new spool's box.
+        wizEl.addEventListener('input', (e) => window.wizardNoteNativeTouched(e.target));
+        // Group 54.8: a price typed over the filament's is the spool's own, so its
+        // "↩ from filament" goes (after the line above has noted the touch).
+        wizEl.addEventListener('input', (e) => {
+            if (e.target && e.target.id === 'wiz-spool-price') window.wizardRefreshSpoolPriceMark();
+        });
         wizEl.addEventListener('click', (e) => {
             const chip = e.target && e.target.closest ? e.target.closest('.dynamic-chip') : null;
             if (chip) window.wizardNoteExtraTouched(chip);
@@ -176,6 +217,42 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
             if (e.target.classList.contains('dynamic-chip')) wizardState.isDirty = true;
         });
     }
+})();
+
+// --- A KEY A NUMBER BOX CAN'T TAKE IS NO EDIT (Group 54 review, R2-2) ---
+// With a number box's value selected (the focus came by Tab), Chromium deletes the
+// selection for a key the box rejects (a letter, ':') and fires one `input` that
+// inserted nothing: insertText, the box now '' with no badInput. A scanner's label
+// typed there (LOC:XL, CMD:UNDO: none of 0-9 e E + - . in it) emptied the box, and
+// that counted as the person's: 54.5's touched set made it a clear at Edit Spool's
+// Save, the price's and empty weight's "↩ from …" marks went, and an emptied Total
+// Used went out as 0. Every number box in the wizard now gets back the value it had
+// just before, still selected, and the event goes no further (this listener is the
+// first to hear it): nothing counts it as touched, takes a mark off, copies it or
+// marks the wizard changed. A person's Delete or Backspace, and a key the box takes,
+// are edits as before. The scan itself still goes nowhere: the scan accumulator
+// leaves a box's keys to the box, and this routes them nowhere new.
+(function () {
+    const wizEl = document.getElementById('wizardModal');
+    if (!wizEl) return;
+    const isNumberBox = (t) => !!t && t.tagName === 'INPUT' && t.type === 'number';
+    const valueBeforeKey = new WeakMap();   // box → its value when a key was typed in it
+    wizEl.addEventListener('beforeinput', (e) => {
+        if (!isNumberBox(e.target)) return;
+        if (e.inputType === 'insertText' && e.data) valueBeforeKey.set(e.target, e.target.value);
+        else valueBeforeKey.delete(e.target);
+    }, true);
+    wizEl.addEventListener('input', (e) => {
+        const box = e.target;
+        if (!isNumberBox(box)) return;
+        const before = valueBeforeKey.get(box);
+        valueBeforeKey.delete(box);
+        if (before === undefined || before === '' || e.inputType !== 'insertText') return;
+        if (box.value !== '' || (box.validity && box.validity.badInput)) return;
+        box.value = before;
+        try { box.select(); } catch (_) { /* a box that can't select keeps its caret */ }
+        e.stopImmediatePropagation();
+    }, true);
 })();
 
 window.openWizardModal = async () => {
@@ -211,6 +288,9 @@ window.openWizardModal = async () => {
                 + ' [tabindex]:not([tabindex="-1"])'
             );
             for (const el of focusables) {
+                // The header's ? (Group 55.3) sits before the ✕; the ✕ keeps the
+                // first focus it had before the ? came.
+                if (el.matches && el.matches('[data-fcc-help]')) continue;
                 if (el.offsetParent !== null) { el.focus(); return; }
             }
             _wizModalEl.focus();
@@ -325,6 +405,15 @@ window.wizardApplyCollapseDefaults = (context) => {
 //   - Clears the summary span when expanded; re-renders when collapsed.
 const _wizEscape = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Group 54 review (L1): " ↩ from filament" (or "vendor") while the spool's
+// empty-weight badge shows, for the closed Weight & Scale summary; '' otherwise.
+const _wizEmptyWeightSummaryMark = () => {
+    const badge = document.getElementById('wiz-spool-empty-inherited-badge');
+    if (!badge || badge.style.display === 'none') return '';
+    const source = (document.getElementById('wiz-spool-empty-inherited-source')?.textContent || '').trim();
+    return source ? ` <span class="text-info">↩ from ${_wizEscape(source)}</span>` : '';
+};
+
 const _wizSectionSummarizers = {
     'wiz-fil-physical-panel': () => {
         const v = (id) => (document.getElementById(id)?.value || '').trim();
@@ -385,7 +474,10 @@ const _wizSectionSummarizers = {
         if (remaining) parts.push(`<span class="text-success">${remaining}g left</span>`);
         if (used && used !== '0') parts.push(`${used}g used`);
         if (initial) parts.push(`net ${initial}g`);
-        if (empty) parts.push(`tare ${empty}g`);
+        // Group 54 review (L1): an inherited empty weight says so, as the open
+        // section's badge does and exactly while it shows, in the price summary's
+        // look ("tare 200g ↩ from filament"; the badge's own word, filament or vendor).
+        if (empty) parts.push(`tare ${empty}g${_wizEmptyWeightSummaryMark()}`);
         return parts.join(' · ');
     },
     'wiz-spool-metadata-panel': () => {
@@ -396,7 +488,9 @@ const _wizSectionSummarizers = {
         const purl = v('wiz-spool-product_url');
         const archived = document.getElementById('wiz-spool-archived')?.checked;
         const parts = [];
-        if (price) parts.push(`$${price}`);
+        // Group 54.8: the filament's price says so, as the box's badge does.
+        if (price) parts.push(wizardSpoolPriceIsFilaments()
+            ? `$${price} <span class="text-info">↩ from filament</span>` : `$${price}`);
         if (archived) parts.push('<span class="text-warning">archived</span>');
         // 23.5 — mirror the purchase-link chip for the product link so the
         // summary shows BOTH are filled. Icons match the form labels:
@@ -468,8 +562,20 @@ window.wizardRefreshAllSectionSummaries = () => {
             // lock blocks the redundant toggle.
             btn.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                    // A scan's Enter, and a Space inside a scan, are the scan's
+                    // (Group 61): its Enter collapsed the section and the scan
+                    // stayed in the buffer, glued to the next one. The scan
+                    // accumulator reads them (its Enter takes the button's own
+                    // press away), and a Space inside a scan presses nothing.
+                    if (e.key === 'Enter' ? (window.enterIsAScan && window.enterIsAScan())
+                        : (window.scanIsArriving && window.scanIsArriving())) {
+                        if (e.key !== 'Enter') e.preventDefault();
+                        return;
+                    }
                     e.preventDefault();
                     e.stopPropagation();
+                    // A person's key: a key they left in the scan buffer goes with it.
+                    if (window.clearScanBuffer) window.clearScanBuffer();
                     const now = Date.now();
                     if (now - lastKbAt < 400) return;
                     lastKbAt = now;
@@ -617,8 +723,12 @@ window.wizardCollapseAllSections = () => {
         // on the modal rather than a field) fired expand/collapse once per such
         // character AND left those characters in state.scanBuffer, corrupting
         // the scan. Bail while a scan is in flight and let the accumulator have
-        // the keystroke.
-        if (window.isScanInFlight && window.isScanInFlight()) return;
+        // the keystroke: one still arriving, however slow the scanner
+        // (window.scanIsArriving; Group 57 review, round 4). The keys this
+        // leaves in the buffer don't look like a scan, so they no longer stop
+        // the next toggle (round 5: E, C, then E did nothing).
+        if (window.scanIsArriving ? window.scanIsArriving()
+            : (window.isScanInFlight && window.isScanInFlight())) return;
         // ⚠️ preventDefault ONLY — deliberately NOT stopImmediatePropagation.
         // The guard above CANNOT fire on the FIRST character of a scan:
         // scanBuffer is still empty because the accumulator hasn't seen that
@@ -723,17 +833,155 @@ const wizardApplyProductLinkFallback = (spoolUrl, filamentUrl) => {
 // price, so it NEVER overwrites an explicit spool price. `ownPrice` is the
 // spool's own price (null for a brand-new spool); `filamentPrice` is the
 // filament-level fallback.
+//
+// Group 54.8 (Derek, 2026-11-07, (a)): the filament's price is shown marked as
+// the filament's ("↩ from filament" beside the label, and in the section's
+// summary), and it is never saved as the spool's own: a filament's price may not
+// be what this spool cost (a sale, a later price). The spool's own price (an
+// edit's, or a clone's source spool's) shows plain and saves as before.
 window.wizardPrefillSpoolPrice = (ownPrice, filamentPrice) => {
     const el = document.getElementById('wiz-spool-price');
     if (!el) return;
     if (el.value !== '' && el.value != null) return;  // never clobber a typed/own value
-    const v = (ownPrice != null) ? ownPrice : filamentPrice;
-    if (v != null) el.value = v;
+    if (ownPrice != null) {
+        el.value = ownPrice;
+        wizardState.spoolPriceFrom = null;
+    } else if (filamentPrice != null) {
+        el.value = filamentPrice;
+        wizardState.spoolPriceFrom = 'filament';
+    }
+    window.wizardRefreshSpoolPriceMark();
+};
+
+// Group 54.8: whether the price box shows the filament's price, not the spool's
+// own: put there by wizardPrefillSpoolPrice and not typed over since (54.5's
+// touched set). Save leaves such a price out, so a new spool is created with no
+// price and an edited spool keeps none.
+const wizardSpoolPriceIsFilaments = () =>
+    wizardState.spoolPriceFrom === 'filament' && !wizardNativeTouched('spool', 'price');
+
+// Shows or hides the price box's "↩ from filament" badge to match.
+window.wizardRefreshSpoolPriceMark = () => {
+    const badge = document.getElementById('wiz-spool-price-inherited-badge');
+    if (badge) badge.style.display = wizardSpoolPriceIsFilaments() ? '' : 'none';
+};
+
+// Group 54.8, the empty weight's twin (Claude's call): whether the spool's
+// empty-weight box shows a value it inherits (its filament's or its brand's, the
+// open's cascade, with its badge), not typed over since. Edit Spool's Save leaves
+// it out, so the spool keeps having none of its own (or 54.5's clear stays a
+// clear). New spools and clones still take it as their own (L34).
+const wizardSpoolEmptyWeightIsInherited = () =>
+    (wizardState.spoolEmptyWeightFrom === 'filament' || wizardState.spoolEmptyWeightFrom === 'vendor')
+    && !wizardNativeTouched('spool', 'spool_weight');
+
+// Group 54 review (R2-1, R2-3): New Spool and Clone fill the spool's price and
+// empty weight from its filament, marked as inherited, and the person can still
+// pick another filament before Save (the Existing Filament list, 🔍 Advanced
+// Search, a scan that recognises one, New Manual Form, Import Database). The boxes
+// kept the first filament's: "$25 ↩ from filament" under a filament with no price,
+// and its 200 g, which Create then saved as the new spool's own (L34). A box that
+// still shows what its filament gives (marked, or empty where that filament gave
+// nothing) and that the person hasn't typed in now follows the filament Save will
+// use. A clone's own values (its source spool's) stay, and so does a typed one.
+// Only those two openers fill the boxes from a filament, so only theirs follow one
+// (wizardState.spoolBoxesFollowFilament): the plain wizard's never filled from a
+// filament, and don't start now.
+const _wizBoxValue = (id) => {
+    const el = document.getElementById(id);
+    return el && el.value != null ? String(el.value) : '';
+};
+// The brand picked in the filament's Vendor field, as the wizard read it (its
+// empty_spool_weight is the cascade's last step), or null.
+const _wizSelectedVendor = () => {
+    const vid = _wizBoxValue('wiz-fil-vendor-sel');
+    return vid ? ((wizardState.vendors || []).find(v => String(v.id) === String(vid)) || null) : null;
+};
+const _wizPriceFollowsFilament = () => !wizardNativeTouched('spool', 'price')
+    && (wizardState.spoolPriceFrom === 'filament' || _wizBoxValue('wiz-spool-price') === '');
+const _wizEmptyWeightFollowsFilament = () => !wizardNativeTouched('spool', 'spool_weight')
+    && (wizardState.spoolEmptyWeightFrom === 'filament' || wizardState.spoolEmptyWeightFrom === 'vendor'
+        || _wizBoxValue('wiz-spool-empty_weight') === '');
+
+// Puts what `fil` gives ({price, spool_weight, vendor}, a filament's record) into
+// the boxes that follow it: its price marked "↩ from filament", its empty weight
+// (else its brand's) with its badge, or nothing where it has none. `fil` null means
+// nothing is known of it (its read failed or is on its way): those boxes then show
+// nothing, never the last filament's, and Save sends neither.
+const _wizFollowApply = (fil) => {
+    let changed = false;
+    if (_wizPriceFollowsFilament()) {
+        const el = document.getElementById('wiz-spool-price');
+        const price = fil && fil.price != null && fil.price !== '' ? fil.price : null;
+        if (el) el.value = price != null ? price : '';
+        wizardState.spoolPriceFrom = price != null ? 'filament' : null;
+        window.wizardRefreshSpoolPriceMark();
+        changed = true;
+    }
+    if (_wizEmptyWeightFollowsFilament()) {
+        const { value, source } = resolveEmptySpoolWeightSource({
+            filamentWt: fil ? fil.spool_weight : null,
+            vendor: fil ? fil.vendor : null,
+        });
+        window.wizardSetSpoolEmptyWeightInherited(value, source);
+        // A gross reading in the scale box was worked out against the old empty
+        // weight: work it out again against this one.
+        if (_wizBoxValue('wiz-spool-scale').trim() !== '') window.wizardCalcUsedWeight();
+        changed = true;
+    }
+    if (changed && window.wizardRefreshSectionSummary) {
+        window.wizardRefreshSectionSummary('wiz-spool-metadata-panel');
+        window.wizardRefreshSectionSummary('wiz-spool-weight-panel');
+    }
+};
+
+const _wizKnownFilament = (id) => {
+    const key = String(id);
+    for (const list of [wizardState.existingFilaments, wizardState.allFilaments]) {
+        const hit = Array.isArray(list) ? list.find(f => f && String(f.id) === key) : null;
+        if (hit) return hit;
+    }
+    return null;
+};
+
+// The wizard's filament may have changed: the boxes that follow it show what the
+// filament Save will use gives. In Existing Filament mode that is the selected
+// filament (`record` when the caller has it, else the lists the wizard read, else
+// a read of its own); in New Manual Form and Import Database it is a new filament,
+// which has no price (the wizard has no price box for one) and the empty weight
+// its own form shows, else its brand's.
+window.wizardFollowFilament = (record = null) => {
+    if (!wizardState.spoolBoxesFollowFilament) return;
+    const mode = wizardState.mode;
+    if (mode === 'manual' || mode === 'external') {
+        _wizFollowApply({ price: null, spool_weight: _wizBoxValue('wiz-fil-empty_weight'), vendor: _wizSelectedVendor() });
+        return;
+    }
+    if (mode !== 'existing') return;
+    const id = wizardState.selectedFilamentId;
+    if (id == null || String(id) === '') return;
+    const rec = (record && String(record.id) === String(id)) ? record : _wizKnownFilament(id);
+    if (rec) { _wizFollowApply(rec); return; }
+    _wizFollowApply(null);
+    fetch(`/api/filaments/${encodeURIComponent(id)}`)
+        .then(r => r.json())
+        .then(d => {
+            // Only while it is still the filament Save will use, in this session.
+            if (!wizardState.spoolBoxesFollowFilament || wizardState.mode !== 'existing'
+                || String(wizardState.selectedFilamentId) !== String(id)) return;
+            if (d && d.success && d.data && String(d.data.id) === String(id)) _wizFollowApply(d.data);
+        })
+        .catch(() => {});
 };
 
 const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.touchedExtras = new Set();
+    wizardState.touchedNative = new Set();
+    // Group 54.8: nothing is shown from the filament until an open puts it there.
+    wizardState.spoolPriceFrom = null;
+    wizardState.spoolEmptyWeightFrom = null;
+    wizardState.spoolBoxesFollowFilament = false;
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
     wizardState.lockedAfterSuccess = false;
@@ -770,6 +1018,7 @@ const wizardReset = () => {
     if (productUrlReset) productUrlReset.placeholder = 'https://...';
     document.querySelectorAll('#wizardModal select').forEach(i => i.selectedIndex = 0);
     if (window.wizardClearSpoolEmptyWeightBadge) window.wizardClearSpoolEmptyWeightBadge();
+    if (window.wizardRefreshSpoolPriceMark) window.wizardRefreshSpoolPriceMark();
 
     // Reset Color UI
     document.getElementById('wiz-fil-color-extra-container').innerHTML = '';
@@ -1005,7 +1254,26 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
     const picked = (value, label) => {
         if (typeof onPick === 'function') onPick(value, label, before || { value: '', label: '' });
     };
-    freshSearch.addEventListener('focus', () => { remember(); render(true); dropdown.style.display = 'block'; });
+    // The blur's late hide of the list (below), so a focus back before it fires keeps the
+    // list it shows: it hid the list a quick return had just shown, and Tab then confirmed
+    // nothing (Group 55 review).
+    let hideTimer = null;
+    freshSearch.addEventListener('focus', () => {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+        // A search in progress stays one when the field gets the keyboard back (Group 55
+        // review, R1-2): the help window closing, or a return from another app. Re-entry
+        // reset it to the whole list with nothing typed, so Enter took the list's first
+        // item (-- Unassigned --) and Tab took nothing, and Save sent no location.
+        // In progress: typed since it was focused, and its text isn't the picked item's.
+        const pickedItem = items.find(it => String(it.value) === String(hidden.value));
+        if (typed && freshSearch.value.trim() && !(pickedItem && pickedItem.label === freshSearch.value)) {
+            render();
+            dropdown.style.display = 'block';
+            return;
+        }
+        remember(); render(true); dropdown.style.display = 'block';
+    });
     // Group 10.2/10.10: also handle click-while-already-focused. After
     // picking an option, mousedown.preventDefault keeps focus on the input,
     // so a subsequent click never fires `focus` again. Without this, the
@@ -1021,7 +1289,8 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
     });
     freshSearch.addEventListener('blur', () => {
         // Short delay so mousedown on a list item can fire before we tear it down.
-        setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => { hideTimer = null; dropdown.style.display = 'none'; }, 150);
     });
     freshSearch.addEventListener('input', () => {
         typed = true;
@@ -1190,6 +1459,9 @@ window.wizardSelectType = (mode, skipSearch = false) => {
 
         wizardValidateSubmit();
     }
+    // Group 54 review (R2-1, R2-3): New Manual Form and Import Database make a new
+    // filament, and Existing Filament goes back to the one selected there.
+    window.wizardFollowFilament();
 };
 
 window.wizardValidateSubmit = () => {
@@ -1350,6 +1622,10 @@ window.wizardOpenWeightEntry = () => {
             if (payload.empty_spool_weight != null &&
                 (emptyEl && emptyEl.value != null ? emptyEl.value : '').trim() === '') {
                 setVal('wiz-spool-empty_weight', window.fmtGramsPrecise(payload.empty_spool_weight));
+                // The tare the person gave is the spool's own, even in a box marked
+                // as inherited (the filament's emptied, and the spool's with it):
+                // its badge goes, and Edit Spool saves it (Group 54.8).
+                window.wizardClearSpoolEmptyWeightBadge();
             }
             if (payload.derived_initial != null) {
                 // Unknown-net path: record what's on the spool now as its full capacity.
@@ -1380,9 +1656,13 @@ const wizardFetchMaterials = () => {
                 wizardState.materials = materials;
                 const dropdown = document.getElementById('dropdown-material');
                 if (dropdown) {
-                    dropdown.innerHTML = materials.map(m => 
-                        `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option" 
-                              onmousedown="window.wizardMaterialSelect(event, '${m.replace(/'/g, "\\'")}')">${m}</div>`
+                    // A material is Spoolman's free text: HTML text here, and the pick
+                    // reads it back from data-value, never from a JS string in the
+                    // handler (Group 54 review, S2: a quote or '<' cut it short).
+                    dropdown.innerHTML = materials.map(m =>
+                        `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option"
+                              data-value="${_wizEscape(m)}"
+                              onmousedown="window.wizardMaterialSelect(event, this.dataset.value)">${_wizEscape(m)}</div>`
                     ).join('');
                 }
             }
@@ -1594,11 +1874,12 @@ const wizardFetchLocations = () => {
         .then(d => {
             if (!Array.isArray(d)) return;
             wizardState.allLocationRows = d.filter(loc => loc && typeof loc === 'object');
-            // Same filter the select used to apply: hide MMU/toolhead/direct-load
-            // targets and the virtual "Unassigned" row (that's the empty-string default).
+            // Same filter the select used to apply: hide toolheads (window.isToolheadType:
+            // a custom Type that only holds a head's word, "Toolbox", is offered) and the
+            // virtual "Unassigned" row (that's the empty-string default).
             const valid = d.filter(loc => {
                 const type = (loc.Type || '').toLowerCase();
-                if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return false;
+                if (window.isToolheadType(loc.Type) || type === 'virtual') return false;
                 // L271 Phase 5: Wall Shelf/Row are structural grouping nodes —
                 // they nest children but never hold spools, so don't offer them
                 // as spool-assignment targets (Section, the leaf, IS offered).
@@ -1681,6 +1962,44 @@ window.wizardNoteExtraTouched = (el) => {
 };
 const wizardExtraTouched = (entity, key) =>
     !!(wizardState.touchedExtras && wizardState.touchedExtras.has(`${entity}:${key}`));
+
+// Group 54.5: the plain (not extra) number boxes Edit Spool can clear: box id →
+// "<entity>:<key>", the payload key it fills. Spoolman takes a JSON null for each
+// and drops the value (dev's 0.27.1, 2026-11-09). Initial and used weight stay out
+// on purpose: an emptied initial weight would be a weight write (update_spool's
+// archive edge reads it), and an emptied used weight already sends 0.
+const WIZ_NATIVE_CLEARABLE = {
+    'wiz-spool-price': 'spool:price',
+    'wiz-spool-empty_weight': 'spool:spool_weight',
+    'wiz-fil-empty_weight': 'fil:spool_weight',
+    'wiz-fil-settings_extruder_temp': 'fil:settings_extruder_temp',
+    'wiz-fil-settings_bed_temp': 'fil:settings_bed_temp',
+};
+// Records that the user changed one of those boxes (the wizard's `input`
+// listener). A value set by code fires no event, so a box the page filled or
+// blanked itself (the edit's prefill, the filament empty weight's copy into the
+// spool's) is never touched. The vendor push's own input event only ever fills a
+// blank box with a value, so it can't make a clear.
+window.wizardNoteNativeTouched = (el) => {
+    const id = el && el.id;
+    if (id && Object.prototype.hasOwnProperty.call(WIZ_NATIVE_CLEARABLE, id)) {
+        wizardState.touchedNative.add(WIZ_NATIVE_CLEARABLE[id]);
+    }
+};
+// Whether the user changed that box in this session ('spool', 'price'): the plain
+// boxes' twin of wizardExtraTouched.
+const wizardNativeTouched = (entity, key) =>
+    !!(wizardState.touchedNative && wizardState.touchedNative.has(`${entity}:${key}`));
+// Edit mode: the user emptied that box, so Save sends null and the field is
+// cleared. Never for a box holding a number half typed ("-", "1e"): a number box
+// reads '' while it shows that text (validity.badInput), and the field is left
+// as it is, as before.
+const wizardNativeCleared = (entity, key) => {
+    if (wizardState.mode !== 'edit_spool' || !wizardNativeTouched(entity, key)) return false;
+    const id = Object.keys(WIZ_NATIVE_CLEARABLE).find(k => WIZ_NATIVE_CLEARABLE[k] === `${entity}:${key}`);
+    const el = id ? document.getElementById(id) : null;
+    return !!el && el.value === '' && !(el.validity && el.validity.badInput);
+};
 
 // Edit mode: every multi-choice (chip) Filament Extras field the form shows
 // that the user emptied is sent as cleared (window.FCC_DELETE_EXTRA). The chip
@@ -1772,15 +2091,41 @@ const wizardFetchExtraFields = () => {
         });
 };
 
-window.wizardSetupFieldSync = () => {
-    // Empy weight static propagation
-    const filEmptyWt = document.getElementById('wiz-fil-empty_weight');
+// The filament's Spool Wt box changed (typed, or emptied): the spool's box shows it.
+// Create and Clone, as before: the spool's box takes the filament's value. Edit
+// Spool (Group 54 review, S1): never over the spool's own value, which a correction
+// of its filament's used to replace on every key, unseen in its section that opens
+// closed, and Save then wrote it as the spool's own (Derek, L349: "as long as we
+// aren't overwriting filaments/spools that have data for that field"). A spool box
+// that shows what the spool inherits (its badge), or nothing, shows what it
+// inherits now: the filament's new value, else its brand's, with its badge, or
+// nothing. A box the person typed in or emptied is theirs, and is left alone.
+window.wizardFilamentEmptyWeightChanged = (value) => {
     const spoolEmptyWt = document.getElementById('wiz-spool-empty_weight');
-    if (filEmptyWt && spoolEmptyWt) {
+    if (!spoolEmptyWt) return;
+    if (wizardState.mode !== 'edit_spool') {
+        spoolEmptyWt.value = value;
+        return;
+    }
+    if (wizardNativeTouched('spool', 'spool_weight')) return;
+    const inherited = wizardState.spoolEmptyWeightFrom === 'filament' || wizardState.spoolEmptyWeightFrom === 'vendor';
+    if (!inherited && spoolEmptyWt.value !== '') return;       // the spool's own
+    const { value: shown, source } = resolveEmptySpoolWeightSource({
+        filamentWt: value,
+        vendor: _wizSelectedVendor(),
+    });
+    window.wizardSetSpoolEmptyWeightInherited(shown, source);
+};
+
+window.wizardSetupFieldSync = () => {
+    // Empty weight static propagation (wizardFilamentEmptyWeightChanged). Bound once:
+    // wizardFetchExtraFields runs this at every open, and both boxes are the
+    // template's own, so each open used to add another copy of the listener.
+    const filEmptyWt = document.getElementById('wiz-fil-empty_weight');
+    if (filEmptyWt && filEmptyWt.dataset && !filEmptyWt.dataset.fccEmptyWeightSync) {
+        filEmptyWt.dataset.fccEmptyWeightSync = '1';
         ['input', 'change'].forEach(evt => {
-            filEmptyWt.addEventListener(evt, (e) => {
-                spoolEmptyWt.value = e.target.value;
-            });
+            filEmptyWt.addEventListener(evt, (e) => window.wizardFilamentEmptyWeightChanged(e.target.value));
         });
     }
 
@@ -1997,10 +2342,12 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                          id="dropdown-${entityType}-${field.key}"
                          style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">`;
 
-        // Populate the dropdown with initial options
+        // Populate the dropdown with initial options. A pick reads its option back by
+        // its text, so each choice is HTML text here, never markup (Group 54 review,
+        // S2: a choice holding a quote or '<' came back cut, or with its tags gone).
         field.choices.forEach(c => {
             html += `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option"
-                          onmousedown="wizardMultiselectSelect(event, '${entityType}', '${field.key}', this.innerText)">${c}</div>`;
+                          onmousedown="wizardMultiselectSelect(event, '${entityType}', '${field.key}', this.innerText)">${_wizEscape(c)}</div>`;
         });
 
         html += `   </div>
@@ -2018,7 +2365,8 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                     <select class="form-select bg-dark text-white border-secondary ${dataClass} sync-source-${entityType}" data-key="${field.key}" id="${inputId}">
                         <option value="">-- None --</option>`;
         field.choices.forEach(c => {
-            html += `<option value="${c}">${c}</option>`;
+            // Escaped (Group 54 review, S2): a quote in a choice cut its value short.
+            html += `<option value="${_wizEscape(c)}">${_wizEscape(c)}</option>`;
         });
         html += `   </select>
                     <button class="btn btn-outline-secondary" type="button" 
@@ -2097,12 +2445,15 @@ window.wizardAddMultiChoiceChip = (entityType, key, directVal = null) => {
         // We do NOT call wizardFetchExtraFields() here because it would wipe the unsaved modal DOM. The chip is already visually rendering below!
     }
 
-    // Append Chip visually
+    // Append Chip visually. The value is HTML text in both places (Group 54 review,
+    // S2): Save reads it back from data-value, and an attribute holding a quote or
+    // '<' ('Odd "Quote" <b>Tag</b> & Co') read "Odd" here and was sent as "Odd ",
+    // which Spoolman refuses as no choice of the field.
     const chipHtml = `<span class="badge rounded-pill text-bg-primary border border-primary cursor-pointer dynamic-chip"
                            onclick="this.remove()"
                            data-key="${key}"
                            data-selected="true"
-                           data-value="${val}">${val} &times;</span>`;
+                           data-value="${_wizEscape(val)}">${_wizEscape(val)} &times;</span>`;
     container.insertAdjacentHTML('beforeend', chipHtml);
     input.value = '';
 
@@ -2570,6 +2921,8 @@ window.wizardSearchExisting = () => {
             sel.innerHTML = "";
             let count = 0;
             if (d.success && d.filaments) {
+                // Kept for a pick from this list (wizardFollowFilament).
+                wizardState.existingFilaments = d.filaments;
                 const terms = term.split(' ').map(t => t.trim()).filter(t => t.length > 0);
 
                 d.filaments.forEach(f => {
@@ -2593,12 +2946,16 @@ window.wizardSearchExisting = () => {
         });
 };
 
-window.wizardExistingSelected = () => {
+// `filament`: the picked filament's record when the caller has it (a scan that
+// recognised one); the list's own pick passes none.
+window.wizardExistingSelected = (filament = null) => {
     const sel = document.getElementById('wiz-existing-results');
     if (sel.value) {
         wizardState.selectedFilamentId = sel.value;
         document.getElementById('wiz-status-msg').innerHTML = `Selected Existing Filament ID: <strong>${sel.value}</strong>`;
         wizardValidateSubmit();
+        // Group 54 review (R2-1, R2-3): the spool's boxes follow the pick.
+        window.wizardFollowFilament(filament);
     }
 };
 
@@ -2629,6 +2986,8 @@ window.wizardOpenGlobalSearch = () => {
                     const sel = document.getElementById('wiz-existing-results');
                     sel.innerHTML = `<option value="${filId}" selected>${displayString}</option>`;
                     wizardValidateSubmit();
+                    // Group 54 review (R2-1, R2-3): the spool's boxes follow the pick.
+                    window.wizardFollowFilament(filData);
                 };
 
                 if (type === 'spool') {
@@ -2849,6 +3208,9 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
     // Group 48.4: a blank Slicer Profile takes the one this source names (the
     // Prusament spool page's product line); nothing else fills it.
     window.wizardSuggestSlicerProfile({ lookup: temp.slicer_profile, source: temp.slicer_profile_source });
+    // Group 54 review (R2-3): the template is the new filament, so a spool box that
+    // follows the filament shows its empty weight now.
+    window.wizardFollowFilament();
 };
 
 // --- Group 48.4: fill a blank Slicer Profile --------------------------------------------
@@ -3489,11 +3851,10 @@ window.wizardPlaceRemaining = async ({ spoolIds = [], location = '', placement =
 window.wizardIsHeadOrPrinterRow = (locId, rows) => {
     const id = _wizLocKey(locId);
     if (!id) return false;
-    const heads = ['tool head', 'mmu slot', 'no mmu direct load'];
     return (Array.isArray(rows) ? rows : []).some(r => {
         if (!r) return false;
         const type = String(r.Type || '').trim().toLowerCase();
-        if (_wizLocKey(r.LocationID) === id && (type === 'printer' || heads.includes(type))) return true;
+        if (_wizLocKey(r.LocationID) === id && (type === 'printer' || window.isToolheadType(r.Type))) return true;
         return type === 'printer' && Array.isArray(r.toolheads)
             && r.toolheads.some(h => _wizLocKey(h && h.location_id) === id);
     });
@@ -3840,7 +4201,23 @@ window.wizardSubmit = async () => {
             }
         });
 
-        Object.keys(sp_payload).forEach(k => { if (sp_payload[k] === undefined || sp_payload[k] === null || Number.isNaN(sp_payload[k])) delete sp_payload[k]; });
+        // Group 54.5: in edit mode a plain box the user emptied is a clear, sent as
+        // null; every other null is left out, as before, so the record keeps what
+        // it has.
+        Object.keys(sp_payload).forEach(k => {
+            if (sp_payload[k] === null && wizardNativeCleared('spool', k)) return;
+            if (sp_payload[k] === undefined || sp_payload[k] === null || Number.isNaN(sp_payload[k])) delete sp_payload[k];
+        });
+        // Group 54.8 (Derek, 2026-11-07, (a)): a price the box shows from the
+        // filament is not this spool's, so it is never saved as its own: a new
+        // spool is created with no price, an edited spool keeps none. Typed over
+        // (or emptied, 54.5's clear in edit mode), it is the spool's own.
+        if (wizardSpoolPriceIsFilaments()) delete sp_payload.price;
+        // Its twin (Claude's call, Edit Spool only): an empty weight the spool only
+        // inherits, untouched, isn't written as its own either. The empty-weight
+        // cross-inherit below then reads the filament's box, then the brand, where
+        // that value came from. New spools and clones take it as their own (L34).
+        if (isWizardEdit && wizardSpoolEmptyWeightIsInherited()) delete sp_payload.spool_weight;
 
         let f_payload = null;
         let target_fid = null;
@@ -3888,6 +4265,16 @@ window.wizardSubmit = async () => {
             // Cross-Inherit empty-spool-weight along the chain: Spool → Filament → Vendor.
             // Resolves the selected vendor from wizardState so a manufacturer-level weight
             // flows down even when both Filament and Spool fields are left blank.
+            //
+            // It fills the FILAMENT's side only. The spool's nulls are taken out of
+            // sp_payload above, so a blank spool box reaches here as undefined, and the
+            // spool line this block had (`if (sp_payload.spool_weight === null) …`)
+            // could never fire (not since 13654bb, 2026-04-06; found by Group 54.5). A
+            // new spool's box copies the filament's (wizardSetupFieldSync), and an
+            // edited spool's shows its inherited value from the open, so the spool's
+            // empty weight comes from its box; in Edit Spool an inherited value left
+            // untouched is no longer sent at all (Group 54.8). Edit mode never refills
+            // a box the user emptied: that is a clear (Group 54.5).
             {
                 const selectedVendorId = document.getElementById('wiz-fil-vendor-sel')?.value;
                 const vendor = selectedVendorId
@@ -3898,9 +4285,9 @@ window.wizardSubmit = async () => {
                     filamentWt: f_payload.spool_weight,
                     vendor,
                 });
-                if (resolved !== null) {
-                    if (sp_payload.spool_weight === null) sp_payload.spool_weight = resolved;
-                    if (f_payload.spool_weight === null) f_payload.spool_weight = resolved;
+                if (resolved !== null && f_payload.spool_weight === null
+                        && !wizardNativeCleared('fil', 'spool_weight')) {
+                    f_payload.spool_weight = resolved;
                 }
             }
 
@@ -3917,6 +4304,14 @@ window.wizardSubmit = async () => {
             document.querySelectorAll('.dynamic-extra-field').forEach(el => {
                 const key = el.getAttribute('data-key');
                 if (!key) return;
+
+                // The label status has three states and a checkbox two: a box the
+                // user didn't touch says nothing. Sent as drawn, it wrote "confirmed"
+                // on a filament with no status at every Save (Group 58.5), and kept a
+                // new filament out of the Backlog (the server flags one only when
+                // the key is left out). The swatch status is the same: "No" on a
+                // filament whose status is "unknown" (Group 58 review).
+                if (['needs_label_print', 'sample_printed'].includes(key) && !wizardExtraTouched('fil', key)) return;
 
                 if (el.type === 'checkbox') {
                     f_payload.extra[key] = el.checked;
@@ -3961,9 +4356,13 @@ window.wizardSubmit = async () => {
                 if (t.article_number) f_payload.article_number = t.article_number;
             }
 
-            Object.keys(f_payload).forEach(k => { 
-                if (f_payload[k] === undefined || Number.isNaN(f_payload[k])) delete f_payload[k]; 
-                else if (f_payload[k] === null && k !== 'multi_color_hexes' && k !== 'multi_color_direction') delete f_payload[k];
+            // A null is left out, except the two multi-colour keys (which clear a
+            // single colour's old list) and, in edit mode, a plain box the user
+            // emptied (a clear, Group 54.5).
+            Object.keys(f_payload).forEach(k => {
+                if (f_payload[k] === undefined || Number.isNaN(f_payload[k])) delete f_payload[k];
+                else if (f_payload[k] === null && k !== 'multi_color_hexes' && k !== 'multi_color_direction'
+                         && !wizardNativeCleared('fil', k)) delete f_payload[k];
             });
         }
 
@@ -4337,6 +4736,9 @@ window.openCloneWizard = async (spoolId) => {
             document.getElementById('wiz-spool-comment').value = d.comment || "";
             // Price & Purchase Link
             window.wizardPrefillSpoolPrice(d.price, d.filament && d.filament.price);
+            // Group 54 review (R2-1, R2-3): what the boxes show from the filament
+            // follows a filament picked from here on (never the source spool's own).
+            wizardState.spoolBoxesFollowFilament = true;
             // Group 10.4 smart fallback: only prefill with the spool's OWN
             // purchase_url. If the spool has none but the filament does,
             // surface the filament URL as ghost placeholder text — saving
@@ -4413,6 +4815,9 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
             // L349: a brand-new spool has no price of its own — inherit the
             // filament's (d is the filament here, so d.price is the fallback).
             window.wizardPrefillSpoolPrice(null, d.price);
+            // Group 54 review (R2-1, R2-3): what the boxes show from the filament
+            // follows a filament picked from here on.
+            wizardState.spoolBoxesFollowFilament = true;
             // L351: show the filament's product link as inherited ghost text.
             wizardApplyProductLinkFallback(null, d.extra?.product_url);
 
@@ -4585,8 +4990,9 @@ window.openEditWizard = async (spoolId) => {
                             const cContainer = document.getElementById(`chip-container-fil-${k}`);
                             cContainer.innerHTML = '';
                             parsedArr.forEach(val => {
-                                const chipHtml = `<span class="badge rounded-pill text-bg-primary border border-primary cursor-pointer dynamic-chip" 
-                                                       onclick="this.remove()" data-key="${k}" data-selected="true" data-value="${val}">${val} &times;</span>`;
+                                // HTML text, as wizardAddMultiChoiceChip's (Group 54 review, S2).
+                                const chipHtml = `<span class="badge rounded-pill text-bg-primary border border-primary cursor-pointer dynamic-chip"
+                                                       onclick="this.remove()" data-key="${k}" data-selected="true" data-value="${_wizEscape(val)}">${_wizEscape(val)} &times;</span>`;
                                 cContainer.insertAdjacentHTML('beforeend', chipHtml);
                             });
                         } else {
@@ -5077,7 +5483,7 @@ window.wizardAutoSwitchToExisting = (filament, parsedTemplate) => {
     if (sel) {
         const name = `${filament.vendor?.name || 'Generic'} ${filament.material} - ${filament.name || 'Unknown'}`;
         sel.innerHTML = `<option value="${filament.id}" selected>${name} (ID: ${filament.id})</option>`;
-        window.wizardExistingSelected();
+        window.wizardExistingSelected(filament);
     }
     const msg = document.getElementById('wiz-status-msg');
     if (msg) {

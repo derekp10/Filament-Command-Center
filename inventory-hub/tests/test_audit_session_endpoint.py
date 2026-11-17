@@ -29,9 +29,18 @@ def _isolated_audit_session():
     state.reset_audit()
 
 
-def test_audit_session_inactive_returns_active_false(client):
+def test_audit_session_inactive_returns_active_false(client, monkeypatch):
+    """PIN UPDATED DELIBERATELY (Group 58): the panel's poll sees an end before any
+    heartbeat, so its answer says how the last audit ended, as the heartbeat does."""
+    monkeypatch.setattr(state, "AUDIT_LAST_END", None)
     r = client.get("/api/audit_session")
-    assert r.get_json() == {"active": False}
+    assert r.get_json() == {"active": False, "audit_end": None}
+
+
+def test_audit_session_inactive_says_how_the_last_audit_ended(client, monkeypatch):
+    end = {"id": "boot-1", "why": "idle", "location": "LR-MDB-1"}
+    monkeypatch.setattr(state, "AUDIT_LAST_END", end)
+    assert client.get("/api/audit_session").get_json() == {"active": False, "audit_end": end}
 
 
 def test_audit_session_active_returns_enriched_rows(client):
@@ -60,8 +69,9 @@ def test_audit_session_active_returns_enriched_rows(client):
     body = r.get_json()
     assert body["active"] is True
     assert body["location_id"] == "LR-MDB-1"
-    # Stats are derived from the lists.
-    assert body["stats"] == {"total_expected": 3, "found": 1, "missing": 2, "rogue": 1}
+    # Stats are derived from the lists. PIN UPDATED DELIBERATELY (Group 58): the
+    # spools found here that are loaded on a head from here count apart.
+    assert body["stats"] == {"total_expected": 3, "found": 1, "missing": 2, "rogue": 1, "trail": 0}
     # Per-row enrichment: each expected entry carries display + found flag.
     expected_by_id = {row["id"]: row for row in body["expected"]}
     assert expected_by_id[101]["found"] is True

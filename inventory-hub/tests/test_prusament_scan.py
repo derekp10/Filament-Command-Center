@@ -79,6 +79,10 @@ def test_resolve_scan_generic_url_is_not_mistaken_for_prusament():
 # Stage 2b — /api/identify_scan handler for a Prusament-URL scan. The Spoolman
 # and parser boundaries are mocked so no real data/network is touched; the real
 # resolve_scan + compute_dirty_extras run, exercising the handler's decisions.
+# The handler reads the filament through spoolman_api.get_filament_answer
+# (Group 53 review, r3-5), so that is the stub: (record, True) is Spoolman
+# answering with the record. A read that isn't the filament is pinned in
+# test_filament_answer_53.py, on the real read against the Spoolman fake.
 # ---------------------------------------------------------------------------
 
 _URL = "https://prusament.com/spool/17705/5b1a183b26/"
@@ -138,12 +142,12 @@ def test_prusament_scan_duplicate_product_matches_exact_hash_spool(client):
                  "settings_bed_temp": None, "extra": {}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
          patch("spoolman_api.get_all_spools", return_value=[spool_a, spool_b]), \
-         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_filament_answer", return_value=(blank_fil, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[spool_a, spool_b]), \
          patch("spoolman_api.update_spool", return_value={"id": 43}), \
          patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
         res = _scan(client, url=url_b)
-    assert res["type"] == "prusament_matched"
+    assert res["type"] == "prusament_matched" and res["status"] == "ok", res
     assert res["spool_id"] == 43   # the EXACT-hash spool, not the first duplicate (42)
 
 
@@ -178,12 +182,12 @@ def test_prusament_scan_matches_query_form_stored_url_by_hash(client):
                  "settings_bed_temp": None, "extra": {}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
          patch("spoolman_api.get_all_spools", return_value=[stored]), \
-         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_filament_answer", return_value=(blank_fil, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[stored]), \
          patch("spoolman_api.update_spool", return_value={"id": 71}), \
          patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
         res = _scan(client, url=scanned)
-    assert res["type"] == "prusament_matched"
+    assert res["type"] == "prusament_matched" and res["status"] == "ok", res
     assert res["spool_id"] == 71   # matched the query-form spool via its hash
 
 
@@ -207,7 +211,7 @@ def test_prusament_scan_match_backfills_blank_temps(client):
                  "settings_bed_temp": None, "extra": {"product_url": _URL}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
          patch("spoolman_api.get_all_spools", return_value=[matched]), \
-         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_filament_answer", return_value=(blank_fil, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[matched]), \
          patch("spoolman_api.update_spool", return_value={"id": 42}), \
          patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}) as upd:
@@ -232,12 +236,12 @@ def test_prusament_scan_differing_temps_suggested_when_no_active_spools(client):
                 "settings_bed_temp": 60, "extra": {"nozzle_temp_max": "225", "bed_temp_max": "65"}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
          patch("spoolman_api.get_all_spools", return_value=[matched]), \
-         patch("spoolman_api.get_filament", return_value=existing), \
+         patch("spoolman_api.get_filament_answer", return_value=(existing, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[matched]), \
          patch("spoolman_api.update_spool", return_value={"id": 42}), \
          patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
         res = _scan(client)
-    assert res["type"] == "prusament_matched"
+    assert res["type"] == "prusament_matched" and res["status"] == "ok", res
     fields = {c["field"] for c in res["conflicts"]}
     assert "settings_extruder_temp" in fields   # 210 -> 215
     assert "nozzle_temp_max" in fields           # 225 -> 230
@@ -257,12 +261,12 @@ def test_prusament_scan_differing_temps_suppressed_when_active_spool(client):
                 "settings_bed_temp": 60, "extra": {"nozzle_temp_max": "225", "bed_temp_max": "65"}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj()]), \
          patch("spoolman_api.get_all_spools", return_value=[matched]), \
-         patch("spoolman_api.get_filament", return_value=existing), \
+         patch("spoolman_api.get_filament_answer", return_value=(existing, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[matched]), \
          patch("spoolman_api.update_spool", return_value={"id": 42}), \
          patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
         res = _scan(client)
-    assert res["type"] == "prusament_matched"
+    assert res["type"] == "prusament_matched" and res["status"] == "ok", res
     assert res["conflicts"] == []  # active spool in use -> suggestion suppressed
 
 
@@ -307,12 +311,12 @@ def test_prusament_scan_upgrades_query_form_product_url_to_canonical(client):
     # Strip parser extras so pm_fill carries ONLY the product_url upgrade.
     with patch("external_parsers.search_external", return_value=[_parsed_obj(extra={})]), \
          patch("spoolman_api.get_all_spools", return_value=[stored]), \
-         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_filament_answer", return_value=(blank_fil, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[stored]), \
          patch("spoolman_api.update_spool", return_value={"id": 71}) as upd, \
          patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
         res = _scan(client, url=scanned)
-    assert res["type"] == "prusament_matched"
+    assert res["type"] == "prusament_matched" and res["status"] == "ok", res
     assert _product_url_writes(upd) == ["https://prusament.com/spool/17705/730b53b325"]
 
 
@@ -326,12 +330,12 @@ def test_prusament_scan_canonical_product_url_is_idempotent(client):
                  "settings_bed_temp": None, "extra": {}}
     with patch("external_parsers.search_external", return_value=[_parsed_obj(extra={})]), \
          patch("spoolman_api.get_all_spools", return_value=[stored]), \
-         patch("spoolman_api.get_filament", return_value=blank_fil), \
+         patch("spoolman_api.get_filament_answer", return_value=(blank_fil, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[stored]), \
          patch("spoolman_api.update_spool", return_value={"id": 71}) as upd, \
          patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):
         res = _scan(client, url=scanned)
-    assert res["type"] == "prusament_matched"
+    assert res["type"] == "prusament_matched" and res["status"] == "ok", res
     assert _product_url_writes(upd) == []   # no product_url churn
 
 
@@ -397,7 +401,7 @@ def test_prusament_scan_matched_includes_spool_weight_diff(client):
     obj = _parsed_obj(weight=1000.0, spool_weight=201.0)  # temps already match fil
     with patch("external_parsers.search_external", return_value=[obj]), \
          patch("spoolman_api.get_all_spools", return_value=[matched]), \
-         patch("spoolman_api.get_filament", return_value=fil), \
+         patch("spoolman_api.get_filament_answer", return_value=(fil, True)), \
          patch("spoolman_api.get_spools_for_filament", return_value=[matched]), \
          patch("spoolman_api.update_spool", return_value={"id": 42}), \
          patch("spoolman_api.update_filament_or_raise", return_value={"id": 7}):

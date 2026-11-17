@@ -20,6 +20,14 @@
     --fcc-fs-label: 0.8rem;
     --fcc-fs-small: 0.85rem;
     --fcc-fs-row: 0.9rem;
+    /* The one look of text drawn on a filament's colour (a card's name, brand,
+       weight, slot; a toolhead's label on its colour band): white in a dark
+       halo, so it reads on a white spool as on a black one. Defined here only:
+       .text-pop and every class for card text on a filament colour use it, and
+       getFilamentStyle (inv_core.js) names the class for a new card's text
+       (Derek, 2026-10-30: "we should match the style if it's more readable and
+       better", in the shared code every filament card draws from). */
+    --fcc-text-halo: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
 }
 
 /* --- TEXT SIZE (per browser: Settings -> 🖥️ This Browser, text_size.js) ---
@@ -152,14 +160,20 @@ body {
 
 /* Title bar: no button's label ever wraps onto two lines (readability, Derek
    2026-10-21). At Large / Extra Large, or in a narrow window, the bar runs
-   out of room, so it is a size container that gives way in steps. The
-   thresholds are in rem, which grows with the Text size, so each step comes
-   at the same point in every size; at Small and Standard on a 1600 px window
-   the bar is unchanged (it needs about 93rem).
+   out of room, so it gives way in steps.
    From 992 px up the bar is one line (Bootstrap's navbar-expand-lg): the
-   spacing tightens, ADD INVENTORY reads ADD, the version badge goes, and
-   last the title shortens with "…" (its full text is its tooltip), so it
-   never runs under the Spoolman light and SEARCH.
+   spacing tightens, Backlog, Queue and Low stock show their icon and number
+   alone (Settings -> Title bar buttons: Automatic), ADD INVENTORY reads ADD,
+   the version badge shows its date and time alone, and last the title
+   shortens with "…" (its full text is its tooltip): the badge never goes
+   (Group 57.3, Derek 2026-10-28: he reads the build's date at a glance; a
+   second line in its place squeezed the Buffer Zone on a small laptop). Each step is taken only while
+   the title is cut short (titlebar_fit.js, Group 57 review, 2026-10-26): the
+   bar holds three live counts (🏷️ Backlog, 🛒 Queue, ⚠️ Low stock), so the
+   room it needs changes with their numbers, and steps at fixed widths came
+   too late once a count grew. Always words or Always icons skips the icon
+   step (its look is fixed). If the buttons still run past the bar's edge, it
+   takes a second line (step 5, below).
    Below 992 px Bootstrap puts the buttons on a line of their own under the
    title (this bar's flex-wrap comes from .navbar there, so it is not set
    here); a row too wide for the window wraps its buttons onto another line
@@ -167,16 +181,30 @@ body {
    smaller Text size, is always on screen, and the bar grows to hold its
    lines instead of drawing them over Printer Status (readability review,
    2026-10-21). */
+/* The box titlebar_fit.js measures in: its hidden copy of the title, and the
+   zero-high marker it watches for the bar's width. */
 .fcc-titlebar {
-    container: fcc-titlebar / inline-size;
+    position: relative;
+}
+.fcc-tb-marker {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 0;
+    visibility: hidden;
+    pointer-events: none;
 }
 .fcc-titlebar .btn,
 .fcc-titlebar .status-label {
     white-space: nowrap;
 }
+/* Never narrower than the title's own right margin: a title cut to nothing
+   still draws its first letter (its glow's clip margin, below), which ran
+   over the Spoolman light (Group 57 review, round 2). */
 .fcc-titlebar .navbar-brand-group {
     flex: 0 1 auto;
-    min-width: 0;
+    min-width: 1rem;
 }
 .fcc-titlebar .navbar-brand {
     min-width: 0;
@@ -195,25 +223,138 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-/* Step 1: no extra space between the items, beyond the bar's own gap. */
-@container fcc-titlebar (max-width: 94rem) {
+/* The labels (Group 57.3; Settings -> 🖥️ This Browser -> Title bar buttons,
+   data-fcc-tb-buttons on <html>, titlebar_prefs.js): a count's word and
+   brackets are spans of their own (dashboard.html, and each count's painter
+   writes the same shape), dropped to leave the icon and number: always with
+   Always icons; with Automatic as the bar's second step (fcc-tb-icons, from
+   992 px up) and always below 992 px, where the buttons have a line of their
+   own; never with Always words. */
+:root[data-fcc-tb-buttons="icons"] .fcc-titlebar .fcc-tb-word,
+:root[data-fcc-tb-buttons="icons"] .fcc-titlebar .fcc-tb-paren,
+.fcc-titlebar.fcc-tb-icons .fcc-tb-word,
+.fcc-titlebar.fcc-tb-icons .fcc-tb-paren {
+    display: none;
+}
+@media (max-width: 991.98px) {
+    :root:not([data-fcc-tb-buttons="words"]) .fcc-titlebar .fcc-tb-word,
+    :root:not([data-fcc-tb-buttons="words"]) .fcc-titlebar .fcc-tb-paren {
+        display: none;
+    }
+}
+/* The ⚠️ button's two forms (Settings -> Low stock count, data-fcc-low-count):
+   Low and Out apart, in the Low stock window's own words and count pills (the
+   default), or one number, the two added up. inv_stock.js paints both. */
+:root[data-fcc-low-count="one"] #btn-low-stock-count .fcc-ls-both,
+:root:not([data-fcc-low-count="one"]) #btn-low-stock-count .fcc-ls-one {
+    display: none;
+}
+/* A count pill, as the window's tabs draw theirs (inv_stock.js .fcc-stock-count):
+   white on #444, 9.7:1. */
+.fcc-ls-pill {
+    display: inline-block;
+    min-width: 1.6em;
+    margin-left: 0.3em;
+    padding: 0 0.4em;
+    border-radius: 0.6em;
+    background: #444;
+    color: #fff;
+    font-size: var(--fcc-fs-row);
+    font-weight: 600;
+    line-height: 1.35;
+    text-align: center;
+}
+.fcc-ls-pill[data-low-count] {
+    margin-right: 0.55em;
+}
+/* Step 1: no extra space between the items, beyond the bar's own gap. Below
+   992 px it always applies (the buttons have a line of their own), as it
+   always did there. */
+@media (min-width: 992px) {
+    .fcc-titlebar.fcc-tb-tight .fcc-titlebar-actions { gap: 0.5rem !important; }
+    .fcc-titlebar.fcc-tb-tight .fcc-titlebar-actions > * { margin-left: 0 !important; }
+}
+@media (max-width: 991.98px) {
     .fcc-titlebar-actions { gap: 0.5rem !important; }
     .fcc-titlebar-actions > * { margin-left: 0 !important; }
 }
-/* Step 2: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory"). */
-@container fcc-titlebar (max-width: 85.5rem) {
+/* Step 2 (Automatic only): the icon and number alone (fcc-tb-icons, above).
+   Step 3: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory").
+   Below 992 px, always. */
+@media (min-width: 992px) {
+    .fcc-titlebar.fcc-tb-add .fcc-titlebar-more { display: none; }
+}
+@media (max-width: 991.98px) {
     .fcc-titlebar-more { display: none; }
 }
-/* Step 3, one-line bar only: the version badge goes where it would start to
-   shrink (about 78rem at every size). Squeezed further it was an empty
-   bordered box over the Spoolman light. Its text is its tooltip, and
-   Settings -> Build Info has the commit. Below this the title is the one
-   thing left to give. (Below 992 px the title has a line of its own, and the
-   badge keeps its place beside it.) */
+/* The version badge never shrinks on the one-line bar, nor goes (Group 57.3:
+   it went as step 3 until Derek, 2026-10-28, "I like keeping the current build
+   visible"). Squeezed it was an empty bordered box over the Spoolman light, so
+   the title gives way first, which is what tells titlebar_fit.js that a step
+   is due. (Below 992 px the title has a line of its own, and the badge keeps
+   its place beside it.) */
 @media (min-width: 992px) {
-    @container fcc-titlebar (max-width: 78rem) {
-        #fcc-build-version { display: none; }
+    #fcc-build-version { flex-shrink: 0; }
+    /* With the title cut and every step taken (fcc-tb-cut, titlebar_fit.js,
+       which counts it), the badge keeps the gap the title's own margin kept
+       before the badge stayed: it touched the Spoolman light (review of 57.3).
+       Only then: at every width it took ADD's step on a 1600 px window at
+       Large. */
+    .fcc-titlebar.fcc-tb-cut #fcc-build-version { margin-right: 1rem; }
+    /* Step 4 (57.3): the badge's date and time alone ("2026-10-28 18:45"; the
+       commit is in its tooltip and in Settings -> Build Info), before the bar
+       ever takes a second line. */
+    .fcc-titlebar.fcc-tb-shortver .fcc-ver-lead { display: none; }
+}
+/* Step 5, one-line bar only, the last resort (titlebar_fit.js, Group 57
+   review, round 2): the buttons still run past the bar's edge with the title
+   cut to nothing (Extra Large in a window just over 992 px, with big counts),
+   or the badge would run under them (review of 57.3: Extra Large in a window
+   under about 1130 px). The bar takes a second line as it does below 992 px,
+   the title whole with the whole badge beside it, so ⚙️ never leaves the
+   screen and the badge's date is never drawn under the Spoolman light. */
+@media (min-width: 992px) {
+    .fcc-titlebar.fcc-tb-wrap { flex-wrap: wrap; }
+    .fcc-titlebar.fcc-tb-wrap .fcc-titlebar-actions {
+        flex: 0 1 auto;
+        min-width: 0;
+        flex-wrap: wrap;
+        justify-content: flex-end;
     }
+    .navbar:has(> .fcc-titlebar.fcc-tb-wrap) {
+        height: auto;
+        min-height: 70px;
+    }
+}
+/* A count read from Spoolman that a later read couldn't refresh (the ⚠️ Low
+   stock count, inv_stock.js, Group 57.2; the 🏷️ Backlog count, inv_backlog.js,
+   since round 2): it keeps its number with a "?" after it, and a dashed border,
+   so a stale count never looks like a fresh one. The "?" is drawn in the
+   button's own padding and takes no room: the bar's steps follow its buttons'
+   width (titlebar_fit.js), and a blip moved every button 112 px and back
+   (Group 57 review, round 2). */
+[data-low-stock-count],
+.fcc-count-num,
+.fcc-tb-count {
+    position: relative;
+}
+.fcc-stale-mark {
+    position: absolute;
+    left: 100%;
+    top: 0;
+    /* The line box of the number's own font, so the "?" sits on the number's
+       baseline: with the button's 1.5 it sat a half-leading (1 px) low
+       (round 3). */
+    line-height: normal;
+}
+/* A filled button's own colour is under its border too, so its dashes would
+   not show: the fill stops inside the border. Backlog is always filled; the
+   ⚠️ outline button is filled while hovered or focused (Bootstrap), and lost
+   its dashes there (round 3). */
+#btn-low-stock-count[data-read="failed"],
+#btn-backlog-count[data-read="failed"] {
+    border-style: dashed;
+    background-clip: padding-box;
 }
 @media (max-width: 991.98px) {
     .navbar {
@@ -441,7 +582,7 @@ body {
     color: #fff;
     margin-right: 15px;
     border: 1px solid rgba(255, 255, 255, 0.2);
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), -1px -1px 2px rgba(0, 0, 0, 0.5);
+    text-shadow: var(--fcc-text-halo);
 }
 
 .cham-text {
@@ -451,7 +592,7 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), -1px -1px 2px rgba(0, 0, 0, 0.5);
+    text-shadow: var(--fcc-text-halo);
 }
 
 /* Actions & Buttons */
@@ -608,6 +749,30 @@ body {
     color: #00d4ff;
     font-weight: bold;
 }
+/* A title in a coloured header takes the header's own text colour, the .text-* class its
+   markup names (Group 58, 2026-11-03): the cyan above beat it, and read 1.11:1 on the
+   🧵 Multi-Spool Search's cyan and 2.56:1 on the red of the safety interlock and of
+   "Clear Queue?". A dark header keeps the cyan, and a title with its own .text-* keeps
+   that (Bootstrap's !important: the Print Queue's dark title on its yellow). */
+.modal-header[class*="bg-"]:not(.bg-dark) .modal-title {
+    color: inherit;
+}
+/* #confirmModal, the question every Undo Last Move and "Clear entire Buffer?" asks
+   (Derek, 2026-11-03, sample 4b (b), "but A is functional and reads more like a warning
+   because of the yellow used ... easier to scan and work with if the laptop doing the
+   work is a bit of distance away"): a dark header with a yellow title, as FCC's own dark
+   dialogs have, over a thick yellow line, and a bigger title, so it still reads as a
+   warning from across the room. Its title was the cyan above on a yellow header, 1.09:1.
+   The ⚠️ on dark needs no backing. */
+#confirmModal .fcc-confirm-header {
+    background-color: #2b2b2b;
+    border-bottom: 4px solid #ffc107;
+}
+#confirmModal .fcc-confirm-header .modal-title {
+    color: #ffc107;
+    font-size: 1.6rem;
+    line-height: 1.2;
+}
 
 .qr-box {
     background: #fff;
@@ -622,7 +787,7 @@ body {
 }
 
 .text-pop {
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 
 .text-pop-light {
@@ -746,6 +911,82 @@ body {
     width: 80%;
     max-width: 37.5rem;
     pointer-events: none;
+}
+
+/* While the ⌨️ shortcut list is up (20200 / 20201, above every overlay; the class is
+   shortcuts_registry.js's), a scan's toast is drawn over it: scans work under the list,
+   and a failed one's 7 s toast went by unseen behind it (Group 58 re-review). Only
+   then: everywhere else toasts stay under the overlays, so a confirm isn't drowned out
+   by toast noise. */
+.fcc-shortcuts-up #toast-container {
+    z-index: 20300;
+}
+
+/* Group 55.3: in-app help. A dialog's help button sits in its header beside the ✕: a
+   ring holding a bold "?", the sign the title bar's ? button already uses, in the
+   header's own text colour (white on FCC's dark headers, dark on a light coloured one).
+   Its click opens the dialog's help in the shortcut window (shortcuts_registry.js). */
+.fcc-help-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+    background: transparent;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.fcc-help-btn:hover { background: rgba(255, 255, 255, 0.15); }
+.fcc-help-btn:focus-visible { outline: 3px solid #00d4ff; outline-offset: 2px; }
+.modal-header.bg-warning .fcc-help-btn,
+.modal-header.bg-info .fcc-help-btn,
+.modal-header.bg-light .fcc-help-btn { color: #212529; }
+.modal-header.bg-warning .fcc-help-btn:hover,
+.modal-header.bg-info .fcc-help-btn:hover,
+.modal-header.bg-light .fcc-help-btn:hover { background: rgba(0, 0, 0, 0.12); }
+/* A finger needs a bigger target. */
+@media (pointer: coarse) {
+    .fcc-help-btn { width: 2.75rem; height: 2.75rem; }
+}
+/* The window takes the keyboard when it opens (shortcuts_registry.js): its own border
+   says where it is, so the panel itself draws no focus ring. Its buttons keep theirs. */
+#fcc-shortcuts-overlay:focus { outline: none; }
+/* A help button in a Bootstrap header sits beside the ✕ however the title is laid out:
+   it takes the free space before it (the ✕'s own auto margin would split that space
+   with it and float the button mid-header), and the ✕ keeps a small gap. */
+.modal-header .fcc-help-btn { margin-left: auto; }
+.modal-header .fcc-help-btn + .btn-close { margin-left: 0.5rem; }
+/* A question's ? (inv_core.js's confirmActivePrint, and window.fccCornerHelpHtml for the
+   Quick-Swap question and "Record it as coming from…") has no ✕ to sit beside: it takes
+   the top right corner, and the title's own padding keeps it clear of it. */
+.fcc-apc-help,
+.fcc-help-corner { position: absolute; top: 0.6rem; right: 0.6rem; }
+/* Its keyboard ring on a light coloured header (the Print Queue's yellow): dark, as the
+   ? itself is there; the cyan ring was 1.09:1 on the yellow (Group 55 review). */
+.modal-header.bg-warning .fcc-help-btn:focus-visible,
+.modal-header.bg-info .fcc-help-btn:focus-visible,
+.modal-header.bg-light .fcc-help-btn:focus-visible { outline-color: #212529; }
+/* One dialog's help, drawn in the shortcut window instead of the full list. */
+#fcc-help-view .fcc-help-lines {
+    color: #f8f9fa;
+    font-size: 1.05rem;
+    line-height: 1.45;
+    padding-left: 1.25rem;
+    margin: 0 0 0.5rem;
+}
+#fcc-help-view .fcc-help-lines li + li { margin-top: 0.4rem; }
+#fcc-help-view .fcc-help-sub {
+    color: #0dcaf0;
+    font-weight: 700;
+    font-size: 1.15rem;
+    margin: 1rem 0 0.4rem;
 }
 
 .toast-msg {
@@ -1078,14 +1319,14 @@ body {
     line-height: 1.2 !important;
     word-break: break-all !important;
     min-height: 1.8rem !important;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), -1px -1px 2px rgba(0, 0, 0, 0.5) !important;
+    text-shadow: var(--fcc-text-halo) !important;
 }
 
 .fcc-card-metric {
     font-weight: bold !important;
     color: #fff !important;
     font-size: 1.2rem !important;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8) !important;
+    text-shadow: var(--fcc-text-halo) !important;
 }
 
 .fcc-btn-buffer-del {
@@ -1110,6 +1351,8 @@ body {
 .fcc-subtext {
     font-size: 0.85rem;
     color: #aaa;
+    /* On a card's lightest edge: the one look's halo (50.8), its own dimmer grey. */
+    text-shadow: var(--fcc-text-halo);
 }
 
 /* Modals */
@@ -1377,6 +1620,286 @@ body {
     max-height: calc(100dvh - 16px);
     overflow-y: auto;
 }
+/* The lists under a question's words (confirmActivePrint's `sections`, Group 58):
+   side by side where the window has the room, one above the other on a phone.
+   Each line is one row, its full text in its title, so the question's height is
+   known, and what a line says about a spool stays whole while its name gives way. */
+.fcc-apc-sections {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(19rem, 100%), 1fr));
+    gap: 0.5rem 1.25rem;
+    margin-bottom: 14px;
+    text-align: left;
+}
+.fcc-apc-section {
+    min-width: 0;
+}
+.fcc-apc-section-head {
+    font-size: var(--fcc-fs-row);
+    font-weight: bold;
+    color: #fff;
+    margin-bottom: 2px;
+}
+.fcc-apc-line {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    font-size: var(--fcc-fs-row);
+    line-height: 1.4;
+}
+.fcc-apc-line-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fcc-apc-line-where {
+    flex: 0 0 auto;
+    max-width: 75%;
+    color: #ffd27a;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fcc-apc-more {
+    font-size: var(--fcc-fs-row);
+    line-height: 1.4;
+    color: #ddd;
+}
+/* A list whose lines can be long asks to wrap (`wrap: true`, its section's
+   .fcc-apc-section-wrap): made for Done's question (Derek's C, 2026-11-03; review of
+   7e3720f, P-3: its stays' reasons and spools' names were cut at every size, whole only in
+   the line's title, which a touch screen can't show), which has drawn colour tiles instead
+   since his second look (below), so no door sends it now. A line that fits is drawn as above, its
+   reason at its end, so a short question is no taller. One that doesn't keeps its name
+   whole and puts its reason on the next row, indented: the line's padding, which the
+   name's own margin takes back. A list alone in the grid's last row takes its width. */
+.fcc-apc-section-wrap .fcc-apc-line {
+    flex-wrap: wrap;
+    row-gap: 0;
+    padding-left: 1rem;
+}
+.fcc-apc-section-wrap .fcc-apc-line-text {
+    margin-left: -1rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.fcc-apc-section-wrap .fcc-apc-line-where {
+    flex: 0 1 auto;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.fcc-apc-sections > .fcc-apc-section-wrap:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+}
+/* A question whose lists are colour tiles (confirmActivePrint's `tiles`; Done's question,
+   Derek, 2026-11-03: "display the spools like we did in the audit window"): its lists one
+   above the other, each list's tiles in a grid, three to a row on a laptop and one on a
+   phone, every spool there. Too tall for the window (fccFitQuestion), the lists alone
+   scroll (.fcc-apc-lists-scroll) and the title, words, buttons and QRs stay; a question
+   that fits is no scroller (ClearType). */
+.fcc-apc-sections.fcc-apc-sections-tiles {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+}
+.fcc-apc-section-tiles .fcc-apc-section-head {
+    margin-bottom: 4px;
+}
+.fcc-apc-sections-tiles:focus-visible {
+    outline: 2px solid #0ff;
+    outline-offset: 2px;
+}
+.fcc-apc-lists-scroll {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 16px);
+    max-height: calc(100dvh - 16px);
+}
+.fcc-apc-lists-scroll > * {
+    flex: 0 0 auto;
+}
+/* Framed while it scrolls, so it reads as a list with more in it: its tiles cut at its
+   edge would otherwise read as the end of the question. */
+.fcc-apc-lists-scroll > .fcc-apc-sections {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid #555;
+    border-radius: 6px;
+    background: #161616;
+}
+/* A spool as a colour tile (inv_core.js fccSpoolTileHtml): the audit panel's tile, drawn
+   for reading, not pressing. Its name wraps rather than being cut. */
+.fcc-spool-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(14rem, 100%), 1fr));
+    gap: 6px;
+}
+.fcc-spool-tile {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #1a1a1a;
+    border: 1px solid #555;
+    color: #fff;
+    text-align: left;
+}
+.fcc-spool-tile-text {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.fcc-spool-tile-name {
+    display: block;
+    color: #fff;
+    font-weight: 600;
+    font-size: var(--fcc-fs-row);
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+.fcc-spool-tile-detail {
+    display: block;
+    font-size: var(--fcc-fs-small);
+    color: rgba(255, 255, 255, 0.75);
+}
+.fcc-spool-tile-where {
+    display: block;
+    font-size: var(--fcc-fs-small);
+    color: #ffd27a;
+    overflow-wrap: anywhere;
+}
+.fcc-spool-tile-tag {
+    display: block;
+    font-size: var(--fcc-fs-small);
+    color: #ffe08a;
+    font-weight: 600;
+}
+/* The audit's report window (inv_cmd.js openAuditReport; Derek, 2026-11-03, sample 5b(i)):
+   where the panel was, the report log line's own amber for its edge, each spool a colour
+   tile under what the end did with it, two to a row where there is room and one on a
+   phone, nothing cut. Taller than the window, its body scrolls and the title, summary and
+   Close stay (.fcc-audit-report-scroll), only then (ClearType). */
+.fcc-audit-report-panel {
+    background: #1e1e1e;
+    color: #fff;
+    border: 2px solid #ffaa00;
+    border-radius: 8px;
+    padding: 0.875rem 1rem;
+    width: min(51.25rem, 94vw);
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+}
+.fcc-audit-report-panel > * { flex: 0 0 auto; }
+.fcc-audit-report-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-bottom: 0.375rem;
+}
+#fcc-audit-report-title {
+    min-width: 0;
+    font-weight: bold;
+    font-size: 1.15em;
+    color: #ffd27a;
+    overflow-wrap: anywhere;
+}
+#fcc-audit-report-close { flex: 0 0 auto; white-space: nowrap; }
+.fcc-audit-report-summary {
+    font-size: var(--fcc-fs-row);
+    margin-bottom: 0.625rem;
+    overflow-wrap: anywhere;
+}
+/* How an end that moved nothing ended (a Cancel, an idle end, a Done with nothing to park or
+   file; review 3, R3S-4), under the summary, in the window's amber. */
+.fcc-audit-report-ended {
+    font-size: var(--fcc-fs-row);
+    color: #ffe08a;
+    margin: -0.375rem 0 0.625rem;
+    overflow-wrap: anywhere;
+}
+/* What a scan's refusal says while the window is up (inv_cmd.js auditReportNotice), in the
+   audit panel's notice colours: the toast layer is under the window. */
+.fcc-audit-report-notice {
+    margin-bottom: 0.625rem;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: #4a3200;
+    color: #ffd27a;
+    border: 1px solid #ffb74d;
+    font-weight: bold;
+    overflow-wrap: anywhere;
+}
+.fcc-audit-report-group + .fcc-audit-report-group { margin-top: 0.75rem; }
+/* The 📡 pill's list says what a press in it couldn't do (inv_core.js logPillNotice; review 3,
+   R3-4): a toast's layer is under the list. The audit notice's colours. */
+.fcc-log-pill-notice {
+    margin-bottom: 0.5rem;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: #4a3200;
+    color: #ffd27a;
+    border: 1px solid #ffb74d;
+    font-weight: bold;
+    font-size: var(--fcc-fs-row);
+    overflow-wrap: anywhere;
+}
+.fcc-audit-report-head {
+    font-size: var(--fcc-fs-row);
+    font-weight: bold;
+    color: #fff;
+    margin-bottom: 4px;
+    overflow-wrap: anywhere;
+}
+#fcc-audit-report .fcc-spool-tiles {
+    grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
+}
+.fcc-audit-report-empty {
+    font-size: var(--fcc-fs-row);
+    color: rgba(255, 255, 255, 0.85);
+}
+.fcc-audit-report-foot {
+    font-size: var(--fcc-fs-small);
+    color: rgba(255, 255, 255, 0.8);
+    margin-top: 0.625rem;
+}
+.fcc-audit-report-scroll {
+    max-height: calc(100vh - 16px);
+    max-height: calc(100dvh - 16px);
+}
+.fcc-audit-report-scroll > .fcc-audit-report-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid #555;
+    border-radius: 6px;
+    background: #161616;
+}
+.fcc-audit-report-body:focus-visible {
+    outline: 2px solid #0ff;
+    outline-offset: 2px;
+}
+/* The 📝 Read the report button the server puts in the report's Activity Log line (section
+   H, S3): btn-outline-info on the log's dark rows, its words in the log's own size. */
+.fcc-audit-report-open { white-space: nowrap; vertical-align: baseline; }
+/* The audit panel's tile colours, by what the list says of the spool. */
+.fcc-spool-tile[data-tone="missing"] { background: #1a1a1a; border-color: #555; }
+.fcc-spool-tile[data-tone="found"] { background: #0a2a0a; border-color: #0f0; }
+.fcc-spool-tile[data-tone="extra"] { background: #2a2410; border-color: #fc0; }
+.fcc-spool-tile[data-tone="trail"] { background: #0a2230; border-color: #0cf; }
+.fcc-spool-tile[data-tone="stay"] { background: #1a1a1a; border: 1px dashed #8a8a8a; }
+.fcc-spool-tile[data-tone="failed"] { background: #2a1214; border-color: #dc3545; }
 
 /* --- RED ZONE: NAV DECK --- */
 #loc-mgr-nav-deck {
@@ -1431,7 +1954,7 @@ body {
     text-transform: uppercase;
     margin-bottom: 8px;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 
 /* GOLD STANDARD: High Contrast Nav Text */
@@ -1440,7 +1963,7 @@ body {
     font-weight: 800;
     line-height: 1.2;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 
 .nav-qr {
@@ -1507,7 +2030,7 @@ body {
     letter-spacing: 1px;
     font-size: 1.1rem;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
     opacity: 1;
 }
 
@@ -1522,20 +2045,20 @@ body {
     font-size: 0.85rem;
     font-weight: 700;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 .text-line-2 {
     font-size: 0.9rem;
     font-weight: 800;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
     margin-top: 2px;
 }
 .text-line-3 {
     font-size: 1.1rem;
     font-weight: 900;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
     margin: 4px 0;
     line-height: 1.1;
 }
@@ -1543,7 +2066,7 @@ body {
     font-size: 0.9rem;
     font-weight: 700;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 
 .btn-label-compact {
@@ -1909,14 +2432,11 @@ body {
     white-space: nowrap;
 }
 /* The cancelled-print review count, "🛑 N" (cancel_review.js): never split
-   between its dot and its number, on the info line and in the collapsed
-   strip (where it keeps the 6 px it always had from the printer's chips). */
+   between its dot and its number, on the info line and in the folded strip
+   (in its own slot there, between the state and the heads, Group 50.1). */
 .fcc-cr-chip {
     white-space: nowrap;
     flex: none;
-}
-.fcc-ps-printer-group .fcc-cr-chip {
-    margin-left: 6px;
 }
 /* L56 — printer-state badge, first on the printer's info line, under its
    name (2026-10-24; it followed the name on the name's line before). Colors
@@ -2027,6 +2547,143 @@ body {
     grid-template-columns: repeat(var(--fcc-ps-cols, 1), max-content);
     justify-content: start;
 }
+/* Group 50.7 (Derek, 2026-10-30, option (b) of the short-window samples): a
+   window too short for the open widget (it would scroll inside itself) puts
+   each printer's state and 🛑 count beside its name, one line for two, and
+   moves each tile's material from its own line up into its colour band, beside
+   the head's label, so every head shows whole and the Buffer Zone and the
+   Activity Log keep their room. A tall window never changes (inv_printer_status.js
+   _fitTight measures it). Four columns: the arrows, the name (it gives way
+   first, ending in "…"), the info line (as wide as its slots, never cut), and
+   an empty flexible one: the tiles span from the name's edge to the row's end,
+   as under the name (the whole row at the edge, as before), and a span that
+   crosses a flexible column gives its width to that column only, never to the
+   name's or the info's (with three columns the tiles' width went to the info
+   line's and the name shrank to a few px). */
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row {
+    grid-template-columns: max-content minmax(0, max-content) max-content minmax(0, 1fr);
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-info {
+    grid-column: 3;
+    grid-row: 1;
+    margin-top: 0;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-toolheads {
+    grid-column: 2 / -1;
+    grid-row: 2;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row.fcc-ps-edge > .fcc-ps-toolheads {
+    grid-column: 1 / -1;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-chip-mat {
+    display: none;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-body {
+    min-height: 1.5rem;
+    padding: 2px 6px;
+    margin-bottom: 2px;
+}
+/* A little less air between printers and above their tiles (the gap between
+   tiles stays: it saved 3 px and moved where a line of tiles breaks), and a spool
+   waiting for the head (50.4) on one line, its number beside "I loaded it"
+   (the slot is in its tooltip), so a waiting spool doesn't push the second
+   printer's tiles out of sight on the laptop at the printer, where it is loaded. */
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row {
+    padding-top: 0.3rem;
+    padding-bottom: 0.3rem;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row:first-child {
+    padding-top: 0;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row:last-child {
+    padding-bottom: 0;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-toolheads {
+    margin-top: 0.25rem;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th {
+    padding-bottom: 3px;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-waiting {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-waiting-text {
+    min-width: 0;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-waiting-where {
+    display: none;
+}
+/* The material in the colour band, shown only in the tight step: after the
+   label, at the band's right, in white with the card text halo (.text-pop on
+   the element) so it reads over a light filament too. It gives way before the
+   label does. */
+.fcc-ps-th-mat {
+    display: none;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 4.5rem;
+    font-size: var(--fcc-fs-small);
+    font-weight: bold;
+    color: #fff;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-mat {
+    display: block;
+}
+/* Group 50.4: a spool stored in a slot feeding the head, not loaded on it
+   ("stored, not loaded"; Derek, 2026-10-14 and 30): the tile's quiet line,
+   with "I loaded it" (the Quick-Swap tap's load, asking first). Amber on the
+   dark tile, as the tile's other hints. */
+.fcc-ps-th-waiting {
+    padding: 2px 6px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+}
+.fcc-ps-th-waiting-text {
+    max-width: 100%;
+    font-size: var(--fcc-fs-small);
+    color: #ffd27a;
+}
+.fcc-ps-loaded-it {
+    font-size: var(--fcc-fs-label);
+    font-weight: bold;
+    line-height: 1.3;
+    white-space: nowrap;
+    padding: 0 0.5rem;
+    background: #3a2f00;
+    color: #ffd27a;
+    border: 1px solid #ffb74d;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.fcc-ps-loaded-it:hover {
+    background: #4a3b00;
+}
+.fcc-ps-loaded-it:focus-visible {
+    outline: 2px solid #0dcaf0;
+    outline-offset: 1px;
+}
+/* The folded strip's mark for it: an amber dot on the head's ring (Derek's
+   pick of three, 2026-10-30); the words are in the head's tooltip and its
+   accessible name. */
+.fcc-ps-ring-waiting {
+    position: relative;
+}
+.fcc-ps-ring-waiting::after {
+    content: "";
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: #ffb74d;
+    border: 2px solid #1e1e1e;
+}
 .fcc-ps-th {
     display: flex;
     flex-direction: column;
@@ -2092,14 +2749,17 @@ body {
     font-weight: 900;
     font-size: 0.85rem;
     color: #fff;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
+    text-shadow: var(--fcc-text-halo);
 }
+/* The head's label on its spool's colour band: the one look of text on a
+   filament's colour (--fcc-text-halo), as the material beside it (50.8; it was
+   a softer shadow, faint on a white spool). */
 .fcc-ps-th-id {
     font-size: var(--fcc-fs-small);
-    color: rgba(255,255,255,0.85);
+    color: #fff;
     font-weight: bold;
     max-width: 6rem;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
+    text-shadow: var(--fcc-text-halo);
 }
 .fcc-ps-th-chip {
     font-size: var(--fcc-fs-label);
@@ -2161,73 +2821,158 @@ body {
 }
 .fcc-ps-widget:not(.fcc-ps-loading) .fcc-ps-skeleton { display: none; }
 
-/* Compact mini-chip: swatch + ID + weight inline, click-to-quickswap. */
-.fcc-ps-mini {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 2px 8px;
-    background: rgba(0,0,0,0.4);
-    border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 12px;
-    font-size: 0.85rem;
-    cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
-    line-height: 1.4;
-    white-space: nowrap;
+/* The folded strip (Group 50.1; Derek, 2026-10-19 / 25 / 29: "I love every
+   thing about this new redesign"). Each printer reads as it does open: its
+   name (or its ID, a setting), its state, its 🛑 count, then its heads; no
+   divider between printers, the names and the spacing part them. A head is its
+   label (the toolhead-label setting) on its spool's colour, ringed in the
+   colour of the tiles' weight bars (cyan, amber under 100 g, red at 0 g); a
+   hollow grey ring holds no spool, a dashed one has no box slot feeding it, a
+   dotted amber one couldn't be read. Its grams sit beside the ring (the
+   default) or under it, in the ring's colour, or only in its tooltip (the
+   weights setting). The strip takes what the title leaves (at least 20rem);
+   when a printer's heads don't fit there it goes under the title
+   (.fcc-ps-strip-under, inv_printer_status.js _fitStrip), two printers that
+   don't fit on one line take a line each from the same edge, and a printer
+   whose heads don't fit even then scrolls them sideways (Derek's fallback).
+   Sizes are rem, so the strip keeps its proportions at every Text size. */
+.fcc-ps-header-chips {
+    margin-left: 1rem;
 }
-.fcc-ps-mini:hover {
-    border-color: rgba(13,202,240,0.7);
-    background: rgba(13,202,240,0.1);
-}
-.fcc-ps-mini-swatch {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: 1px solid rgba(255,255,255,0.4);
-    flex-shrink: 0;
-}
-.fcc-ps-mini-swatch-empty {
-    background: repeating-linear-gradient(
-        45deg,
-        rgba(255,255,255,0.18),
-        rgba(255,255,255,0.18) 2px,
-        rgba(0,0,0,0.4) 2px,
-        rgba(0,0,0,0.4) 4px
-    );
-}
-.fcc-ps-mini-id {
-    color: rgba(255,255,255,0.9);
-    font-weight: bold;
-    font-size: var(--fcc-fs-label);
-}
-.fcc-ps-mini-weight {
-    font-weight: bold;
-    font-size: 0.85rem;
-}
-.fcc-ps-mini-empty .fcc-ps-mini-weight { font-weight: normal; }
-/* Group each printer's chips together with a vertical divider between
-   groups so the user can see at a glance which chips belong to which
-   printer in the collapsed strip. A group wider than the window wraps its
-   own chips onto another line, its divider running down beside them
-   (review, 2026-10-23: the INDX's group ran off the right edge at 1024 px,
-   and at 1280 px at Extra Large, taking its last heads and its 🛑 count with
-   it; the strip is all a minimized widget shows). */
-.fcc-ps-printer-group {
-    display: flex;
+.fcc-ps-widget.collapsed .fcc-ps-header { align-items: flex-start; }
+.fcc-ps-widget.collapsed .fcc-ps-header-bar { min-height: 1.85rem; }
+.fcc-ps-widget.collapsed .fcc-ps-header-chips {
+    flex: 1 1 20rem;
+    min-width: 0;
     flex-wrap: wrap;
     align-items: center;
+    gap: 0.3rem 1.6rem;
+}
+.fcc-ps-widget.collapsed .fcc-ps-header-chips.fcc-ps-strip-under { flex-basis: 100%; }
+.fcc-ps-printer-group {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.4rem;
+    max-width: 100%;
+    min-width: 0;
+}
+.fcc-ps-strip-name {
+    color: #0dcaf0;
+    font-weight: 700;
+    font-size: var(--fcc-fs-small);
+    white-space: nowrap;
+    max-width: 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: none;
+}
+.fcc-ps-strip-state,
+.fcc-ps-strip-count { flex: none; }
+.fcc-ps-strip-state:empty,
+.fcc-ps-strip-count:empty { display: none; }
+.fcc-ps-strip-heads {
+    display: inline-flex;
+    align-items: center;
     gap: 0.25rem;
-    padding-left: 0.75rem;
-    margin-left: 0.5rem;
-    border-left: 2px solid rgba(255,255,255,0.45);
+    padding: 2px;
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
 }
-.fcc-ps-printer-group:first-child {
-    padding-left: 0;
-    margin-left: 0;
-    border-left: none;
+/* A head: its ring and grams (the stack), then a doubled head's ⚠️N. */
+.fcc-ps-strip-head {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    flex: none;
+    cursor: pointer;
+    border-radius: 0.8rem;
 }
+.fcc-ps-strip-stack {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+}
+.fcc-ps-ring {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    min-width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 0.8rem;
+    /* The fallback matters: an undefined var() in the shorthand would void the
+       whole border, style included. */
+    border: 3px solid var(--fcc-ring, rgba(255,255,255,0.5));
+    /* The filament colour stops inside the border, so a dashed ring's gaps
+       show the strip, not the colour. !important: the head's inline
+       background: shorthand resets the clip. */
+    background-clip: padding-box !important;
+    font-size: var(--fcc-fs-label);
+    font-weight: 800;
+    line-height: 1;
+    color: #fff;
+    flex: none;
+    white-space: nowrap;
+}
+.fcc-ps-ring-pill { padding: 0 0.45rem; }
+.fcc-ps-ring-empty {
+    background: rgba(0,0,0,0.45);
+    border-width: 2px;
+    border-style: solid;
+    border-color: rgba(255,255,255,0.55);
+    color: rgba(255,255,255,0.88);
+}
+.fcc-ps-ring-unbound { border-style: dashed; }
+.fcc-ps-ring-unread { border-color: #ffd54a; border-style: dotted; }
+.fcc-ps-strip-head:hover .fcc-ps-ring { box-shadow: 0 0 0 2px rgba(13,202,240,0.7); }
+/* Group 50.3: a head reached by Tab (a tile, or one in the strip) shows the focus.
+   In the strip it hugs the head: the heads' box clips 2px past them (it scrolls). */
+.fcc-ps-th:focus-visible {
+    outline: 2px solid #0dcaf0;
+    outline-offset: 2px;
+}
+.fcc-ps-strip-head:focus-visible {
+    outline: 2px solid #0dcaf0;
+    outline-offset: 0;
+}
+.fcc-ps-strip-head .fcc-ps-mini-weight {
+    font-size: var(--fcc-fs-small);
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+}
+.fcc-ps-strip-unread { color: #ffd54a; }
+.fcc-ps-strip-w-unknown { color: rgba(255,255,255,0.75); }
+.fcc-ps-strip-w-none { visibility: hidden; }
+.fcc-ps-mini-doubled {
+    color: #ffd54a;
+    background: #2b2200;
+    border-radius: 4px;
+    padding: 0 4px;
+    font-size: var(--fcc-fs-label);
+    font-weight: 700;
+    white-space: nowrap;
+}
+/* Weights beside each head: a little more room between heads, so each
+   number reads as its own head's. */
+.fcc-ps-strip-wt-beside .fcc-ps-strip-heads { gap: 0.55rem; }
+/* Weights under each head: the ring on top, its grams under it; the strip is
+   as wide as with no weights and a line taller, its names and states on the
+   rings' line. */
+.fcc-ps-strip-wt-under .fcc-ps-strip-stack {
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 2.4rem;
+}
+.fcc-ps-strip-wt-under .fcc-ps-strip-heads { gap: 0.15rem; align-items: flex-start; }
+.fcc-ps-strip-wt-under .fcc-ps-printer-group { align-items: flex-start; }
+.fcc-ps-strip-wt-under .fcc-ps-strip-name,
+.fcc-ps-strip-wt-under .fcc-ps-strip-state,
+.fcc-ps-strip-wt-under .fcc-ps-strip-count { margin-top: 0.15rem; }
 
 /* L184 — Activity Log corner pill. Anchored top-of-deck on the right so it
    clears the cmd-deck. The search FAB is now DRAG-TO-PARK (buglist 21.1,
@@ -2316,6 +3061,515 @@ body:has(.cmd-deck) #fcc-bulkmove-pill {
 }
 #fcc-bulkmove-pill:active { cursor: grabbing; }
 #fcc-bulkmove-pill.fcc-bulkmove-pill-dragging { animation: none !important; cursor: grabbing; }
+
+/* Group 58 — AUDIT pill. The bulk-move pill's shape, in the audit's magenta, and
+   its lane (the two sessions never run together). Shown for as long as an audit
+   runs: a hidden audit still takes every scan. A rem cap, so a long place name
+   can't push it off a small screen. */
+#fcc-audit-pill {
+    display: none;
+    position: fixed;
+    right: 30px;
+    bottom: 170px;
+    z-index: 1080;
+    background: #ff7eff;
+    color: #2b062b;
+    font-weight: 900;
+    border: 2px solid #b000b0;
+    border-radius: 999px;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.95rem;
+    box-shadow: 0 0 12px rgba(255, 126, 255, 0.45);
+    cursor: grab;
+    user-select: none;
+    touch-action: none;   /* Pointer Events own the drag */
+    white-space: nowrap;
+    max-width: min(24rem, 90vw);
+}
+#fcc-audit-pill-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+body:has(.cmd-deck) #fcc-audit-pill {
+    bottom: 320px;
+}
+#fcc-audit-pill:hover {
+    background: #ff9dff;
+    box-shadow: 0 0 18px rgba(255, 126, 255, 0.8);
+}
+#fcc-audit-pill:active { cursor: grabbing; }
+#fcc-audit-pill.fcc-audit-pill-dragging { animation: none !important; cursor: grabbing; }
+
+/* The audit panel's tiles (Group 58.2; laid out again on Derek's look of 2026-11-04: "move
+   some of the stuff on the sides to the top and bottom, like the label buttons, and the
+   scanned notifications. That would give us a little more room for the full name. Id also
+   say let it wrap too. but we'd have to try and keep the box size consistant among all of
+   them though. otherwise the grid will just look odd."). Each tile is a cell in its kind's
+   colours (--fcc-tile-bg, --fcc-tile-border, inline): on top its swatch, its name across the
+   tile's width, wrapping to two lines at most (the whole name in its title), its grams and
+   where FCC has it; under them a row saying what the audit knows of the spool, a found
+   tile's 🏷️ at that row's end. That row is no part of a found tile's press button: a tap a
+   little off the 🏷️ presses nothing (a press took the find back, and its label read). A tile
+   not yet found has no 🏷️: its whole tile is its press button, its QR at its side. Every tile
+   in a group's grid is one height (grid-auto-rows: 1fr), and the groups match: the name
+   keeps two lines and the row under it the 🏷️'s height, so a found tile and one not yet found
+   are the same height; an Extra and a spool loaded from here have a line more, where FCC
+   has them. */
+.fcc-audit-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(16.25rem, 1fr));
+    grid-auto-rows: 1fr;
+    gap: 6px;
+}
+.fcc-audit-tile-cell {
+    --fcc-audit-tag: 2rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 1fr auto;
+    min-width: 0;
+    box-sizing: border-box;
+    /* Two lines of name, the grams' line and the row under them, whatever the name: a short
+       name's tile is as tall as a long one's, its grams right under its name and its swatch
+       beside them. Its borders, the press area's top padding, the row's padding and the 🏷️
+       (or the row as tall), from the rules below. */
+    min-height: calc(18px + 0.375rem + 2.5 * var(--fcc-fs-row) + 1.5 * var(--fcc-fs-small) + var(--fcc-audit-tag));
+    border: 1px solid var(--fcc-tile-border, #555);
+    border-radius: 6px;
+    background: var(--fcc-tile-bg, #1a1a1a);
+    color: #fff;
+    cursor: default;
+}
+/* A finger: the 🏷️ is a 44 px target at least (WCAG's size), and the row under the name as
+   tall, on every tile, so the tiles stay one height. */
+@media (pointer: coarse) {
+    .fcc-audit-tile-cell { --fcc-audit-tag: max(44px, 2.75rem); }
+}
+/* The press area: the swatch, the name, the grams, where FCC has it. A found tile's is the
+   cell's top row; a tile not yet found's is the whole cell, its row under the name and its
+   QR inside it. */
+.fcc-audit-tile-box {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "swatch text";
+    align-items: center;
+    align-content: start;
+    column-gap: 10px;
+    min-width: 0;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 8px 8px 0;
+    border: 0;
+    border-radius: 5px 5px 0 0;
+    background: var(--fcc-tile-bg, #1a1a1a);
+    color: #fff;
+    font: inherit;
+    line-height: 1.5;
+    text-align: left;
+}
+.fcc-audit-tile-cell[data-audit-kind="missing"] > .fcc-audit-tile-box {
+    grid-row: 1 / -1;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "swatch text qr" "status status qr";
+    align-content: space-between;
+    padding: 8px;
+    border-radius: 5px;
+}
+button.fcc-audit-tile { cursor: pointer; }
+button.fcc-audit-tile:hover { filter: brightness(1.3); }
+/* The ring goes round the whole tile, its row under the name too. */
+button.fcc-audit-tile:focus-visible { outline: none; }
+.fcc-audit-tile-cell:has(> .fcc-audit-tile:focus-visible),
+.fcc-audit-tile-cell:has(> .fcc-audit-tile.kb-active) {
+    outline: 2px solid #0ff;
+    outline-offset: 1px;
+}
+.fcc-audit-tile-swatch {
+    grid-area: swatch;
+    display: flex;
+    align-items: center;
+    line-height: 0;
+}
+.fcc-audit-tile-text {
+    grid-area: text;
+    display: block;
+    min-width: 0;
+}
+.fcc-audit-tile-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
+    color: #fff;
+    font-weight: 600;
+    font-size: var(--fcc-fs-row);
+}
+.fcc-audit-tile-detail {
+    display: block;
+    font-size: var(--fcc-fs-small);
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.75);
+}
+.fcc-audit-tile-where {
+    display: block;
+    font-size: var(--fcc-fs-small);
+    line-height: 1.5;
+    color: #fff;
+    overflow-wrap: anywhere;
+}
+/* The row under the name: the tile's state, and what a label needs ("found, no label read",
+   "needs a label"). As tall as the 🏷️ on every tile (content-box). */
+.fcc-audit-tile-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    align-content: center;
+    gap: 0.125rem 0.75rem;
+    min-width: 0;
+    box-sizing: content-box;
+    min-height: var(--fcc-audit-tag);
+    line-height: 1.25;
+}
+.fcc-audit-tile-cell > .fcc-audit-tile-status {
+    grid-column: 1;
+    grid-row: 2;
+    padding: 0.375rem 0.5rem 8px 8px;
+}
+.fcc-audit-tile-cell[data-audit-kind="trail"] > .fcc-audit-tile-status { grid-column: 1 / -1; }
+.fcc-audit-tile-box > .fcc-audit-tile-status {
+    grid-area: status;
+    padding-top: 0.375rem;
+}
+.fcc-audit-tile-badge {
+    font-size: var(--fcc-fs-label);
+    white-space: nowrap;
+}
+.fcc-audit-tile-word {
+    min-width: 0;
+    font-size: var(--fcc-fs-small);
+    color: #ffe08a;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+/* An icon on a light fill (a yellow or cyan button), on a small dark round backing
+   (Derek, 2026-11-03, sample 4(ii)): measured, 87% of the 🏷️'s pixels on the yellow Needs
+   a label were within ΔE 25 of it, and the 🔎 on the cyan Load report half lost. The
+   button keeps its fill, its words and its size.
+   The button lays the circle out, never the line of words (Derek, 2026-11-05: "the circle
+   isn't center in the button", "more on the lower end", "just looks a little sloppy"). A
+   button that holds the circle alone (a found tile's 🏷️, a square) centres it both ways: the
+   circle has no margins of its own. Before words, the button's content is a .fcc-ico-row
+   (the dock's Needs a label, Settings' Load report): the circle, a space and its words
+   (.fcc-ico-words) in a flex row, each centred top to bottom. The circle's top and bottom
+   margins keep the button as tall as with its words alone, its left one reaches into the
+   padding so the space to its left is the space above it (within a pixel), the words follow
+   it at one word space (the row's gap, the space a flex row drops), and in a button wider than
+   both (the dock's Needs a label) the two are centred together (Derek, 2026-11-06: tighten
+   the gap, which was twice Load report's). Set
+   in the line of words, as it was, vertical-align: middle put the circle's middle on the
+   words' x-height, 2 px under the button's, and a centred line left it 9.4 px from Needs a
+   label's edge against 6.3 above; the square centred the margins made for words after it,
+   and the circle sat 2.5 px left of its middle. Measured from the layout (its middle within
+   half a pixel of the content box's, both ways in the square and top to bottom beside
+   words) by test_icon_on_dark_circle_js.py. On a phone the dock puts Needs a label's circle
+   back in its line of words (the narrow dock's rule, below).
+   The icon on it is drawn, never an emoji (review 3; Derek, 2026-11-04: "that same label
+   icon not centered in circle thing"): an inline SVG, .fcc-ico-svg (inv_cmd.js TAG_ICON,
+   modals_config.html's magnifier). An emoji is drawn on a slant, each system its own, and
+   the Windows 🏷️'s grey string, which hardly shows on the dark, held its box's middle while
+   its yellow body sat low-left. The tag is drawn slanted as the emoji, with no string, so
+   its body itself is what is centred (Derek, 2026-11-05, (c)). The drawing is as big as its
+   backing, its 32 units the circle, so where it sits in the circle is the drawing's own
+   coordinates (centred on 16, 16).
+   Its ink's box within 1 px and its weight within 0.8 px of the circle's middle, at 1x and
+   2x, at each Text size and with the button a fraction of a pixel off the device's grid,
+   measured from the pixels by test_icon_on_dark_circle_js.py (hermetic) and
+   test_audit_panel_look_58_e2e.py (the real dashboard). At 2x the SVG is painted at whole
+   CSS pixels and its circle at device pixels, so where the circle lands moves the drawing
+   against it by up to half a CSS pixel (measured; no placement of the SVG changed it).
+   `color` is for the contrast guard, should a text icon ever go on it. */
+.fcc-ico-on-light > .fcc-ico-svg {
+    display: block;
+    flex: none;
+    width: 100%;
+    height: 100%;
+}
+.fcc-ico-on-light {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 1.6em;
+    height: 1.6em;
+    border-radius: 50%;
+    background: #1e1e1e;
+    color: #fff;
+    line-height: 1;
+    vertical-align: middle;
+}
+.fcc-ico-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;   /* circle and words centred together in a wide button */
+    column-gap: 0.275em;        /* the word space between them, which a flex row drops */
+}
+.fcc-ico-row > .fcc-ico-on-light { margin: -0.3em 0.05em -0.3em -0.3em; }
+.fcc-ico-row > .fcc-ico-words { flex: 0 1 auto; margin-right: -0.3em; }   /* as far into the padding as the circle's left, so the two balance */
+/* A found tile's own 🏷️ (Derek, 2026-11-03, (a)): its own button, never inside the tile's,
+   at the end of the row under the name (2026-11-04). Marked here: the Needs a label yellow,
+   the tag on its dark backing. A flag up before the audit: a dashed yellow edge. */
+.fcc-audit-tile-tag {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: center;
+    margin: 0.375rem 8px 8px 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: var(--fcc-audit-tag);
+    height: var(--fcc-audit-tag);
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 6px;
+    background: #141414;
+    color: #fff;
+    font-size: var(--fcc-fs-row);
+    line-height: 1;
+    cursor: pointer;
+}
+.fcc-audit-tile-tag:hover { background: #2e2e2e; }
+.fcc-audit-tile-tag:focus-visible {
+    outline: 2px solid #0ff;
+    outline-offset: 1px;
+}
+.fcc-audit-tile-tag[data-audit-tag-state="marked"] { background: #ffc107; border-color: #ffc107; }
+.fcc-audit-tile-tag[data-audit-tag-state="marked"]:hover { background: #ffcd39; border-color: #ffcd39; }
+.fcc-audit-tile-tag[data-audit-tag-state="flagged"] { border: 1px dashed #ffc107; }
+/* "Not scanned (N)" over the spools still to find, then "Found (M)" (Derek, 2026-11-03,
+   sample 5a(i)): under "Expected here", each with its count. */
+.fcc-audit-subhead {
+    font-size: var(--fcc-fs-row);
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.85);
+    margin: 0.125rem 0 0.375rem;
+}
+/* A tile's QR (Derek, 2026-11-03, A1): scanning it finds the spool as a press does.
+   72 px, the size the confirm dialogs' QRs of the same length read at, on a white
+   quiet zone; in px, as qrcode.js draws it. At the tile's side, the whole tile's height
+   (2026-11-04: the tile's words went under its name, so the name has the rest of the
+   width). No caption of its own (aria-hidden): the tile's words and title say it. */
+.fcc-audit-tile-qr {
+    grid-area: qr;
+    align-self: center;
+    display: block;
+    box-sizing: border-box;
+    width: 78px;
+    height: 78px;
+    padding: 3px;
+    background: #fff;
+    border-radius: 4px;
+    line-height: 0;
+}
+.fcc-audit-tile-qr-code { display: block; width: 72px; height: 72px; overflow: hidden; }
+.fcc-audit-tile-qr-code img, .fcc-audit-tile-qr-code canvas { width: 72px; height: 72px; }
+/* The Last found strip's 🖨️ (B). Once the label is queued it says so and does
+   nothing: calm, and no hover that reads as a press. */
+.fcc-audit-queue[aria-disabled="true"],
+.fcc-audit-queue[aria-disabled="true"]:hover,
+.fcc-audit-queue[aria-disabled="true"]:active {
+    color: #a8f0b0;
+    background-color: transparent;
+    border-color: #3f9a4a;
+    cursor: default;
+}
+/* Cancel under the mouse: the app-wide .btn-outline-danger:hover is white on #ff4444,
+   3.41:1. Bootstrap's own danger red is 4.53:1. */
+#fcc-audit-panel-cancel:hover {
+    background-color: #dc3545;
+    border-color: #dc3545;
+}
+
+/* The audit panel (Derek, 2026-11-03, sample 1b): as tall as the window less 8 px above
+   and below, as a question that doesn't fit is. Its tiles scroll in the body; the dock
+   under them never does: the Last found box, then Needs a label, Done... and Cancel
+   Audit, each button over its QR, the three QRs in one row. */
+.fcc-audit-panel {
+    box-sizing: border-box;
+    max-height: calc(100vh - 16px);
+    max-height: calc(100dvh - 16px);
+}
+.fcc-audit-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.fcc-audit-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+/* A window too short for the dock and a tile row (inv_cmd.js's _fitDock): the dock goes
+   in the flow after the tiles, and the list and the dock scroll as one. */
+.fcc-audit-scroll.fcc-audit-scroll-flow { overflow-y: auto; }
+.fcc-audit-scroll.fcc-audit-scroll-flow > .fcc-audit-body {
+    flex: 0 0 auto;
+    overflow: visible;
+}
+.fcc-audit-dock {
+    flex: 0 0 auto;
+    container-type: inline-size;
+    margin-top: 0.5rem;
+    padding-top: 0.625rem;
+    border-top: 1px solid #6c757d;
+}
+.fcc-audit-dock:empty { display: none; }   /* before the panel's first answer */
+.fcc-audit-dock-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(3, minmax(6.5rem, 9.5rem));
+    grid-template-rows: auto auto auto;
+    column-gap: 0.75rem;
+    row-gap: 0.25rem;
+}
+.fcc-audit-dock-info {
+    grid-column: 1;
+    grid-row: 1 / span 3;
+    display: flex;
+    min-width: 0;
+}
+.fcc-audit-dock-info > .fcc-audit-strip { flex: 1 1 auto; min-width: 0; }
+/* Each column is the grid's three rows (a subgrid), so its button, QR and caption line
+   up with the others': the three QRs in one row. */
+.fcc-audit-dock-col {
+    grid-row: 1 / span 3;
+    display: grid;
+    grid-template-rows: subgrid;
+    row-gap: 0.25rem;
+    justify-items: center;
+    align-items: start;
+    min-width: 0;
+    text-align: center;
+}
+.fcc-audit-dock-col > .btn { width: 100%; white-space: normal; }
+.fcc-audit-dock-need {
+    padding: 0.375rem;
+    background: #101d26;
+    border: 1px solid #0cf;
+    border-radius: 6px;
+}
+/* Done's and Cancel's QRs, 90 px as generateSafeQR draws them, on a 4 px white quiet
+   zone. The box holds that size before it draws, two frames later. */
+.fcc-audit-dock-qr {
+    display: inline-block;
+    box-sizing: border-box;
+    min-width: 98px;
+    min-height: 98px;
+    background: #fff;
+    padding: 4px;
+    border-radius: 4px;
+    line-height: 0;
+}
+.fcc-audit-dock-cap { color: rgba(255, 255, 255, 0.75); }
+/* A narrow dock (a phone; the same point at every Text size): the Last found words take
+   the first row and the three columns the second, their captions dropped (the button
+   over each QR says what it does). */
+@container (max-width: 36rem) {
+    .fcc-audit-dock-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-rows: auto auto auto auto;
+        column-gap: 0.5rem;
+    }
+    .fcc-audit-dock-info { grid-column: 1 / -1; grid-row: 1; }
+    .fcc-audit-dock-col { grid-row: 2 / span 3; }
+    .fcc-audit-dock-need { padding: 0.25rem 0.125rem; }
+    .fcc-audit-dock-col > .fcc-audit-strip-cap,
+    .fcc-audit-dock-col > .fcc-audit-dock-cap { display: none; }
+    .fcc-audit-dock-col > .btn { padding: 0.25rem 0.375rem; line-height: 1.25; }
+    /* The three buttons one height (Derek's look of 2026-11-04: on a phone Done… was 30 px
+       against 45 and 50 for Needs a label and Cancel Audit, which wrap to two lines): each
+       starts where the Needs a label box's padding leaves its button, stretches to the
+       row's height, and centres its words in it (.fcc-audit-dock-words, one flex item, so
+       they wrap as they did). */
+    .fcc-audit-dock-done,
+    .fcc-audit-dock-cancel { padding-top: 0.25rem; }
+    .fcc-audit-dock-col > .btn {
+        align-self: stretch;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    /* Needs a label's circle goes back into the line of words here, as before 2026-11-05:
+       its words wrap to two lines, and a circle kept beside them couldn't wrap away from
+       "Needs" at Extra Large, so the button ran out of its column (8.8 px past it at 360 px
+       wide). It rides their first line (vertical-align: middle). */
+    .fcc-audit-dock-col .fcc-ico-row { display: block; }
+    .fcc-audit-dock-col .fcc-ico-row > .fcc-ico-words { margin-right: 0; }
+}
+/* The Last found box, in the dock. */
+.fcc-audit-strip {
+    padding: 0.5rem 0.75rem;
+    background: #101d26;
+    border: 1px solid #0cf;
+    border-radius: 6px;
+}
+.fcc-audit-strip-title {
+    font-size: var(--fcc-fs-label);
+    font-weight: bold;
+    color: #7fe8ff;
+}
+/* Its first line: "Last found", and "↩ Put back" at its end (P7). */
+.fcc-audit-strip-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem 0.5rem;
+}
+.fcc-audit-strip-spool {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+    color: #fff;
+    font-weight: 600;
+    font-size: var(--fcc-fs-row);
+}
+/* The name wraps rather than being cut: the colour is the part cut, and a touch
+   screen can't show a title. */
+.fcc-audit-strip-name { min-width: 0; overflow-wrap: anywhere; }
+.fcc-audit-strip-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.75rem;
+    margin-top: 0.25rem;
+    font-size: var(--fcc-fs-small);
+    color: #ffe08a;
+}
+.fcc-audit-strip-status > span { min-width: 0; overflow-wrap: anywhere; }
+.fcc-audit-strip-none .fcc-audit-strip-status { color: rgba(255, 255, 255, 0.85); }
+/* The QR draws two frames after each redraw, 80 px in px as generateSafeQR is asked for
+   it. The box holds that size meanwhile. */
+.fcc-audit-strip-qr {
+    display: inline-block;
+    box-sizing: border-box;
+    min-width: 88px;
+    min-height: 88px;
+    background: #fff;
+    padding: 4px;
+    border-radius: 4px;
+    line-height: 0;
+}
+.fcc-audit-strip-cap {
+    font-size: var(--fcc-fs-label);
+    color: rgba(255, 255, 255, 0.85);
+}
 
 /* L202 — Edit Filament > Import-from-External collapse panel.
    Bug: during the 350ms Bootstrap height transition, the Source <select>

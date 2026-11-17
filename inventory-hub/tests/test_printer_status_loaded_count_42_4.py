@@ -27,10 +27,14 @@ PRINTER_MAP = {"XL-1": {"printer_name": "XL", "position": 0},
 
 
 def _section(by_tid):
-    with patch.object(routes_state_pulse.locations_db, "get_active_printer_map", return_value=PRINTER_MAP), \
+    # load_locations_list too: the section reads the rows for each printer's own
+    # id, which nothing here asserts (no rows, not the run's copy of dev's file).
+    with patch.object(routes_state_pulse.locations_db, "load_locations_list", return_value=[]), \
+         patch.object(routes_state_pulse.locations_db, "get_active_printer_map", return_value=PRINTER_MAP), \
          patch.object(routes_state_pulse.config_loader, "load_config", return_value={}), \
          patch.object(routes_state_pulse.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(routes_state_pulse.spoolman_api, "bucket_spools_by_location", return_value=by_tid), \
+         patch.object(routes_state_pulse.spoolman_api, "get_all_spools", return_value=[]), \
          patch.object(routes_state_pulse.locations_db, "get_bindings_for_machine", return_value={"toolheads": {}}), \
          patch.object(routes_state_pulse.prusalink_api, "get_printer_state", return_value=None):
         out = routes_state_pulse._pulse_section_printer_status()

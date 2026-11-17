@@ -19,6 +19,21 @@ let state = {
     lastScannedLoc: null,
     auditActive: false,
     lastAuditState: null,
+    // Group 58: what this page knows of the audit beside the flag above, which
+    // _syncAuditSignal and the page's own requests own (inv_cmd.js): the place
+    // ('' until one is scanned) and when it was last learned (page clock: the
+    // sentAt of the answer that said so, so an answer sent before that can't take
+    // it back), its id (the heartbeat and the panel's poll) and idle limit, the
+    // last audit this page's own request ended, how many of its requests are
+    // on their way, and when it last changed its mind (page clock), so an
+    // answer sent before that can't undo it.
+    auditLocation: '',
+    auditLocationAt: 0,
+    auditId: null,
+    auditIdleMin: null,
+    auditEndedHere: null,
+    auditRequestsOut: 0,
+    auditChangedAt: 0,
     // L298 Phase 2 — bulk-move scan session. `bulkMoveActive` mirrors the
     // backend's session flag from the /api/logs heartbeat; `bulkMoveStage`
     // (idle | awaiting_source | awaiting_dest | preview) drives the deck QR's
@@ -38,6 +53,25 @@ let state = {
     pendingConfirm: null,
     pendingSafety: null
 };
+
+// --- A HELD ENTER PRESSES ONCE (Group 50.6) ---
+// Chrome clicks a focused button again on every auto-repeat of a held Enter,
+// and a dialog's own Enter handler answers each repeat too, so a key held a
+// moment too long answered the NEXT dialog under it: "Continue Anyway" on a
+// printing head, a Quick-Swap, the slot picker's ⭐, a slot bound from the
+// bind picker's first row. A scanner never auto-repeats, so a repeated Enter
+// is always a person's held key, and outside a text area (where it types new
+// lines) it does nothing at all. On window in the capture phase, registered
+// before any other key listener, so no handler on the page sees it. (A page
+// with no window events, such as the tests' node harness, has nothing to guard.)
+if (typeof window.addEventListener === 'function') {
+    window.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || !e.repeat) return;
+        if (e.target && e.target.tagName === 'TEXTAREA') return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }, true);
+}
 
 // --- SCAN-IN-FLIGHT (the one canonical definition) ---
 // "Is a barcode scanner mid-payload right now?" A scanner types its payload as
@@ -61,6 +95,40 @@ const isScanInFlight = () => {
 };
 window.isScanInFlight = isScanInFlight;
 
+// --- A SCAN STILL ARRIVING (Group 57 review, rounds 3 to 5) ---
+// For a handler that claims a printable key a scan can carry: '/' (the global
+// search's key, fab_drag.js; the Low stock list's filter and its reason dialog,
+// inv_stock.js), since a Prusament spool QR is a URL ending in '/'; '?' (the
+// shortcut list); the letter shortcuts (Q, Shift+B, the wizard's Shift+E /
+// Shift+C). isScanInFlight's 500 ms runs from a scan's FIRST key, and a slower
+// scanner (about 12 ms a key or more) is still typing a 45-character URL after
+// it: a '/' late in the URL read as a person's, was claimed, and the reason
+// dialog then took the scan's Enter for a person's and saved an exclusion. So
+// this also says yes while the buffer already looks like a scan
+// (looksLikeScanPayload: a ':' or '/' in it, or "http" first), however slowly
+// it came and however long the scanner paused, up to the accumulator's 2 s
+// reset (scripts.html). Every FCC label and QR has its ':' before the '/' and
+// '?' these handlers claim ("https:" before a URL's first '/'), and before any
+// Q or B ("LOC:" before a slot label's 'B'). A label's own letters before its
+// ':' can still reach a letter shortcut (the C of LOC: and CMD:, the E of LEG:,
+// the D of ID:, CMD: and OLD:), which must leave the scan whole: the wizard's
+// toggles take no key out of it, and the Quick-Weigh's D reads the start of a
+// label (weight_entry.js, round 6). Keys a person left (a stray letter, the '?'
+// that opened the shortcut list) don't look like one, so they hold nothing off
+// once 500 ms have passed. Round 3 measured the pause (the last key under 500 ms ago), and
+// a scanner that stalled half a second before the URL's last '/' still saved an
+// exclusion; round 4 counted any two characters, and two keys a person left
+// held off Q, Shift+B, '/' and the wizard's toggles for 2 s, each blocked press
+// restarting it (round 5). For a printable key only: whose Enter it is stays
+// enterIsAScan's question.
+const scanIsArriving = () => {
+    if (isScanInFlight()) return true;
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer.trim() : '';
+    return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
+};
+window.scanIsArriving = scanIsArriving;
+
 // --- SCANNER BURST (the accumulator's barcode test, as a predicate) ---
 // "Did what is in scanBuffer arrive at scanner speed?" The accumulator
 // (scripts.html) calls a payload 'barcode' when it lands in under 150ms, and
@@ -79,14 +147,20 @@ window.isScannerBurst = isScannerBurst;
 // --- WHOSE ENTER IS IT? (Group 40 review, BD-2) ---
 // For a dialog that answers its focused button on Enter yet must leave a scan's
 // Enter to the accumulator (scripts.html), which hands the payload to the open
-// question: two or more characters in the scan buffer (a slower scanner's label
-// still arriving), one in flight (under 500 ms), a scanner-speed burst, or a
-// buffer that looks like a scan payload. A person's Enter on a focused button
-// finds the buffer empty. The slot picker's rule (slot_picker.js, D1).
+// question: two or more characters in the scan buffer that aren't blank (a
+// slower scanner's label still arriving, a bare number's included), one in
+// flight (under 500 ms), a scanner-speed burst, or a buffer that looks like a
+// scan payload. A person's Enter on a focused button finds the buffer empty.
+// The slot picker's rule (slot_picker.js, D1). Blanks are nobody's scan: two
+// Spaces a button press left made a person's Enter a scan of "  " (Group 57
+// review, round 5). Also the Enter right behind a scan's own (under 100 ms): a
+// scanner set to end with CR LF sends two, and the second pressed the focused
+// button (Group 50 review, with Enter now pressing buttons).
 const enterIsAScan = () => {
     const st = (typeof state !== 'undefined') ? state : window.state;
     const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
-    if (buf.length >= 2) return true;
+    if (st && st.lastScanEnterAt && Date.now() - st.lastScanEnterAt < 100) return true;
+    if (buf.trim().length >= 2) return true;
     if (isScanInFlight() || isScannerBurst()) return true;
     return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
 };
@@ -171,7 +245,57 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // mounted on the same id over an unanswered one replaces it, and the older one
 // is settled as superseded (`onCancel({superseded: true})`), so its host
 // listener, QR session and scan hold-off never outlive its DOM.
+// The three-way's words can be a door's own (Group 58, the audit's Done; left out,
+// each is the default above): `cancelLabel` and `cancelVerb`, the Cancel button and
+// what the hint says Enter and Esc do on it; `loadVerb`, the same for the yes;
+// `loadCaption` and `cancelCaption`, the QRs' captions. `sections`
+// ([{heading, lines: [{text, where}], more, wrap}]) are lists under `msg`, escaped here.
+// A line never wraps and `more` counts the lines left out, so a door names a few
+// and a count: fccFitQuestion scrolls the whole question, QRs included, and a
+// scanner can't read a QR that has scrolled away. A list whose lines can be long asks
+// to wrap (`wrap: true`; made for Done's question, Derek's C, review of 7e3720f P-3,
+// which has drawn colour tiles instead since his second look, so no door sends it
+// now): a line that fits is drawn as one row still, and one that doesn't keeps its
+// name whole and puts its `where` under it, nothing cut (a touch screen can't read a
+// line's title).
+// `armAfterMs` (Group 58 review; default 0, every other door as it was): the yes
+// button's CLICK does nothing until that long after the mount. The question can open
+// with its yes under the pointer, and the second click of a double click on the
+// button that asked it then answered a question nobody had read (a whole batch
+// parked). Enter and the QRs are no second click, so they don't wait.
+// A list of every spool, as colour tiles (`tiles: true` on a section; Done's question,
+// Derek, 2026-11-03: "display the spools like we did in the audit window ... a vibrant
+// list of data where an out of place color might spark a memory"): its lines are
+// fccSpoolTileHtml's tiles ({text, detail, where, color, color_direction}), `tone` the
+// section's look, and none is left out. The lists sit one above the other, the tiles of
+// each in a grid where the question has the room and in one column on a phone. A
+// question too tall for the window scrolls its lists alone (.fcc-apc-lists-scroll), so
+// its title, words, buttons and QRs stay in view, and only then: a question that fits
+// is no scroller (fccFitQuestion's rule). Scrolling, the lists are a stop in the Tab
+// order that the arrow and page keys scroll, and Enter there does what the hint says.
 const _openMoveConfirms = {};
+
+// --- A SPOOL AS A COLOUR TILE (Group 58; Derek, 2026-11-03) ---
+// The audit panel's look for a spool in a list nobody presses: Done's question and the
+// audit's report window. Its swatch (makeSwatchHtml, as the panel's tiles), its name
+// (wrapping, never cut: a touch screen can't show a title), a small line (its grams and
+// slot), where it is or why it stays in amber, and a tag (a label it needs). Not a
+// button. `t`: {text, detail, where, tag, color, color_direction}; `tone`: its colours
+// (global.css .fcc-spool-tile[data-tone]: missing, found, extra, trail, stay, failed).
+// Every word is escaped here.
+const fccSpoolTileHtml = (t, tone = '') => {
+    const row = t || {};
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const swatch = (typeof window.makeSwatchHtml === 'function')
+        ? window.makeSwatchHtml(row.color, row.color_direction || 'longitudinal', { size: 28, borderColor: '#444' }) : '';
+    const line = (cls, text) => (text ? `<span class="${cls}">${esc(text)}</span>` : '');
+    return `<div class="fcc-spool-tile"${tone ? ` data-tone="${esc(tone)}"` : ''}>${swatch}`
+        + `<span class="fcc-spool-tile-text">${line('fcc-spool-tile-name', row.text)}${line('fcc-spool-tile-detail', row.detail)}`
+        + `${line('fcc-spool-tile-where', row.where)}${line('fcc-spool-tile-tag', row.tag)}</span></div>`;
+};
+window.fccSpoolTileHtml = fccSpoolTileHtml;
 
 // --- KEEP A BOX ID WHOLE (review, 2026-10-22) ---
 // A button label that wraps on a phone may break a line after any hyphen:
@@ -194,6 +318,13 @@ window.fccKeepWhole = fccKeepWhole;
 //    coming from…" was 667 px high on a 360 x 640 phone at Extra Large). Only
 //    then: a scroller draws its text without the screen's sub-pixel smoothing
 //    (greyscale, not ClearType), so a question that fits keeps it.
+//  - a question of tiles (confirmActivePrint's `tiles` sections, .fcc-apc-tiled)
+//    scrolls its lists alone instead (.fcc-apc-lists-scroll), its title, words,
+//    buttons and QRs in view, while that leaves the lists LISTS_MIN_REM at least
+//    (a row of tiles and its heading, or the whole list when shorter); on a window
+//    too short for even that (a phone held sideways) the whole question scrolls, as
+//    any question does.
+const LISTS_MIN_REM = 5;
 const _fitQuestionNow = (panel) => {
     if (!panel || !panel.classList || typeof panel.getBoundingClientRect !== 'function') return null;
     const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
@@ -206,9 +337,21 @@ const _fitQuestionNow = (panel) => {
         if (off) panel.classList.add('fcc-keep-whole-off');
     }
     panel.classList.remove('fcc-question-scroll');
-    const scroll = panel.getBoundingClientRect().height > vh - 16 + 0.5;
+    const tiled = panel.classList.contains('fcc-apc-tiled');
+    if (tiled) panel.classList.remove('fcc-apc-lists-scroll');
+    let scroll = panel.getBoundingClientRect().height > vh - 16 + 0.5;
+    let lists = false;
+    if (scroll && tiled && typeof panel.querySelector === 'function') {
+        panel.classList.add('fcc-apc-lists-scroll');
+        const box = panel.querySelector('.fcc-apc-sections');
+        const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+        lists = !!box && panel.getBoundingClientRect().height <= vh - 16 + 0.5
+            && box.clientHeight + 0.5 >= Math.min(LISTS_MIN_REM * rem, box.scrollHeight);
+        if (lists) scroll = false;
+        else panel.classList.remove('fcc-apc-lists-scroll');
+    }
     if (scroll) panel.classList.add('fcc-question-scroll');
-    return { off, scroll };
+    return tiled ? { off, scroll, lists } : { off, scroll };
 };
 const fccFitQuestion = (panel) => {
     const now = _fitQuestionNow(panel);
@@ -228,14 +371,70 @@ const fccFitQuestion = (panel) => {
 };
 window.fccFitQuestion = fccFitQuestion;
 
+// Group 55.3 (review, R4-3): the ? button of a question a script draws, for its top right
+// corner (.fcc-help-corner in global.css; the panel is position:relative, and the title
+// keeps clear of it). Its help is the one help_texts.js gives the question's overlay id,
+// as for the ? key (window.fccHelpKeyForOverlayId), so the ? shows exactly where the key
+// gives help; '' when that overlay has none. Called when the question opens.
+window.fccCornerHelpHtml = (overlayId, what = 'question') => {
+    const key = (window.fccHelpKeyForOverlayId && window.fccHelpKeyForOverlayId(overlayId)) || '';
+    if (!key) return '';
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return `<button type="button" class="fcc-help-btn fcc-help-corner" data-fcc-help="${esc(key)}" `
+        + `title="How this ${esc(what)} works (?)" aria-label="Help: how this ${esc(what)} works">?</button>`;
+};
+
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
-                               printing = null, noLoad = false, hint = '' } = {}) => {
+                               printing = null, noLoad = false, hint = '',
+                               cancelLabel = '', cancelVerb = '', loadVerb = '',
+                               loadCaption = '', cancelCaption = '', sections = null,
+                               armAfterMs = 0, keepWhole = false, help = null } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const overlayId = ids.overlay || 'fcc-active-print-confirm-overlay';
+    // Its ? button (Group 55.3): `help`, a help key ('' draws none), else the help
+    // help_texts.js gives this overlay's id, so the ? shows where the ? key gives help:
+    // the move doors' two overlays and the Printer picker's toolhead question. Done's
+    // question has no help, so its markup is as it was. Top right, beside a title its
+    // padding keeps centred and clear of it.
+    const helpKey = help != null ? String(help)
+        : ((window.fccHelpKeyForOverlayId && window.fccHelpKeyForOverlayId(overlayId)) || '');
+    const helpBtn = helpKey
+        ? `<button type="button" class="fcc-help-btn fcc-apc-help" data-fcc-help="${esc(helpKey)}" title="How this question works (?)" aria-label="Help: how this question works">?</button>`
+        : '';
+    // `keepWhole` (Done's question; Derek's look of 2026-11-04): its title and words keep a
+    // place id whole ("SHELF-2-R3", "LR-MDB-1"), as the buttons do, wrapping at spaces.
+    const words = (s) => (keepWhole ? fccKeepWhole(esc(s)) : esc(s));
     const threeWay = !!title;
+    const noVerb = (threeWay && cancelVerb) || 'cancels';
+    const lists = (threeWay && Array.isArray(sections)) ? sections : [];
+    // A question whose lists are tiles (Done's): see `tiles` above.
+    const tiled = lists.some(s => s && s.tiles);
+    const tileSectionHtml = ({ heading = '', lines = [], tone = '' }) => '<div class="fcc-apc-section fcc-apc-section-tiles">'
+        + `<div class="fcc-apc-section-head">${esc(heading)}</div>`
+        + `<div class="fcc-spool-tiles">${lines.map(l => fccSpoolTileHtml(l, tone)).join('')}</div></div>`;
+    const lineSectionHtml = ({ heading = '', lines = [], more = 0, wrap = false }) => `<div class="fcc-apc-section${wrap ? ' fcc-apc-section-wrap' : ''}">`
+        + `<div class="fcc-apc-section-head">${esc(heading)}</div>`
+        + lines.map(({ text = '', where = '' }) => `<div class="fcc-apc-line" title="${esc(where ? `${text} · ${where}` : text)}">`
+            + `<span class="fcc-apc-line-text">${esc(text)}</span>`
+            + `${where ? `<span class="fcc-apc-line-where">${esc(where)}</span>` : ''}</div>`).join('')
+        + `${more > 0 ? `<div class="fcc-apc-more">and ${esc(more)} more</div>` : ''}</div>`;
+    const sectionHtml = (s) => ((s && s.tiles) ? tileSectionHtml(s) : lineSectionHtml(s || {}));
+    // Tiled, the lists are one region that scrolls when the question doesn't fit
+    // (fccFitQuestion), and then a keyboard stop (`tabindex`; Tab reaches it only then).
+    const listsHtml = !lists.length ? ''
+        : (tiled ? '<div class="fcc-apc-sections fcc-apc-sections-tiles" tabindex="0" role="region" aria-label="The spools this question names">'
+            : '<div class="fcc-apc-sections">') + `${lists.map(sectionHtml).join('')}</div>`;
+    // Two lists sit side by side where the window has the room, so the height a
+    // question takes is one list's, and its QRs stay in view. Tiles take the wide
+    // window for more than two of them: three to a row on a laptop.
+    const tileCount = tiled ? lists.reduce((n, s) => n + ((s && Array.isArray(s.lines)) ? s.lines.length : 0), 0) : 0;
+    const width = lists.length
+        ? `width:min(${(lists.length > 1 || tileCount > 2) ? 50 : 35}rem, calc(100vw - 16px)); box-sizing:border-box;`
+        : `max-width:${threeWay ? 35 : 30}rem;`;
     const first = activePrint || (Array.isArray(activePrints) && activePrints[0]) || {};
     const isPrinting = printing != null ? !!printing
         : !!(activePrint || (Array.isArray(activePrints) && activePrints.length));
@@ -246,30 +445,31 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const idAttr = (id) => (id ? `id="${esc(id)}" ` : '');
     const border = (!threeWay || isPrinting) ? '#ff8800' : '#0dcaf0';
     const header = threeWay
-        ? `${isPrinting ? '⚠️' : '🔁'} ${esc(title)}`
+        ? `${isPrinting ? '⚠️' : '🔁'} ${words(title)}`
         : `⚠️ ${esc(first.printer_name || 'A printer')} is ${esc(first.state || 'PRINTING')}`;
     const bodyText = threeWay ? msg : (msg || 'Moving a spool now will disrupt the print. Continue?');
     const buttons = threeWay
         ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${fccKeepWhole(esc(loadLabel || 'Load it instead'))}</button>` : '')
           + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${fccKeepWhole(esc(storeLabel || 'Just store it'))}</button>` : '')
-          + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">Cancel</button>`
+          + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">${esc(cancelLabel || 'Cancel')}</button>`
         : `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">Continue Anyway</button>
                 <button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:120px;">Cancel</button>`;
-    const extras = threeWay
-        ? `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`
-        : '';
+    // The yes / no (a printer is printing) opens on Cancel (Derek, 2026-10-29:
+    // "I don't want an accidental double press to mess things up"), as the
+    // three-way opens on its safe answer: Continue Anyway takes a deliberate
+    // Tab or click.
+    const extras = `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : noVerb} · Esc ${noVerb}</div>`;
     const status = threeWay
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
     const content = `
-        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); max-width:${threeWay ? 35 : 30}rem; text-align:center;">
-            <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
-            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>
+        <div class="fcc-apc-panel${tiled ? ' fcc-apc-tiled' : ''}" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;${helpKey ? ' position:relative;' : ''}">${helpBtn}
+            <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;${helpKey ? ' padding:0 2.5rem;' : ''}">${header}</div>
+            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${words(bodyText)}</div>${listsHtml}
             ${status}
             <div class="fcc-apc-btns" style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">${buttons}</div>
             ${extras}
         </div>`;
-    const overlayId = ids.overlay || 'fcc-active-print-confirm-overlay';
     let handle = null;
     let qrSession = null;
     let settled = false;
@@ -317,7 +517,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         content,
         tier: 'confirm',
         host: host || undefined,
-        initialFocus: threeWay ? (hasStore ? '.fcc-apc-store' : '.fcc-apc-no') : '.fcc-apc-yes',
+        initialFocus: hasStore ? '.fcc-apc-store' : '.fcc-apc-no',
         onEscape: no,
     });
     _openMoveConfirms[overlayId] = superseded;
@@ -325,9 +525,29 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const yesBtn = hasLoad ? ov.querySelector('.fcc-apc-yes') : null;
     const storeBtn = hasStore ? ov.querySelector('.fcc-apc-store') : null;
     const noBtn = ov.querySelector('.fcc-apc-no');
-    if (yesBtn) yesBtn.onclick = yes;
+    // Tiled lists that scroll (fccFitQuestion's .fcc-apc-lists-scroll): a keyboard stop.
+    const listsEl = tiled ? ov.querySelector('.fcc-apc-sections') : null;
+    const listsScroll = () => !!(listsEl && handle && handle.panel && handle.panel.classList
+        && handle.panel.classList.contains('fcc-apc-lists-scroll'));
+    // What Enter does on the lists, as anywhere but a button: the hint says so there too.
+    const otherVerb = hasStore ? 'stores it' : noVerb;
+    const armedAt = Date.now() + armAfterMs;
+    if (yesBtn) yesBtn.onclick = armAfterMs > 0 ? () => { if (Date.now() >= armedAt) yes(); } : yes;
     if (storeBtn) storeBtn.onclick = store;
     if (noBtn) noBtn.onclick = no;
+    // The hint says what Enter does on the button that has the focus (Group 50
+    // review: "Enter cancels" stayed up with the focus on Continue Anyway).
+    const hintEl = ov.querySelector('.fcc-apc-hint');
+    if (hintEl) {
+        // `focus` in the capture phase: mountOverlay's focus guard stops focusin
+        // at the document, before it reaches anything inside the overlay.
+        ov.addEventListener('focus', (e) => {
+            const does = e.target === yesBtn ? (threeWay ? (loadVerb || 'loads it') : 'continues')
+                : (e.target === storeBtn ? 'stores it' : (e.target === noBtn ? noVerb
+                    : (listsEl && e.target === listsEl ? otherVerb : '')));
+            if (does) hintEl.textContent = `Enter ${does} · Esc ${noVerb}`;
+        }, true);
+    }
     // mountOverlay removes the DOM when the host closes; the answer must close
     // too, or its QR session stays armed and a late CMD:CONFIRM still moves.
     if (host && typeof host.addEventListener === 'function') {
@@ -339,20 +559,30 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
             host.removeEventListener('hidden.bs.offcanvas', onHostGone);
         };
     }
+    const helpEl = helpKey ? ov.querySelector('.fcc-apc-help') : null;
     ov.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             // A scan in flight owns this Enter: it terminates the scan (a
             // "Scan to Cancel" QR must never perform the CONFIRM). So does a
-            // slower scanner's buffered payload (a ':' no human types here):
-            // its Enter used to answer the focused button, and in the
-            // three-way that is "Just store it".
-            if (window.isScanInFlight && window.isScanInFlight()) return;
-            const st = (typeof state !== 'undefined') ? state : window.state;
-            const buffered = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
-            if (buffered && window.looksLikeScanPayload && window.looksLikeScanPayload(buffered)) return;
+            // slower scanner's buffered payload: its Enter used to answer the
+            // focused button, and in the three-way that is "Just store it".
+            // enterIsAScan, the dialogs' one rule: a ':' alone (what this
+            // asked) let a slower scanner's bare-number label ("57") through
+            // (Group 57 review, round 4).
+            if (enterIsAScan()) return;
             const ae = document.activeElement;
+            // On the ? button, Enter opens the help: it never stores or cancels.
+            if (helpEl && ae === helpEl) {
+                e.preventDefault(); e.stopPropagation();
+                clearScanBuffer();
+                helpEl.click();
+                return;
+            }
+            // A person's Enter: a key they left in the scan buffer goes with
+            // it, so it can't start the next scan (Group 57 review, round 5).
             if (threeWay) {
                 e.preventDefault(); e.stopPropagation();
+                clearScanBuffer();
                 if (yesBtn && ae === yesBtn) yes();
                 else if (storeBtn && ae === storeBtn) store();
                 else if (ae === noBtn) no();
@@ -360,13 +590,15 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                 else no();
                 return;
             }
-            if (ae === yesBtn) { e.preventDefault(); e.stopPropagation(); yes(); }
-            else if (ae === noBtn) { e.preventDefault(); e.stopPropagation(); no(); }
+            if (ae === yesBtn) { e.preventDefault(); e.stopPropagation(); clearScanBuffer(); yes(); }
+            else if (ae === noBtn) { e.preventDefault(); e.stopPropagation(); clearScanBuffer(); no(); }
             return;
         }
         const arrow = threeWay && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
         if (e.key === 'Tab' || arrow) {
-            const order = [yesBtn, storeBtn, noBtn].filter(Boolean);
+            // Tab reaches the tiles' lists while they scroll (their arrow and page keys
+            // scroll them); ← and → go between the buttons.
+            const order = ((e.key === 'Tab' && listsScroll()) ? [listsEl] : []).concat([yesBtn, storeBtn, noBtn].filter(Boolean));
             const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
             const idx = order.indexOf(document.activeElement);
             const next = idx === -1 ? (back ? order.length - 1 : 0)
@@ -391,10 +623,11 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                 confirmTone: 'warning', cancelTone: 'secondary' }
             : hasLoad
                 ? { host: handle.panel, alignTo, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
-                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmLabel: loadCaption || 'Scan to Load', storeLabel: 'Scan to Store',
+                    cancelLabel: cancelCaption || 'Scan to Cancel', theme,
                     confirmTone: 'warning', storeTone: 'info', cancelTone: 'secondary' }
                 : { host: handle.panel, alignTo, onConfirm: store, onCancel: no,
-                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmLabel: 'Scan to Store', cancelLabel: cancelCaption || 'Scan to Cancel', theme,
                     confirmTone: 'info', cancelTone: 'secondary' });
     }
     // Fitted to the screen: box ids whole where they fit, and a question
@@ -407,7 +640,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // the toast layer (z 11000) sits under this dialog.
         // What a held-off scan is told (processScan): the buttons on screen
         // (Group 40 review, BD-6: a question with no store said "Just store it").
-        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', 'Cancel']
+        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', cancelLabel || 'Cancel']
             .filter(Boolean);
         question = {
             title,
@@ -683,19 +916,20 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 };
 
 // --- SCAN CAPTURE FROM A FOCUSED FIELD ---
-// The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
-// that focuses a text field disarms the scanner. Sometimes dropping the
-// auto-focus is right; sometimes the field genuinely wants the cursor AND the
-// modal genuinely wants to accept scans (Weigh-Out says "scan them now while
-// this window is open" while focusing a weight box; Manage Contents re-focuses
-// its ID field after every add while its own CMD:DONE QR sits below).
+// The global accumulator bails on a field (`INPUT`, a checkbox aside, or
+// `TEXTAREA`), so any modal that focuses a text field disarms the scanner.
+// Sometimes dropping the auto-focus is right; sometimes the field genuinely
+// wants the cursor AND the modal genuinely wants to accept scans (Manage
+// Contents re-focuses its ID field after every add while its own CMD:DONE QR
+// sits below; the Low stock list's filter). A weight box has a rule of its own
+// (installWeightScanCapture, below).
 //
 // This lets such a field keep focus and still hand scanner input to the scan
 // path. Two conditions, BOTH required, so ordinary typing is never hijacked:
 //   1. scanner SPEED — the payload lands in under 150ms, the same threshold the
 //      global accumulator uses to classify barcode vs keyboard;
 //   2. the text does not look like something a human would type HERE — supplied
-//      per-caller, because "not a weight" and "not a spool id" differ.
+//      per-caller, because "not a filter" and "not a spool id" differ.
 //
 // One implementation, not one per modal: the 2026-08-03 audit found the same
 // scan-path defect re-written in four separate places, so new copies of this
@@ -704,11 +938,111 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 //   match(el)          -> is this the field we care about?
 //   isScanPayload(txt) -> is this a scan rather than typing?
 //   onScan(txt, el)    -> what to do with it (default: window.processScan)
-const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
+//   labels             -> (Group 61) for fields no scan belongs in (the location
+//                         editor's: a slower scanner's "LOC:LR-MDB-1" was saved
+//                         as the name). Two more scans, judged on the KEYS typed
+//                         since the box last changed any other way (a click that
+//                         moved the caret, a value set by code, a paste, a
+//                         person's own key such as Backspace or an arrow, or a
+//                         pause of 2 s, the accumulator's reset), never on the
+//                         box's text (Group 61 review: read from the box, a
+//                         label typed with the caret inside the name took the
+//                         name's tail with it, "ID:51" for "ID:5", and a stored
+//                         name that looked like a label went to the scan path on
+//                         a plain Enter):
+//                           - a whole FCC label (window.fccIsLabel) at the end of
+//                             those keys, at any speed, starting at the first of
+//                             them or after a pause (keys a person typed just
+//                             before it stay theirs; "Box ID:3" typed on with no
+//                             pause stays a name); right after a letter, only at
+//                             scanner pace (every key within 80 ms), since a
+//                             person going on with a word after putting a typo
+//                             right is no scan ("Grid:2", its "id:2" after a
+//                             Backspace, review 2);
+//                           - digits alone faster than a person types (3 keys or
+//                             more, each within 40 ms of the last, an Enter as
+//                             fast counted: an old digits-only label "57"), the
+//                             weight capture's rule.
+//                         Its Enter sends it to the scan path, and the box gets
+//                         back its text and caret from before the scan's first
+//                         key. A label is looked for before the burst test, so
+//                         a burst scanner's stall inside one sends it whole. A
+//                         held key's repeats are a person's: a scanner never
+//                         sends one ("Shelf 1111" was sent as spool #111).
+const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false }) => {
     let buf = '';
     let startedAt = 0;
     let lastAt = 0;
     let preScanValue = '';   // what the user had typed BEFORE the burst began
+    // `labels`: the keys typed into the box since it last changed any other
+    // way, each with the box's text and selection before it.
+    const RESET_MS = 2000;          // the accumulator's: keys further apart are two inputs
+    const BURST_MS = 150;           // scanner speed, the accumulator's 'barcode' test
+    const DIGITS_BURST_MS = 40;     // digits closer together than any person types them
+    const SCANNER_PACE_MS = 80;     // a label's keys this close together: no person types one (its ':' takes Shift)
+    const LETTER = /^[A-Za-z]$/;
+    const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
+        'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
+    let run = null;                 // { el, keys: [{ k, t, before, s0, s1 }] }
+    // A number box (Max Spools) or a read-only one has no caret to follow, and
+    // a label's letters never reach it: its keys are judged as they were typed.
+    const caretOf = (el) => {
+        if (el.readOnly) return [null, null];
+        try { return [el.selectionStart, el.selectionEnd]; } catch (_) { return [null, null]; }
+    };
+    // Is the box as the run's last key left it?
+    const inStep = (el, now) => {
+        if (!run || run.el !== el || !run.keys.length) return false;
+        const last = run.keys[run.keys.length - 1];
+        if (now - last.t > RESET_MS) return false;
+        if (last.s0 == null) return true;
+        const [s0, s1] = caretOf(el);
+        return (el.value || '') === last.before.slice(0, last.s0) + last.k + last.before.slice(last.s1)
+            && s0 === last.s0 + 1 && s1 === s0;
+    };
+    // Where a label starts among the keys: the first key from which they read
+    // as one, when it is the run's first or comes after a pause (longer than
+    // the label's own keys, twice over, and than a burst's 150 ms). Right
+    // after a letter (the key before it, or the box's text before the run),
+    // only when its keys came at scanner pace.
+    const labelFrom = (keys) => {
+        const text = keys.map((x) => x.k).join('');
+        for (let k = 0; k < keys.length; k++) {
+            if (!window.fccIsLabel || !window.fccIsLabel(text.slice(k))) continue;
+            let pace = 0;
+            for (let j = k + 1; j < keys.length; j++) pace = Math.max(pace, keys[j].t - keys[j - 1].t);
+            if (k > 0 && keys[k].t - keys[k - 1].t <= Math.max(BURST_MS, 2 * pace)) continue;
+            const prev = k > 0 ? keys[k - 1].k
+                : (keys[0].s0 > 0 ? keys[0].before.charAt(keys[0].s0 - 1) : '');
+            if (LETTER.test(prev) && pace > SCANNER_PACE_MS) continue;
+            return k;
+        }
+        return -1;
+    };
+    // Where digits alone typed faster than a person types start: the last run
+    // of keys at scanner speed is digits only, and 3 of them or more (an Enter
+    // as fast counted) came each within 40 ms of the last.
+    const digitsFrom = (keys, now) => {
+        let i = keys.length - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t < BURST_MS) i--;
+        if (!/^\d+$/.test(keys.slice(i).map((x) => x.k).join(''))) return -1;
+        let j = keys.length - 1;
+        while (j > i && keys[j].t - keys[j - 1].t <= DIGITS_BURST_MS) j--;
+        const fast = keys.length - j + (now - keys[keys.length - 1].t <= DIGITS_BURST_MS ? 1 : 0);
+        return fast >= 3 ? j : -1;
+    };
+    const sendFrom = (e, el, keys, k, now) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const first = keys[k];
+        el.value = first.before;
+        try { if (first.s0 != null) el.setSelectionRange(first.s0, first.s1); } catch (_) { /* no caret */ }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        run = null;
+        const text = keys.slice(k).map((x) => x.k).join('');
+        if (onScan) onScan(text, el);
+        else if (window.processScan) window.processScan(text, now - first.t < BURST_MS ? 'barcode' : 'keyboard');
+    };
     document.addEventListener('keydown', (e) => {
         const el = e.target;
         if (!el || !match(el)) return;
@@ -720,22 +1054,42 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
             const payload = buf;
             const restore = preScanValue;
             buf = ''; startedAt = 0; preScanValue = '';
+            if (labels) {
+                const keys = inStep(el, now) ? run.keys : null;
+                run = null;
+                let k = keys ? labelFrom(keys) : -1;
+                // A burst: the run's last keys (its caret is put back too).
+                if (k < 0 && keys && looksScanned && keys.length >= payload.length
+                    && keys.slice(keys.length - payload.length).map((x) => x.k).join('') === payload) {
+                    k = keys.length - payload.length;
+                }
+                if (k < 0 && keys && !looksScanned) k = digitsFrom(keys, now);
+                if (k >= 0) { sendFrom(e, el, keys, k, now); return; }
+            }
             if (!looksScanned) return;   // a real entry — let the field's own handler run
             e.preventDefault();
             e.stopImmediatePropagation();
             // RESTORE what the user had typed, don't blank the field. The
             // scanner's characters were appended to their in-progress value
             // (this handler doesn't preventDefault on character keys), so
-            // clearing outright silently destroyed an un-submitted weight —
-            // and the Group 31.3 preserve-text snapshot in renderWeighOutList
-            // then captured an already-empty field, so the buffer-updated
-            // redraw could not bring it back either.
+            // clearing outright silently destroyed an un-submitted entry.
             el.value = restore;
             if (onScan) onScan(payload, el);
             else if (window.processScan) window.processScan(payload, 'barcode');
             return;
         }
 
+        if (labels) {
+            if (e.isComposing || e.repeat || e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)) {
+                run = null;
+                // A held key's repeats: a person's, never a scanner's burst.
+                if (e.repeat) { buf = ''; startedAt = 0; preScanValue = ''; return; }
+            } else if (e.key.length === 1) {
+                if (!inStep(el, now)) run = { el, keys: [] };
+                const [s0, s1] = caretOf(el);
+                run.keys.push({ k: e.key, t: now, before: el.value || '', s0, s1 });
+            }
+        }
         if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
         // A gap longer than the scanner threshold means a human — start over,
         // and re-snapshot what is in the field at the moment a burst begins.
@@ -750,11 +1104,383 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
 };
 window.installFieldScanCapture = installFieldScanCapture;
 
+// --- SCAN CAPTURE FROM A WEIGHT BOX (Group 57 review, rounds 5 to 7) ---
+// A weight box keeps the focus while it is open: the Quick-Weigh field
+// (weight_entry.js, from the moment the window opens), the weigh-out list's
+// boxes (inv_weigh_out.js, which says "scan them now while this window is
+// open"), the missing-tare prompt (weight_utils.js) and the post-archive
+// empty-weight prompt (inv_details.js). A scanner types into it, and a number
+// box keeps only a label's digits ("ID:57" reads 57), so its Enter saved a label
+// as a weight: in Gross the spool read empty and Auto Archive archived it, and
+// in a prompt the label became the tare (rounds 5 and 6). Round 5 judged the
+// speed between keys, and a burst scanner's pause before its Enter, a scanner
+// slower than 150 ms a key, or one pause inside the label still saved it. So a
+// weight box judges what was typed:
+//   - A ':' or '/' proves a label: every FCC label but the digits-only ones
+//     has one (ID:, FIL:, LOC:, CMD:, OLD:, LEG:, SPL:, a Prusament URL), and no
+//     weight does. The label starts at its prefix, the letters typed right
+//     before it (only the prefix FCC reads when a person's letter came first,
+//     slower than the label's own keys: a unit's 'g' or a stray 'x' made
+//     "gID:57", round 7; another maker's "PID:57" stays whole, round 8), the
+//     box gets back what it held before them (a number box's own text too: the
+//     E of LEG: stayed in an empty box, round 7), and the label's other keys
+//     never reach the box. Its Enter sends it to the scan path at any speed, as 'barcode'
+//     only when its keys came at scanner speed, the accumulator's test (round
+//     7: a label typed by hand marked the spool's printed label verified). Keys
+//     more than 2 s apart (the accumulator's reset, scripts.html) are two
+//     inputs, and a person's own key (Backspace, an arrow, Tab, a Ctrl
+//     combination) drops it.
+//   - Anything else a weight can't hold, typed at scanner speed (3 keys or
+//     more inside 150 ms: a bare location label, another maker's barcode), is
+//     a scan too, unless it still reads as a weight in grams: with its unit or
+//     a Space ("645.5 g", "645g", " 645.5", as a scale that types its reading
+//     sends it). A kilogram, pound or ounce reading, or a decimal comma, is a
+//     scan: the box is grams and keeps only the digits ("0.645kg" saved 0.645 g
+//     and the spool read empty, round 7).
+//   - Digits alone faster than a person types (3 keys or more, each within 40
+//     ms of the last, an Enter as fast counted: an old digits-only label "57")
+//     are a scan too, never a weight (Derek, 2026-10-28: a scan must never add
+//     to a weight). A reading with a '.', a grams unit or a padding Space stays
+//     a weight at any speed, as a scale that types its reading sends it; only
+//     a scale typing a bare whole number can't be told from such a label: it
+//     is read as a scan, and the scan path looks a bare number up as a spool
+//     id, so a spool with that id joins the scan buffer (and in the weigh-out
+//     list takes the focus, as any scanned spool does); no weight is saved
+//     from it (round 9). Digits a scanner sends while the weigh-out list holds
+//     a reading for a scan it is answering go to the scan buffer, not the
+//     reading.
+// A label split by a focus move is put back together. Its first keys still
+// arriving in the scan buffer when a box takes the focus (or put there by this
+// capture) start the box's label. A label still arriving when its box loses the
+// focus goes back to the scan buffer, and if only its Enter is left, that Enter
+// finishes it in the next weight box. One whose box is redrawn (the weigh-out
+// list redraws on a scan, and on a heartbeat that changes a spool) carries on
+// in the box that took its place, Enter and all (round 7: a burst scanner's
+// Enter came after the redraw, and the scan was lost). The box's own previews
+// follow (an input event), and its own Enter handler sees only a person's Enter.
+// The keys before a label's ':' carry on only in the same spool's box drawn
+// again, never in another spool's (round 9).
+// A weight key (a digit, '.', ',', '+' or '-') typed on another control of a
+// dialog that says so (data-fcc-weight-keys: the Quick-Weigh, the weigh-out
+// list, the two prompts), with no scan arriving, goes into its weight box
+// (the dialog's `fccWeightBox(control)`: the weigh-out list's target, or the
+// row the control is in; else its first): a person who clicked the Auto
+// Archive switch and then typed the reading sent it to the scan path as a
+// spool id, and that spool joined the buffer unseen (round 7). With no box for
+// it, the dialog may keep it (`fccWeightHold`, round 8), and a Backspace there
+// takes the last kept key back (round 9). A scan's first key is a letter,
+// which stays the scan accumulator's.
+// Every weight box has the class fcc-weight-box; the one capture below serves
+// them all.
+//
+// A reading in grams, as a person or a scale types it: a number with an
+// optional sign and '.', and blanks or a grams unit around it ("645.5",
+// "645.5 g", " 645", "645g"). Anything else (a comma, kg, a label's letters)
+// is no reading: NaN. The weigh-out list's text boxes read theirs with it
+// (Group 57 review, round 8).
+const GRAMS_READING = /^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:g|gr|grams?)?\s*$/i;
+window.parseGramsReading = (raw) => {
+    const m = GRAMS_READING.exec(String(raw == null ? '' : raw));
+    return m ? Number(m[1]) : NaN;
+};
+const installWeightScanCapture = ({ match, onScan }) => {
+    const RESET_MS = 2000;     // the accumulator's: keys further apart are two inputs
+    const BURST_MS = 150;      // scanner speed, the accumulator's 'barcode' test
+    const DIGITS_BURST_MS = 40;   // digits closer together than any person types them
+    const LETTER = /^[A-Za-z]$/;
+    const WEIGHT_KEY = /^[0-9.+\-]$/;
+    const WEIGHT_TYPED = /^[0-9.,+\-]$/;      // a person's weight key (a comma for a decimal one)
+    const WEIGHT_WITH_UNIT = GRAMS_READING;
+    // The prefixes the scan path reads (logic.resolve_scan), longest first.
+    const PREFIXES = ['LEGACY', 'SPOOL', 'HTTPS', 'HTTP', 'LOC', 'LEG', 'OLD', 'SPL', 'FIL', 'CMD', 'ID'];
+    const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
+        'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
+    let box = null;         // the box the keys below went to
+    let keys = [];          // its keys since its last Enter or a person's key: { k, t, before }
+    let label = null;       // { text, restore, startAt, lastAt } once a ':' or '/' proved one
+    let handedOff = null;   // { text, startAt, lastAt }: a label this capture put back in the scan buffer
+    let heldAt = 0, heldFrom = 0, heldRun = 0;   // the keys a dialog holds (fccWeightHold): the last one's time, its run
+    const scanState = () => ((typeof state !== 'undefined') ? state : window.state) || null;
+    const scanBuf = () => { const st = scanState(); return st && typeof st.scanBuffer === 'string' ? st.scanBuffer : ''; };
+    const reset = () => { keys = []; label = null; };
+    const putBack = (el, value) => {
+        // A number box reads '' over text it can't parse (the E of "LEG:", a
+        // bare label's dashes), so that is set back too (round 7).
+        if (el.value === value && !(el.validity && el.validity.badInput)) return;
+        el.value = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    // Where a label starts among the letters before its ':' (or '/'): at the
+    // longest prefix the scan path reads that they end with, else at the first
+    // of them (another maker's label).
+    const prefixStart = (letters) => {
+        const up = letters.toUpperCase();
+        const p = PREFIXES.find((x) => up.endsWith(x));
+        return p ? letters.length - p.length : 0;
+    };
+    const ownHandOff = (buf, now) => !!(handedOff && buf && buf === handedOff.text && now - handedOff.lastAt <= RESET_MS);
+    // A scan's keys in the scan buffer that a box which has just got the focus
+    // carries on: this capture's own hand-off, or a scan still in flight. Not
+    // what a person left there (round 7: a '/' typed on a checkbox took the
+    // next reading typed into a weight box).
+    const adoptable = (buf, now) => ownHandOff(buf, now) || !!(buf && window.isScanInFlight && window.isScanInFlight()
+        && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
+    const handOff = () => {
+        const st = scanState();
+        if (st && label) {
+            st.scanBuffer = label.text;
+            st.scanStartTime = label.startAt;
+            clearTimeout(st.bufferTimeout);
+            // The accumulator's own 2 s reset (scripts.html), from the label's last key.
+            st.bufferTimeout = setTimeout(() => { st.scanBuffer = ''; st.scanStartTime = 0; },
+                Math.max(0, RESET_MS - (Date.now() - label.lastAt)));
+            handedOff = { text: label.text, startAt: label.startAt, lastAt: label.lastAt };
+        }
+        reset();
+        box = null;
+    };
+    const send = (e, el, text, restore, startAt, lastAt) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        putBack(el, restore);
+        if (onScan) onScan(text, el);
+        else if (window.processScan) window.processScan(text, lastAt - startAt < BURST_MS ? 'barcode' : 'keyboard');
+    };
+    // A scan typed into the box with no ':' or '/', found at its Enter: the last
+    // run of keys at scanner speed (3 or more inside 150 ms, the accumulator's
+    // test) holding anything a weight can't, or a run of digits alone whose
+    // keys came faster than a person types (each within 40 ms of the last, an
+    // Enter as fast counted, 3 at least): an old digits-only label (Derek,
+    // 2026-10-28: a scan must never add to a weight). What came before it,
+    // slower, is the person's and stays in the box. A reading with a '.', a
+    // grams unit or a padding Space stays a weight at any speed.
+    const burstScan = (now) => {
+        let i = keys.length - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t < BURST_MS) i--;
+        const run = keys.slice(i);
+        const last = run[run.length - 1];
+        if (now - last.t > RESET_MS) return null;
+        const scan = (from) => ({ text: run.slice(from).map((x) => x.k).join(''), restore: run[from].before,
+            startAt: run[from].t, lastAt: last.t });
+        const text = run.map((x) => x.k).join('');
+        if (/^\d+$/.test(text)) {
+            let j = run.length - 1;
+            while (j > 0 && run[j].t - run[j - 1].t <= DIGITS_BURST_MS) j--;
+            const fast = run.length - j + (now - last.t <= DIGITS_BURST_MS ? 1 : 0);
+            return fast >= 3 ? scan(j) : null;
+        }
+        if (run.length >= 3 && last.t - run[0].t < BURST_MS
+            && [...text].some((c) => !WEIGHT_KEY.test(c)) && !WEIGHT_WITH_UNIT.test(text)) return scan(0);
+        return null;
+    };
+    // The weight box a person's weight key on another control of its dialog
+    // goes in: the dialog's `fccWeightBox(control)` when it has one (the
+    // weigh-out list's target, round 8: never just its first box), else its
+    // first. HELD when the dialog kept the key itself (`fccWeightHold`: the
+    // weigh-out list, for a scan it is answering), else null.
+    const HELD = {};
+    const ownBox = (e, t) => {
+        if (e.key.length !== 1 || !WEIGHT_TYPED.test(e.key) || e.ctrlKey || e.altKey || e.metaKey) return null;
+        if (!t.closest || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable
+            || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return null;
+        if (scanBuf()) return null;                  // a scan's key: one is arriving
+        const scope = t.closest('[data-fcc-weight-keys]');
+        if (!scope) return null;
+        const el = typeof scope.fccWeightBox === 'function' ? scope.fccWeightBox(t)
+            : scope.querySelector('.fcc-weight-box:not(:disabled)');
+        if (el && !el.disabled && match(el)) return el;
+        if (typeof scope.fccWeightHold !== 'function') return null;
+        const now = Date.now();
+        if (heldAt && now - heldAt <= DIGITS_BURST_MS && typeof scope.fccWeightUnhold === 'function') {
+            // Held keys a scanner sent (this one within 40 ms of the last):
+            // a scan's, never a reading. They go to the scan buffer and this
+            // key after them, so the scan arrives whole (Derek, 2026-10-28).
+            const burst = scope.fccWeightUnhold(heldRun);
+            const st = scanState();
+            if (burst && st) { st.scanBuffer = burst; st.scanStartTime = heldFrom; }
+            heldAt = 0;
+            heldRun = 0;
+            return null;
+        }
+        if (!scope.fccWeightHold(e.key)) return null;
+        if (!heldAt || now - heldAt > DIGITS_BURST_MS) { heldFrom = now; heldRun = 0; }
+        heldAt = now;
+        heldRun += 1;
+        return HELD;
+    };
+    // A Backspace on another control of a dialog holding keys takes back the
+    // last of them: they are shown nowhere, so a typo is put right blind
+    // (Group 57 review, round 9: '45', Backspace, '25' became 4525).
+    const unholdLast = (e, t) => {
+        if (e.ctrlKey || e.altKey || e.metaKey || !t.closest || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+            || t.isContentEditable || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return false;
+        const scope = t.closest('[data-fcc-weight-keys]');
+        return !!(scope && typeof scope.fccWeightUnhold === 'function' && scope.fccWeightUnhold(1));
+    };
+    document.addEventListener('keydown', (e) => {
+        let el = e.target;
+        if (!el) return;
+        if (!match(el)) {
+            if (e.key === 'Backspace' && unholdLast(e, el)) { e.preventDefault(); e.stopPropagation(); return; }
+            el = ownBox(e, el);
+            if (el === HELD) { e.preventDefault(); e.stopPropagation(); return; }
+            if (!el) return;
+            el.focus();               // the key is typed into the box, which now has the focus
+            e.stopPropagation();      // and the scan accumulator never sees it
+        }
+        const now = Date.now();
+        if (el !== box) {
+            // Its box was redrawn under a label still arriving: it carries on
+            // here, and so do the keys before a label's ':' in the same spool's
+            // box drawn again (round 8: a redraw between them and the ':' sent
+            // ":57" to the scan path, and a text box kept the letters). Not in
+            // another spool's box: what each of those keys found in the old box
+            // would be put back in this one (round 9: a scan's answer moved the
+            // focus mid-prefix, and the old box's reading turned up in the new
+            // spool's). Keys too old to belong to it are dropped below, as
+            // anywhere.
+            const redrawn = !!(box && !box.isConnected);
+            const twin = redrawn && box.dataset && el.dataset && box.dataset.id != null && el.dataset.id === box.dataset.id;
+            if (redrawn && label && now - label.lastAt <= RESET_MS) label.restore = el.value;
+            else if (!(twin && keys.length)) reset();
+            box = el;
+        }
+        // A person's own key: they are typing here, so no label is (one handed
+        // back to the scan buffer included: it took their next key, round 7).
+        // A held key's repeats are a person's too: a scanner never sends one,
+        // and a held digit read as a fast digits-only label (Group 61 review 2).
+        if (e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)
+            || (e.repeat && e.key !== 'Enter')) { reset(); handedOff = null; return; }
+        if (e.key === 'Enter') {
+            let found = null;
+            if (label && now - label.lastAt <= RESET_MS) {
+                found = label;
+            } else if (!keys.length && ownHandOff(scanBuf(), now)) {
+                // The Enter of a label this capture handed back when its box lost
+                // the focus: the label's, not the box's (round 7: the empty-weight
+                // prompt saved its tare on it).
+                found = { text: handedOff.text, restore: el.value, startAt: handedOff.startAt, lastAt: handedOff.lastAt };
+                if (window.clearScanBuffer) window.clearScanBuffer();
+            } else if (keys.length >= 2) {
+                found = burstScan(now);
+            }
+            reset();
+            handedOff = null;
+            if (!found) return;                 // a person's Enter: the box's own handler has it
+            send(e, el, found.text, found.restore, found.startAt, found.lastAt);
+            return;
+        }
+        if (e.key.length !== 1) return;         // Shift, CapsLock, a dead key: nobody's character
+        const lastAt = label ? label.lastAt : (keys.length ? keys[keys.length - 1].t : 0);
+        if (lastAt && now - lastAt > RESET_MS) reset();
+        if (label) {                            // the label's own key: it never reaches the box
+            e.preventDefault();
+            label.text += e.key;
+            label.lastAt = now;
+            return;
+        }
+        const st = scanState();
+        const buf = scanBuf();
+        if (!keys.length && adoptable(buf, now)) {
+            // The label's first keys went to the scan buffer before this box
+            // took the focus: it continues here.
+            e.preventDefault();
+            const own = ownHandOff(buf, now);
+            label = { text: buf + e.key, restore: el.value,
+                startAt: (own ? handedOff.startAt : st.scanStartTime) || now, lastAt: now };
+            handedOff = null;
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            return;
+        }
+        keys.push({ k: e.key, t: now, before: el.value });
+        if (e.key !== ':' && e.key !== '/') return;
+        // A label: from its prefix, the letters typed right before its ':' (or
+        // '/'), and from the scan buffer when they started there.
+        let i = keys.length - 1;
+        while (i > 0 && LETTER.test(keys[i - 1].k) && keys[i].t - keys[i - 1].t <= RESET_MS) i--;
+        const letters = keys.slice(i, keys.length - 1).map((x) => x.k).join('');
+        const lettersLeft = i === 0 && /^[A-Za-z]+$/.test(buf);   // letters in the scan buffer before them
+        const lead = lettersLeft && window.isScanInFlight && window.isScanInFlight() ? buf : '';
+        let from = prefixStart(lead + letters);
+        // Only a person's letters in front are cut off, the one before the
+        // prefix coming slower than the label's own keys: another maker's
+        // label ("PID:57", at any steady pace) stays whole (round 8: it went to
+        // the scan path as ID:57, and #57 joined the buffer).
+        const k = i + from - lead.length;                        // the prefix's first key, if typed here
+        if (k > i) {
+            let pace = 0;
+            for (let j = k + 1; j < keys.length; j++) pace = Math.max(pace, keys[j].t - keys[j - 1].t);
+            if (keys[k].t - keys[k - 1].t <= Math.max(BURST_MS, 2 * pace)) from = 0;
+        }
+        const start = i + Math.max(0, from - lead.length);
+        e.preventDefault();
+        label = { text: lead.slice(Math.min(from, lead.length)) + keys.slice(start).map((x) => x.k).join(''),
+            restore: keys[start].before, startAt: (from < lead.length && st.scanStartTime) || keys[start].t, lastAt: now };
+        keys = [];
+        handedOff = null;
+        // Letters left in the scan buffer are this label's start or nobody's.
+        if (lettersLeft && window.clearScanBuffer) window.clearScanBuffer();
+        putBack(el, label.restore);
+    }, true);   // capture: before the box's own Enter handler and its window's keys
+    document.addEventListener('focusout', (e) => {
+        if (e.target !== box || !label || Date.now() - label.lastAt > RESET_MS) return;
+        // The focus left mid-label (to anything, a box a redraw put in its
+        // place too: Chromium sends a removed box's focusout): the label goes
+        // back to the scan buffer, where the next weight box takes it up, its
+        // Enter included, and the accumulator finishes it anywhere else.
+        handOff();
+    }, true);
+};
+window.installWeightScanCapture = installWeightScanCapture;
+installWeightScanCapture({ match: (el) => !!(el.classList && el.classList.contains('fcc-weight-box')) });
+
+// --- A SCAN'S LAST LABEL (Group 57 review, rounds 6 and 7) ---
+// The label at the end of a scan's text, upper-cased: a box's slot label
+// (LOC:<box>:SLOT:<n>), a location's (LOC:<id>) or a command (CMD:<word>, with
+// its arguments). A key a person left in front of it ("qLOC:…") is not part of
+// it, and a box id that ends in LOC or CMD stays whole: reading from the last
+// "CMD:" made LOC:BOXCMD:SLOT:2 into CMD:SLOT:2, slot 2 of the picker's own box
+// (round 7). A LocationID holds no ':', but it may hold a Space ("GARAGE
+// SHELF", round 8: "LOC:BOX CMD:SLOT:2" still read as CMD:SLOT:2). Anything
+// else comes back whole. The slot picker, the "Record it as coming from…"
+// question and processScan's double-read rule read it.
+const SLOT_LABEL_AT_END = /LOC:[^:]+:SLOT:\d+$/;
+const LOC_LABEL_AT_END = /LOC:[^:]+$/;
+const CMD_LABEL_AT_END = /CMD:[A-Z]+(?::[A-Z0-9_-]+)*$/;
+window.lastScanLabel = (text) => {
+    const whole = String(text == null ? '' : text).trim().toUpperCase();
+    const m = SLOT_LABEL_AT_END.exec(whole) || LOC_LABEL_AT_END.exec(whole) || CMD_LABEL_AT_END.exec(whole);
+    return m ? m[0] : whole;
+};
+
 // A scan payload always carries a prefix marker (`ID:`, `LOC:`, `CMD:`,
 // `FIL:`, `SPOOL:`) or is a URL (Prusament QRs). Nothing a user types into an
 // id/weight box looks like that, which is what makes the distinction safe.
 window.looksLikeScanPayload = (txt) =>
     /[:/]/.test(txt) || /^https?/i.test(txt);
+
+// Is this text one whole FCC label (Group 61)? A prefix the scan path reads
+// (logic.resolve_scan; the weight capture keeps the same list) with something
+// other than a blank after its ':' ("Shelf: top" and "LOC: here" are names),
+// or a web address. A text box's keys are judged with it
+// (installFieldScanCapture's `labels`): where in them a label starts is the
+// capture's question, never this one's ("Grid:2" is no label: "ID" there is
+// inside a word).
+const LABEL_PREFIXES = ['LEGACY', 'SPOOL', 'LOC', 'LEG', 'OLD', 'SPL', 'FIL', 'CMD', 'ID'];
+const WHOLE_LABEL = new RegExp('^(?:(?:' + LABEL_PREFIXES.join('|') + '):\\S.*|https?:\\/\\/\\S+)$', 'i');
+window.fccIsLabel = (text) => WHOLE_LABEL.test(String(text == null ? '' : text));
+
+// --- A SPOOL'S QR ON THE SCREEN (review 3, R3S-1; Derek, 2026-11-04, option (a)) ---
+// What the QR on a spool's card holds: the scan buffer's cards (inv_cmd.js renderBuffer)
+// and the Location Manager's (inv_loc_mgr.js, its ✋ PICK). SPL:<id>, never the printed
+// label's ID:<id>. The scan path reads both as that spool, everywhere (logic.resolve_scan:
+// a move, the buffer, an audit's find, the legacy picker's own-label match), but only a
+// printed label's ID:, read by a scanner, is a label read (routes_scan._is_label_read):
+// it confirms a missing label status and clears a "needs a label" flag. A QR read off the
+// screen proves nothing about the label on the spool: it was the label's own text, so
+// scanning a card confirmed a label in an audit and, outside one, took a flagged spool
+// off the 🏷️ Backlog with no label printed. A label FCC prints keeps ID: (labels_csv.py).
+window.fccSpoolCardQr = (id) => `SPL:${id}`;
 
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
@@ -1049,6 +1775,26 @@ window.isSingleSlotBox = (row) => {
     return raw !== '' && !isNaN(n) && n <= 1;
 };
 
+// --- WHICH TYPES ARE TOOLHEADS (Group 53.1) ---
+// The browser's copy of locations_db.TOOLHEAD_TYPES, and its only one:
+// tests/test_toolhead_types_one_list.py keeps the two equal and fails on another
+// quoted copy of a head Type in the page's scripts, or a test of a Type for a
+// head Type's words (its rules 2 and 3). A row is a head when its Type, trimmed,
+// is exactly one of these, as most backend reads go (the move engine's one-spool
+// rule, locations_db.validate_slot_targets and the slot-label scan's target check
+// compare it untrimmed). Never a
+// substring: a custom "Toolbox" or "MMU Buffer" is no head. Call the helpers
+// when the code runs; never copy the list or keep it from load. The block
+// defines window properties only (a top-level name here would be shared with
+// every module), and the node harnesses lift it out between its two marker lines.
+// @fcc-toolhead-types:begin
+window.TOOLHEAD_TYPES = Object.freeze(['Tool Head', 'MMU Slot', 'No MMU Direct Load']);
+window.isToolheadType = (type) => window.TOOLHEAD_TYPES.includes(String(type == null ? '' : type).trim());
+// A head, or a Printer row (locations_db.PRINTER_ROW_TYPE).
+window.isHeadOrPrinterType = (type) => window.isToolheadType(type)
+    || String(type == null ? '' : type).trim() === 'Printer';
+// @fcc-toolhead-types:end
+
 // A client probe of a head, with the pill and the timeout race (every client
 // probe gets it; doAssign's used to wait on the server with no cap).
 window.checkPrinterForHead = (locId, { timeoutMs = PRINTER_CHECK_TIMEOUT_MS } = {}) => {
@@ -1342,7 +2088,14 @@ window.routeConfirmScan = (text) => {
     // Match the prefix case-insensitively but preserve the session id's
     // case verbatim — sid contains base-36 digits/letters that uppercase
     // would mangle (broke registry lookup in earlier draft).
-    const m = String(text).match(/^[Cc][Mm][Dd]:(CONFIRM|CANCEL|STORE|confirm|cancel|store):(.+)$/);
+    // At the END of the text: a key a person left in the scan buffer in the
+    // last 2 s (a stray letter) sits in front of the QR's payload, and the
+    // dialog's own "Scan to Cancel" did nothing (Group 57 review, round 5).
+    // A session id is "fcc-cqr-<n>-<base 36>" (attachConfirmQRs), always in
+    // lower case, so one read in upper case is the same id: a scanner with
+    // Caps Lock on (it swaps a keyboard wedge's letters) or set to send upper
+    // case read every session QR as nothing (Group 57 review, round 9).
+    const m = String(text).trim().match(/CMD:(CONFIRM|CANCEL|STORE):([A-Za-z0-9_-]+)$/i);
     if (!m) return false;
     const action = m[1].toUpperCase();
     const sid = m[2].trim();
@@ -1350,7 +2103,8 @@ window.routeConfirmScan = (text) => {
     // the most-recently-registered active confirm. The exact-sid path is the
     // safe one. Unscoped matches are NOT supported intentionally so a stale
     // printed QR can't accidentally fire.
-    const entry = window._fccActiveConfirms && window._fccActiveConfirms[sid];
+    const confirms = window._fccActiveConfirms || {};
+    const entry = confirms[sid] || confirms[sid.toLowerCase()];
     if (!entry) return false;
     if (action === 'CONFIRM') entry.onConfirm();
     else if (action === 'STORE') {
@@ -1455,7 +2209,9 @@ const getFilamentStyle = (colorStr, direction = 'longitudinal') => {
         }
     }
 
-    return { frame: frameGrad, inner: innerGrad, border: borderStyle, base: colors[0], isSolid: isSolid };
+    // `text`: the class for text drawn on these colours, the one look
+    // (global.css --fcc-text-halo; Group 50.8): a card puts it on its text.
+    return { frame: frameGrad, inner: innerGrad, border: borderStyle, base: colors[0], isSolid: isSolid, text: 'text-pop' };
 };
 window.getFilamentStyle = getFilamentStyle;
 
@@ -1700,9 +2456,9 @@ const _renderLocationsPayload = (d, read) => {
             // kinds only. Suppressed on printer topology (Printer + toolhead types —
             // their source of truth is the printer-map editor, not the parent_id tree,
             // so a toolhead created via api_save_location would be invisible to
-            // Quick-Swap + print-deduct) and on synthetic/virtual rows.
-            const NO_ADD_CHILD_TYPES = new Set(['printer', 'tool head', 'mmu slot',
-                'no mmu direct load', 'virtual', 'virtual room', 'unknown',
+            // Quick-Swap + print-deduct) and on synthetic/virtual rows. The toolhead
+            // types are window.isToolheadType's (Group 53.1).
+            const NO_ADD_CHILD_TYPES = new Set(['printer', 'virtual', 'virtual room', 'unknown',
                 'spoolman native', 'unassigned']);
             const canAddChild = (r) => {
                 // The synthetic Unassigned/UNKNOWN buckets are identified by id (the
@@ -1711,7 +2467,7 @@ const _renderLocationsPayload = (d, read) => {
                 const idU = String(r.LocationID || '').trim().toUpperCase();
                 if (idU === 'UNASSIGNED' || idU === 'UNKNOWN') return false;
                 const t = String(r.Type || '').trim().toLowerCase();
-                return !!t && !NO_ADD_CHILD_TYPES.has(t);
+                return !!t && !window.isToolheadType(r.Type) && !NO_ADD_CHILD_TYPES.has(t);
             };
 
             // The always-pinned virtual rows live OUTSIDE the tree.
@@ -1867,7 +2623,7 @@ const _renderLocationsPayload = (d, read) => {
                     const t = l.Type || '';
                     if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
                     else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
-                    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
+                    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; } // toolhead-type-ok: a badge colour only
                     // L271 Phase 5 — Room > Wall Shelf > Row > Section. Wall Shelf
                     // + Row are structural groupings; Section is the spool leaf.
                     // Exact matches MUST precede the generic 'Shelf' includes
@@ -1877,7 +2633,7 @@ const _renderLocationsPayload = (d, read) => {
                     else if (t === 'Section') { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
                     else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
                     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
-                    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
+                    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; } // toolhead-type-ok: a badge colour only
                     else if (t.includes('Room')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
                     // [ALEX FIX] Ghostly, Hollow Look for Virtual
                     else if (t.includes('Virtual')) { badgeClass = 'bg-transparent text-light'; badgeStyle = 'border:2px dashed #aaa; box-shadow: inset 0 0 5px rgba(255,255,255,0.2);'; }
@@ -2096,6 +2852,16 @@ const _updateLogPill = (logs) => {
     pill.classList.add('fcc-log-pill-flash');
 };
 
+// What a press in the list says while the list is up (review 3, R3-4: a 📝 Read the report
+// that couldn't open its window said so only in a toast, whose layer is under the list, and
+// drawn where the list is): a line of the list's own, under its title. '' clears it.
+window.logPillNotice = (msg) => {
+    const el = document.getElementById('fcc-log-pill-notice');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.display = msg ? 'block' : 'none';
+};
+
 window.openLogPillOverlay = () => {
     // Snapshot the latest logs and render them in a mountOverlay so the
     // panel sits above any modal stack. Closing marks every entry as seen.
@@ -2116,6 +2882,7 @@ window.openLogPillOverlay = () => {
                     <div style="font-weight:bold; font-size:1.1em; color:#0ff;">📡 Activity Log</div>
                     <button id="fcc-log-pill-close" class="btn btn-sm btn-outline-info">Close</button>
                 </div>
+                <div id="fcc-log-pill-notice" class="fcc-log-pill-notice" role="alert" style="display:none;"></div>
                 <div style="overflow-y:auto; font-family:monospace; font-size:0.85rem;
                             background:#0a0a0a; padding:8px; border:1px solid #333; flex:1 1 auto;">
                     ${rows}
@@ -2148,8 +2915,12 @@ window.openLogPillOverlay = () => {
 // L206: render path extracted to _renderLogsPayload so the bulk-pulse
 // dispatcher can hand pre-fetched data directly into the renderer without
 // triggering another /api/logs round-trip.
-const _renderLogsPayload = (d, force = false) => {
+// `opts.sentAt`: when this answer was asked for, on the page's own clock.
+const _renderLogsPayload = (d, force = false, opts = null) => {
     if (!d) return;
+    // Above the hash check, so an answer it dropped as stale can't leave the
+    // next one, the same text, unread (Group 58).
+    _syncAuditSignal(d, opts);
     // --- NO WIGGLE CHECK ---
     const contentHash = JSON.stringify(d);
     if (!force && state.lastLogHash === contentHash) return;
@@ -2163,6 +2934,12 @@ const _renderLogsPayload = (d, force = false) => {
     // would skip the catch-up render and leave the panel stale.)
     const logsEl = state.logsPaused ? null : document.getElementById('live-logs');
     if (logsEl && d.logs) {
+        // The keyboard on a report line's 📝 Read the report stays on that line's 📝 through
+        // the redraw (Group 58, review 3): every redraw replaces the buttons, so the keyboard
+        // fell to the page, and the report window's Close, which gives the keyboard back to
+        // the 📝 it was asked from, found it gone.
+        const had = document.activeElement;
+        const keep = (had && had !== logsEl && logsEl.contains(had) && had.dataset) ? had.dataset.auditReport : null;
         logsEl.innerHTML = d.logs.map(l => {
             let extraHtml = '';
             let extraClass = '';
@@ -2175,6 +2952,11 @@ const _renderLogsPayload = (d, force = false) => {
             }
             return `<div class="log-${l.type}${extraClass}">[${l.time}] ${l.msg}${extraHtml}</div>`;
         }).join('');
+        if (keep) {
+            const again = Array.from(logsEl.querySelectorAll('.fcc-audit-report-open'))
+                .find((b) => b.dataset.auditReport === keep);
+            if (again) { try { again.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
+        }
     }
     _updateLogPill(d.logs || []);
 
@@ -2183,14 +2965,109 @@ const _renderLogsPayload = (d, force = false) => {
         if (sSpool) sSpool.className = `status-dot ${d.status.spoolman ? 'status-on' : 'status-off'}`;
     }
 
-    if (d.audit_active !== undefined && d.audit_active !== state.lastAuditState) {
-        state.lastAuditState = d.audit_active;
-        state.auditActive = d.audit_active;
-        if (window.updateAuditVisuals) window.updateAuditVisuals();
-    }
-
     _syncBulkMoveSignal(d);
 };
+
+// The page's own clock, which a wall-clock step can't move (the heartbeat's
+// sentAt, Group 57 review).
+const _pageClock = () => ((typeof performance !== 'undefined' && performance && typeof performance.now === 'function')
+    ? performance.now() : Date.now());
+window.fccPageClock = _pageClock;
+
+// The page's own date, for a mark the server stamps with a day: its clock may be
+// UTC, where the evening is already tomorrow.
+window.fccLocalDay = () => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+// Which audit lost a spool (Group 58, spoolman_api.audit_lost_from's answer: `lost_from`,
+// {place, slot, on}; `slot` and `on` are '' on an older note) in the words every
+// surface shows: `where` ("LR-MDB-1 slot 2") and `by` ("the audit of LR-MDB-1 slot 2
+// on 2026-11-01", spoolman_api.audit_lost_words' twin). null when none did.
+window.auditLostWords = (lost) => {
+    if (!lost || !lost.place) return null;
+    const where = lost.slot ? `${lost.place} slot ${lost.slot}` : String(lost.place);
+    return { where, by: `the audit of ${where}${lost.on ? ` on ${lost.on}` : ''}` };
+};
+
+// Which run of FCC an audit's id belongs to: logic.new_audit_id is <boot token>-<n>.
+const _auditRun = (id) => {
+    const text = String(id);
+    const at = text.lastIndexOf('-');
+    return at < 0 ? text : text.slice(0, at);
+};
+
+// An audit this page believed in is gone, and none of its own requests ended
+// it. Says why from the server's word: audit_end names how the last audit ended.
+// None, or an id from another run of FCC, is a restart (the session lives in FCC's
+// memory). A later audit's id from this same run is no restart: the one this page
+// believed in ended elsewhere, and that one after it (a hidden panel hears only
+// the heartbeat, and both can fall between two ticks). An audit that ended under
+// the page matters: the scans it was taking go to the buffer now, and the next
+// location label moves the buffer.
+const _sayAuditEndedUnderPage = (end) => {
+    if (end && end.id != null && end.id === state.auditEndedHere) return;
+    const same = !!end && (state.auditId == null || end.id === state.auditId);
+    const sameRun = same || (!!end && _auditRun(end.id) === _auditRun(state.auditId));
+    const idle = state.auditIdleMin ? `idle for ${state.auditIdleMin} minutes` : 'left idle';
+    const how = !sameRun ? 'FCC restarted' : (same && end.why === 'idle' ? idle : 'elsewhere');
+    const place = (same && end.location) || state.auditLocation || '';
+    const msg = `The audit${place ? ` of ${place}` : ''} ended (${how}): scans go to the buffer again.`;
+    showToast(msg, 'warning', 7000);
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${window.escHtml ? window.escHtml(msg) : msg}`, 'WARNING');
+};
+
+// Group 58: the one owner of what the heartbeat says about an audit, for both
+// its shapes (/api/logs and a paused log's `status`) and the panel's own poll,
+// which sees an end first. It compares against what this page believes, not
+// against the last heartbeat, so a wrong belief heals at the next tick: a refused
+// start used to sit there until a reload, turning the tile into a disguised
+// Cancel. `opts.sentAt` (page clock): an answer asked for before this page last
+// changed its mind says nothing about now, and a heartbeat takes seconds. While
+// one of this page's own requests is out, the "none" may be its own Done or
+// Cancel and its answer will say so: warning here would cry wolf on every
+// scanned Done, because the panel's 2 s poll can land before that answer.
+// Which audit runs, and where, comes from here too (a hidden panel has no poll): a
+// scan is stamped with the id (inv_cmd.js), so an old one would have every scan
+// refused while another audit runs. An answer sent before the place was last learned
+// says nothing about it, or about the id: a heartbeat can take seconds, and a slow one
+// took the place back off the pill.
+const _syncAuditSignal = (src, opts = null) => {
+    if (!src) return;
+    const said = src.audit_active !== undefined ? src.audit_active : src.active;
+    if (said === undefined) return;
+    const active = !!said;
+    const sentAt = opts ? opts.sentAt : null;
+    if (sentAt != null && sentAt < state.auditChangedAt) return;
+    if (!active && state.auditActive && state.auditRequestsOut > 0) return;
+    const first = state.lastAuditState === null;
+    state.lastAuditState = active;
+    if (active && !(sentAt != null && sentAt < state.auditLocationAt)) {
+        if (src.audit_id != null) state.auditId = src.audit_id;
+        if (src.audit_location !== undefined && (src.audit_location || '') !== state.auditLocation) {
+            state.auditLocation = src.audit_location || '';
+            state.auditLocationAt = sentAt != null ? sentAt : _pageClock();
+            if (window.updateAuditPill) window.updateAuditPill();
+        }
+    }
+    if (active === state.auditActive) {
+        if (first && window.updateAuditVisuals) window.updateAuditVisuals();
+        return;
+    }
+    state.auditActive = active;
+    // Two answers can pass each other: the older one mustn't change it back
+    // and have the next tick warn a second time.
+    state.auditChangedAt = sentAt != null ? sentAt : _pageClock();
+    if (!active) {
+        _sayAuditEndedUnderPage(src.audit_end);
+        state.auditLocation = '';
+        state.auditId = null;
+    }
+    if (window.updateAuditVisuals) window.updateAuditVisuals();
+};
+window._syncAuditSignal = _syncAuditSignal;
 
 // L298 Phase 2/3 — sync the bulk-move session so a session started/ended
 // ANYWHERE (another tab, a page reload, the idle watchdog) repaints this tab's
@@ -2229,7 +3106,8 @@ const updateLogState = (force = false) => {
     // Load is unchanged — this is the rate an unpaused dashboard already polls.
     if (_updateLogStateInflight) return;
     _updateLogStateInflight = true;
-    fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force))
+    const sentAt = _pageClock();
+    fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force, { sentAt }))
         .catch(e => console.warn("updateLogState failed:", e))
         .finally(() => { _updateLogStateInflight = false; });
 };
@@ -2356,7 +3234,27 @@ const closeModal = (id) => {
     }
     state.activeModal = null;
 };
-const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; _confirmGeneration++; _showGatingModal('confirmModal'); state.activeModal = 'confirm'; };
+// #confirmModal's message keeps a place id whole (Derek's look of 2026-11-04: Undo Last
+// Move's question read "SHELF-2- / R3"), as fccKeepWhole keeps a button's, and wraps at
+// its spaces. Its text is escaped here, and a line break kept as innerText kept it. An id
+// longer than the line itself (a very long one on a phone at Extra Large) breaks at its
+// hyphens again, measured once the dialog is shown, as fccFitQuestion does a question's.
+const _confirmMsgHtml = (msg) => fccKeepWhole(String(msg == null ? '' : msg)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')).replace(/\r?\n/g, '<br>');
+const _fitConfirmMsg = () => {
+    const el = document.getElementById('confirm-msg');
+    if (!el || !el.classList) return;
+    el.classList.remove('fcc-keep-whole-off');
+    if (el.querySelector('.fcc-keep-whole') && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) {
+        el.classList.add('fcc-keep-whole-off');
+    }
+};
+document.addEventListener('shown.bs.modal', (e) => { if (e.target && e.target.id === 'confirmModal') _fitConfirmMsg(); });
+const requestConfirmation = (msg, cb) => {
+    document.getElementById('confirm-msg').innerHTML = _confirmMsgHtml(msg);
+    _fitConfirmMsg();
+    state.pendingConfirm = cb; _confirmGeneration++; _showGatingModal('confirmModal'); state.activeModal = 'confirm';
+};
 // Take the callback and null it BEFORE running it: a callback that re-prompts
 // synchronously arms a NEW pendingConfirm, which a trailing null would wipe.
 const confirmAction = (y) => { const cb = state.pendingConfirm; state.pendingConfirm = null; closeModal('confirmModal'); if (y && cb) cb(); };
@@ -2492,12 +3390,39 @@ const _computePulseInclude = () => {
             && !(backlogModal && backlogModal.classList.contains('show'))) {
         sections.push('label_backlog');
     }
+    // Group 57.2: the ⚠️ Low stock button's count, worked out on the server
+    // from the same spool and filament reads as label_backlog (no read of its
+    // own). The list itself is still read only when it opens. Not while the
+    // backlog window is open either: label_backlog is left out then, so the
+    // count would read the filament list on its own every tick, for a button
+    // behind that window's backdrop (Group 57 review); it keeps its count.
+    if (document.getElementById('btn-low-stock-count')
+            && !(backlogModal && backlogModal.classList.contains('show'))) {
+        sections.push('low_stock');
+    }
     return { sections, manageId };
 };
 window._computePulseInclude = _computePulseInclude;   // for the node tests
 
 let _pulseInflight = false;
 let _pulseNextTimer = null;
+
+// The title-bar counts a tick was to refresh are stale: FCC didn't answer it
+// (Group 57 review, round 3), or it hasn't after _PULSE_STALE_MS (round 4: a
+// request that hangs, such as a link dropped without closing the connection,
+// never fails, so the counts kept looking fresh, and no other tick goes out
+// while one is in flight). Its answer, if it comes after all, paints as any
+// other: it has the same send time.
+const _PULSE_STALE_MS = 30000;      // past the slowest heartbeat (an offline printer's probes)
+let _pulseStaleMs = _PULSE_STALE_MS;
+const _countsUnanswered = (sections, sentAt) => {
+    if (sections.includes('low_stock') && window._renderLowStockCount) {
+        window._renderLowStockCount(undefined, { sentAt, unreachable: true });
+    }
+    if (sections.includes('label_backlog') && window._renderBacklogCount) {
+        window._renderBacklogCount({ read_ok: false, unreachable: true }, { sentAt });
+    }
+};
 // _scheduleNextPulse owns every setTimeout we use to drive ticks so the
 // visibilitychange handler can cancel-and-reschedule when the tab comes
 // back to focus (otherwise the user would wait up to 30s — the hidden-
@@ -2524,6 +3449,14 @@ const _dashboardPulseTick = () => {
     _pulseInflight = true;
 
     const { sections, manageId } = _computePulseInclude();
+    // When this tick was sent (Group 57 review): its spool list is read before
+    // the printer probes, so its answer can land seconds after a fresher read
+    // the page made meanwhile (the Low stock list's own, a buffer refresh after
+    // a weigh-out), which an older answer must not paint over. On the page's
+    // own clock (performance.now), which a wall-clock step can't move (round
+    // 2), as are the reads it is compared with (inv_stock.js, inv_cmd.js).
+    const sentAt = (typeof performance !== 'undefined' && performance && typeof performance.now === 'function')
+        ? performance.now() : Date.now();
     // Logs stay in the heartbeat even while paused (2026-08-05). Dropping the
     // section used to starve the "N new" pill and every flag riding that
     // payload; the freeze now happens at the render, not the fetch.
@@ -2542,6 +3475,7 @@ const _dashboardPulseTick = () => {
         }
         : { method: 'GET' };
 
+    const staleTimer = setTimeout(() => _countsUnanswered(sections, sentAt), _pulseStaleMs);
     fetch(url, fetchOpts)
         .then(r => r.json())
         .then(payload => {
@@ -2549,16 +3483,12 @@ const _dashboardPulseTick = () => {
 
             // logs / status renderer — handles status dots + audit visuals + log entries
             if (payload.logs) {
-                _renderLogsPayload(payload.logs);
+                _renderLogsPayload(payload.logs, false, { sentAt });
             } else if (payload.status) {
                 // No log entries but still got status — repaint the dot only.
                 const sSpool = document.getElementById('st-spoolman');
                 if (sSpool) sSpool.className = `status-dot ${payload.status.spoolman ? 'status-on' : 'status-off'}`;
-                if (payload.status.audit_active !== undefined && payload.status.audit_active !== state.lastAuditState) {
-                    state.lastAuditState = payload.status.audit_active;
-                    state.auditActive = payload.status.audit_active;
-                    if (window.updateAuditVisuals) window.updateAuditVisuals();
-                }
+                _syncAuditSignal(payload.status, { sentAt });
                 // Same bulk-move sync the logs branch runs — this is the branch a
                 // PAUSED Activity Log takes, and it's the only bulk-move signal
                 // such a tab receives (updateLogState early-returns while paused).
@@ -2584,7 +3514,12 @@ const _dashboardPulseTick = () => {
                 }
             }
             if (payload.label_backlog && window._renderBacklogCount) {
-                window._renderBacklogCount(payload.label_backlog);
+                window._renderBacklogCount(payload.label_backlog, { sentAt });
+            }
+            // Asked for and not answered (an FCC from before the count) marks the
+            // count stale rather than leaving it looking fresh.
+            if (sections.includes('low_stock') && window._renderLowStockCount) {
+                window._renderLowStockCount(payload.low_stock, { sentAt });
             }
             if (payload.printer_status) {
                 // L25 — note finish/cancel edges to arm the fast-poll burst
@@ -2595,7 +3530,7 @@ const _dashboardPulseTick = () => {
                 }
             }
             if (payload.spools_refresh && window._renderSpoolsRefreshPayload) {
-                window._renderSpoolsRefreshPayload(payload.spools_refresh);
+                window._renderSpoolsRefreshPayload(payload.spools_refresh, { sentAt });
             }
 
             // Broadcast for listeners that still poll independently
@@ -2604,9 +3539,18 @@ const _dashboardPulseTick = () => {
             // These do NOT include liveRefreshBuffer — that's now driven
             // directly by the spools_refresh payload above.
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'dashboard_pulse' } }));
+        }, (e) => {
+            // FCC itself didn't answer (the network gone, a restart, an error
+            // page that isn't JSON): the title-bar counts this tick was to
+            // refresh are stale now, and say so, as on a read Spoolman failed
+            // (Group 57 review, round 3: they kept looking fresh). A renderer
+            // that throws above is not this: it is only logged below.
+            _countsUnanswered(sections, sentAt);
+            throw e;
         })
         .catch(e => console.warn("dashboard_pulse failed:", e))
         .finally(() => {
+            clearTimeout(staleTimer);
             _pulseInflight = false;
             _scheduleNextPulse(_pulseInterval());
         });
@@ -2640,6 +3584,9 @@ window._dashboardPulseTickOnce = () => {
 };
 // Expose the current-cadence reader for the cadence test.
 window._pulseInterval = _pulseInterval;
+// How long a tick may hang before the counts say FCC hasn't answered (a test
+// sets it short; no argument puts back the 30 s).
+window._setPulseStaleMsForTest = (ms) => { _pulseStaleMs = Number.isFinite(ms) ? ms : _PULSE_STALE_MS; };
 // L25 fast-poll test hooks — feed synthetic printer_status transitions,
 // read whether the burst is armed, and reset state between tests.
 window._notePrinterStatesForFastPoll = _notePrinterStatesForFastPoll;

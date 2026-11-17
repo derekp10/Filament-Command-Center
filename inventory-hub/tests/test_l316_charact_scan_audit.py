@@ -47,10 +47,17 @@ def _isolated_audit_session():
 # 1. /api/identify_scan — CMD:AUDIT activation.
 # ---------------------------------------------------------------------------
 
-def test_cmd_audit_activates_session_and_returns_clear(client):
+# PIN UPDATED DELIBERATELY (Group 58, 2026-11-02): every audit answer that was
+# {'cmd':'clear'} is now AUDIT_SCAN, on which the page does nothing. 'clear' raised
+# "Clear entire Buffer?" behind the audit panel whenever a spool was buffered, and
+# that hidden prompt ate every later scan, a scanned Done included.
+AUDIT_SCAN = {"type": "command", "cmd": "audit_scan"}
+
+
+def test_cmd_audit_activates_session_and_answers_audit_scan(client):
     """CMD:AUDIT flips AUDIT_SESSION.active on, stamps the idle-watchdog
     timestamp, logs the two kickoff Activity-Log lines, and answers the
-    scanner with {'type':'command','cmd':'clear'} (buffer-wipe signal).
+    scanner with AUDIT_SCAN.
     A pure-move that drops the timestamp stamp would break the 30-min
     idle-timeout watchdog with nothing else going red."""
     before = time.time()
@@ -60,7 +67,7 @@ def test_cmd_audit_activates_session_and_returns_clear(client):
     after = time.time()
 
     assert r.status_code == 200
-    assert r.get_json() == {"type": "command", "cmd": "clear"}
+    assert r.get_json() == AUDIT_SCAN
     assert state.AUDIT_SESSION["active"] is True
     ts = state.AUDIT_SESSION["last_activity_ts"]
     assert before <= ts <= after, f"watchdog ts not stamped fresh: {ts}"
@@ -88,7 +95,7 @@ def test_cmd_audit_during_active_session_is_noop_preserves_state(client):
     in-progress scanned/expected/rogue state. It's a no-op that refreshes the
     idle watchdog and logs an 'already in progress' info line; the user ends the
     audit explicitly via CMD:CANCEL/CMD:DONE. process_audit_scan is NOT called
-    (no delegation) and the response is still {'cmd':'clear'}."""
+    (no delegation) and the response is AUDIT_SCAN."""
     state.AUDIT_SESSION.update({
         "active": True,
         "location_id": "LR-MDB-1",
@@ -103,7 +110,7 @@ def test_cmd_audit_during_active_session_is_noop_preserves_state(client):
         r = client.post("/api/identify_scan",
                         json={"text": "CMD:AUDIT", "source": "barcode"})
 
-    assert r.get_json() == {"type": "command", "cmd": "clear"}
+    assert r.get_json() == AUDIT_SCAN
     pas.assert_not_called()  # no-op, not delegation
     sess = state.AUDIT_SESSION
     assert sess["active"] is True
@@ -121,11 +128,12 @@ def test_cmd_audit_during_active_session_is_noop_preserves_state(client):
 
 def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
     """With an active audit session, an ID:<n> scan must be handed to
-    logic.process_audit_scan and must NOT reach the normal spool branch —
-    even a 'barcode'-source ID: scan (which would otherwise flip the
-    needs_label_print flag via update_spool). The route also refreshes
-    last_activity_ts BEFORE delegating; when the handler reports an error the
-    route now surfaces it (28.C2) rather than answering a bare cmd:clear."""
+    logic.process_audit_scan and must NOT reach the normal spool branch. The
+    route also refreshes last_activity_ts BEFORE delegating; when the handler
+    reports an error the route now surfaces it (28.C2) rather than answering as a
+    scan it took. An audit REFUSED this scan, so no label check runs: a real label
+    read runs one only once the audit has taken the spool (Group 58.2, the next
+    test)."""
     stale = time.time() - 999.0
     state.AUDIT_SESSION.update({
         "active": True,
@@ -146,13 +154,46 @@ def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
 
     # 28.C2 FIX — the audit handler's error status is now propagated to the
     # scanner UI as a renderable {'type':'error'} payload (the frontend toasts
-    # it) instead of being discarded behind a bare cmd:clear.
+    # it) instead of being discarded behind a bare command answer.
     assert r.get_json() == {"type": "error", "msg": "not allowed"}
-    pas.assert_called_once_with({"type": "spool", "id": 10})
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, Group 58 H S2): the route also says how
+    # the scan found its spool (routes_scan._audit_find_how): None for a real label read.
+    pas.assert_called_once_with({"type": "spool", "id": 10}, how=None)
     gs.assert_not_called()   # normal spool branch never ran
     us.assert_not_called()   # label-verify write never ran
     ts = state.AUDIT_SESSION["last_activity_ts"]
     assert ts > stale and before <= ts <= after, "watchdog ts not refreshed"
+
+
+def test_active_audit_runs_the_label_check_once_it_has_taken_the_spool(client):
+    """Group 58.2: the success path of the test above. The audit still gets the scan
+    first, in the same call (plus `how`, Group 58 H S2), then a real label read of a spool with
+    no status is confirmed: the same full-extras write as outside an audit. The rules
+    around it are tests/test_audit_no_label_58.py, on the real write functions."""
+    state.AUDIT_SESSION.update({
+        "active": True,
+        "location_id": "LR-MDB-1",
+        "expected_items": [10],
+        "scanned_items": [],
+        "rogue_items": [],
+        "last_activity_ts": time.time(),
+    })
+    with patch.object(app_module.logic, "process_audit_scan",
+                      return_value={"status": "success"}) as pas, \
+         patch.object(app_module.spoolman_api, "get_spool_answer",
+                      return_value=({"id": 10, "extra": {"container_slot": "2"}}, True)) as read, \
+         patch.object(app_module.spoolman_api, "update_spool", return_value={"id": 10}) as us, \
+         patch.object(app_module.state, "add_log_entry") as log:
+        r = client.post("/api/identify_scan",
+                        json={"text": "ID:10", "source": "barcode"})
+
+    assert r.get_json() == AUDIT_SCAN
+    # PIN UPDATED DELIBERATELY (Group 58 H S2): `how` None, a real label read.
+    pas.assert_called_once_with({"type": "spool", "id": 10}, how=None)
+    read.assert_called_once_with(10)
+    us.assert_called_once_with(10, {"extra": {"container_slot": "2", "needs_label_print": False}})
+    log.assert_called_once_with("✔️ Spool #10 Label Verified", "SUCCESS", "00ff00")
+    assert state.AUDIT_SESSION["found_by"] == {"10": "label"}
 
 
 def test_active_audit_hijacks_location_scan(client):
@@ -169,8 +210,10 @@ def test_active_audit_hijacks_location_scan(client):
         r = client.post("/api/identify_scan",
                         json={"text": "LOC:LR-MDB-1", "source": "barcode"})
 
-    assert r.get_json() == {"type": "command", "cmd": "clear"}
-    pas.assert_called_once_with({"type": "location", "id": "LR-MDB-1"})
+    assert r.get_json() == AUDIT_SCAN
+    # PIN UPDATED DELIBERATELY (Group 58 H S2): the route says how every scan found a
+    # spool; a location scan reads no label, and its `how` goes unused.
+    pas.assert_called_once_with({"type": "location", "id": "LR-MDB-1"}, how="")
     gl.assert_not_called()
 
 
@@ -203,9 +246,12 @@ def test_cmd_cancel_during_audit_ends_session_cleanly(client):
     delegation into the REAL process_audit_scan, which emits the Audit
     Report + 'Audit Mode Ended.' log lines and reset_audit()s. The route's
     pre-delegation timestamp refresh is deliberately ordered BEFORE the
-    handler so the reset wins — final last_activity_ts is back to 0.0."""
+    handler so the reset wins — final last_activity_ts is back to 0.0.
+    PIN UPDATED DELIBERATELY (Group 58): the answer that ended the audit says
+    so (`audit_ended`), so the page can tell its own end from anyone else's."""
     state.AUDIT_SESSION.update({
         "active": True,
+        "audit_id": "boot-7",
         "location_id": "LR-MDB-1",
         "expected_items": [],
         "scanned_items": [],
@@ -220,7 +266,7 @@ def test_cmd_cancel_during_audit_ends_session_cleanly(client):
         r = client.post("/api/identify_scan",
                         json={"text": "CMD:CANCEL", "source": "barcode"})
 
-    assert r.get_json() == {"type": "command", "cmd": "clear"}
+    assert r.get_json() == {**AUDIT_SCAN, "audit_ended": {"id": "boot-7", "why": "cancel"}}
     assert state.AUDIT_SESSION["active"] is False
     assert state.AUDIT_SESSION["last_activity_ts"] == 0.0
     assert any("Audit Report" in c[0] for c in log_calls)

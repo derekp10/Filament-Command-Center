@@ -1,89 +1,15 @@
-import requests
-import re
-import json
+"""Retired 2026-11-16 (Group 68.3): the one-time move of product links out of spool comments.
 
-import os
-import sys
+Its job was done long ago: no prod spool held any comment text when it was retired. update.sh ran it at
+every deploy, where a link typed into a spool's comment since would have become that spool's product link.
 
-# Add inventory-hub to path to import config_loader
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'inventory-hub')))
-import config_loader
+update.sh no longer calls it. This stub stays for the deploy that brings that change: that deploy still runs
+prod's OLD update.sh to its end (git replaces the file with a new one, and bash keeps reading the one it
+opened), and the old update.sh calls this file after the checkout. Delete it (Group 68) once a deploy has
+run an update.sh without that line, and once the TrueNAS cron job is known to run the update.sh in the repo:
+a copy kept anywhere else would still call this file.
 
-SPOOLMAN_IP, _ = config_loader.get_api_urls()
-print(f"🔗 Target Spoolman IP: {SPOOLMAN_IP}")
+It imports nothing and changes nothing.
+"""
 
-def clean_comment(comment_text):
-    if not comment_text:
-        return "", None
-
-    # Regex to find standard HTTP/HTTPS URLs
-    url_pattern = r'(https?://[^\s]+)'
-    
-    urls_found = re.findall(url_pattern, comment_text)
-    
-    if not urls_found:
-        return comment_text, None
-
-    # We just grab the first one we find since we only have one product_url field
-    target_url = urls_found[0]
-    
-    # Clean the URL out of the comment entirely
-    cleaned_comment = re.sub(url_pattern, '', comment_text)
-    # Strip any dangling whitespace or newlines left behind by the removal
-    cleaned_comment = cleaned_comment.strip()
-
-    return cleaned_comment, target_url
-
-def migrate_spool_links():
-    try:
-        print("🔍 Searching for Spools...")
-        resp = requests.get(f"{SPOOLMAN_IP}/api/v1/spool")
-        if not resp.ok:
-            print(f"❌ Failed to reach Spoolman: {resp.status_code}")
-            return
-            
-        spools = resp.json()
-        print(f"📦 Found {len(spools)} Total Spools.")
-        
-        migrated_count = 0
-        
-        for spool in spools:
-            sid = spool.get('id')
-            comment = spool.get('comment', '')
-            extra = spool.get('extra', {})
-            
-            # If there's no comment at all, move on.
-            if not comment:
-                continue
-                
-            new_comment, discovered_url = clean_comment(comment)
-            
-            if discovered_url:
-                print(f"--- Spool #{sid} ---")
-                print(f"   🔗 Found Link: {discovered_url}")
-                print(f"   🧹 Old Comment: '{comment}'")
-                print(f"   ✨ New Comment: '{new_comment}'")
-                
-                # Setup the patch payload
-                # [ALEX FIX] Spoolman strictly requires text strings in the 'extra' dict to be valid JSON strings (wrapped in quotes)
-                extra['product_url'] = f'"{discovered_url}"'
-                
-                payload = {
-                    "comment": new_comment,
-                    "extra": extra
-                }
-                
-                patch_resp = requests.patch(f"{SPOOLMAN_IP}/api/v1/spool/{sid}", json=payload)
-                if patch_resp.ok:
-                    print("   ✅ Migrated Successfully.")
-                    migrated_count += 1
-                else:
-                    print(f"   ❌ Migration Failed: {patch_resp.status_code} - {patch_resp.text}")
-
-        print(f"\n🎉 Migration Complete! Successfully migrated {migrated_count} spools.")
-
-    except Exception as e:
-        print(f"❌ Connection Error: {e}")
-
-if __name__ == "__main__":
-    migrate_spool_links()
+print("migrate_spool_links.py: retired (Group 68.3), nothing to do.")

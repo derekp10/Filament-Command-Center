@@ -235,8 +235,8 @@ def test_a_held_or_doubled_enter_saves_once(page: Page, base_url, reset_dom_stat
 
 
 def test_enter_on_a_focused_button_presses_it(page: Page, base_url, reset_dom_state_js):
-    """The accumulator cancels every Enter outside INPUT/TEXTAREA, which killed
-    Enter on the editor's buttons, and it submitted leftover typeahead letters as
+    """The accumulator cancelled every Enter outside INPUT/TEXTAREA (until Group
+    50.6), which killed Enter on the editor's buttons, and it submitted leftover typeahead letters as
     a scan. Enter on 💾 Save now saves; the stray 't' goes nowhere."""
     be = _open_editor(page, base_url, reset_dom_state_js)
     page.focus("#locModal .modal-footer .btn-primary")

@@ -36,7 +36,7 @@ import pytest
 from playwright.sync_api import Page
 
 from test_printer_status_even_rows_e2e import _layout, _open
-from test_printer_status_tile_name import LONG, SIZES_JS, STRIP_DOTS_JS, TILE_JS
+from test_printer_status_tile_name import LONG, SIZES_JS, STRIP_RINGS_JS, TILE_JS
 
 pytestmark = pytest.mark.usefixtures("require_server")
 
@@ -113,8 +113,12 @@ def test_no_dot_and_the_name_starts_under_the_head_s_label(page: Page, base_url:
 @pytest.mark.parametrize("size", SIZES)
 def test_nothing_else_moves(page: Page, base_url: str, size):
     """Every tile keeps its size and every printer its rows; the empty and
-    the unbound tiles still say so; minimized, every head's chip keeps its
-    dot, first."""
+    the unbound tiles still say so; minimized, every head wears its spool's
+    colours.
+
+    PIN UPDATED DELIBERATELY (Group 50.1, 2026-10-29): folded, a head is a
+    ring on its spool's colours (it was a chip with a dot), and an empty one
+    is hollow."""
     tiles = _page(page, base_url, size)
     got = page.evaluate(SIZES_JS)
     for name, (rows, heights) in D554DC2[size].items():
@@ -127,8 +131,8 @@ def test_nothing_else_moves(page: Page, base_url: str, size):
     assert [tiles[k]["chips"] for k in ("ZE-5", "ZE-7", "ZE-4")] == [["empty"], ["🔗 no bound slot"], ["🔗 no bound slot"]]
     page.locator("#printer-status-widget .fcc-ps-header-bar").click()
     page.wait_for_function("() => document.getElementById('printer-status-widget').classList.contains('collapsed')")
-    chips = {c["th"]: c for c in page.evaluate(STRIP_DOTS_JS)}
-    assert sorted(chips) == sorted(h for p in FLEET.values() for (h, _b, _i) in p["heads"]), chips
-    for k, c in chips.items():
-        assert c["dots"] == 1 and c["first"] and c["w"] >= 11.5, f"{k}'s chip lost its dot at {size}: {c}"
-    assert "gradient" in chips["ZX-4"]["fill"] and "repeating-linear-gradient" in chips["ZX-1"]["fill"], chips
+    rings = {c["th"]: c for c in page.evaluate(STRIP_RINGS_JS)}
+    assert sorted(rings) == sorted(h for p in FLEET.values() for (h, _b, _i) in p["heads"]), rings
+    for k, c in rings.items():
+        assert c["h"] > 0 and c["empty"] == (k not in LOADED), f"{k}'s ring at {size}: {c}"
+    assert "gradient" in rings["ZX-4"]["fill"] and rings["ZX-1"]["empty"], rings

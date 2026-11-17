@@ -9,17 +9,98 @@ window.openBacklogModal = () => {
 let lastBacklogHash = "";
 // Group 52.1a: set once a heartbeat has delivered the count (label_backlog).
 let _backlogCountFed = false;
+// The count the button shows, once one is known.
+let _backlogCount = null;
+
+// Why a count is stale, in the ⚠️ Low stock count's words (inv_stock.js).
+const _BACKLOG_WHY = {
+    spoolman: "Spoolman didn't answer just now",
+    fcc: "FCC couldn't count them just now",
+    unreachable: "FCC didn't answer just now",
+};
+
+// The button: "🏷️ Backlog (53)", its word and brackets spans of their own, which
+// the title bar drops to show "🏷️ 53" (Group 57.3; Settings -> Title bar
+// buttons). Its tooltip and accessible name always say the words. A count a
+// later read couldn't refresh keeps
+// its number with a "?" after it (drawn in the button's padding, taking no
+// room) and a dashed border, as the ⚠️ Low stock count does (global.css; Group
+// 57 review, round 2: on the same failed read one looked fresh, the other
+// stale); "(?)" before any count, never a 0 (Group 52's rule). Its text is
+// written only when it changed: the title bar fits itself again whenever a
+// button's text changes (titlebar_fit.js), and the same count rewritten on
+// every tick refitted it from scratch every 5 s.
+const _paintBacklogCount = (why) => {
+    const btn = document.getElementById('btn-backlog-count');
+    if (!btn) return;
+    const known = typeof _backlogCount === 'number';
+    const n = known ? String(_backlogCount) : '?';
+    const stale = known && !!why;
+    const key = `${n}${stale ? '?' : ''}`;
+    if (btn.dataset.countShown !== key) {
+        btn.dataset.countShown = key;
+        btn.innerHTML = '🏷️<span class="fcc-tb-word"> Backlog</span> <span class="fcc-count-num"><span class="fcc-tb-paren">('
+            + `</span>${n}<span class="fcc-tb-paren">)</span>${stale ? '<span class="fcc-stale-mark">?</span>' : ''}</span>`;
+    }
+    btn.dataset.read = why ? 'failed' : 'ok';
+    if (why) {
+        const said = _BACKLOG_WHY[why] || _BACKLOG_WHY.fcc;
+        const words = known ? `Backlog (${n})?, the last count (${said}). Opens the label backlog.`
+            : `Backlog (?), no count yet (${said}). Opens the label backlog.`;
+        btn.title = words;
+        btn.setAttribute('aria-label', words);
+    } else {
+        const words = known ? `Backlog (${n}). Opens the label backlog.` : 'Backlog: no count yet. Opens the label backlog.';
+        btn.title = words;
+        btn.setAttribute('aria-label', words);
+    }
+};
+
+// The count's two sources, the heartbeat and the backlog window's own read, are
+// kept in order by when each read was sent, as the ⚠️ Low stock count's are
+// (inv_stock.js's _answer; Group 57 review, round 4: whichever landed last
+// painted, so an older failed tick marked the window's newer count stale, and
+// an older read cleared a newer failure). On the page's own clock, as the
+// heartbeat stamps its sends (inv_core.js).
+const _backlogNow = () => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now() : Date.now());
+let _backlogCountAt = -Infinity;   // when the read behind the count shown was sent
+let _backlogTriedAt = -Infinity;   // when the newest read, good or not, was sent
+let _backlogWhy = null;            // why that read had no count (a key of _BACKLOG_WHY), or null
+
+// A read sent at `at` answered `count` (a number), or none and `why`: its
+// count is taken only when it is newer than the one shown, and its success or
+// failure counts only when it is the newest read sent. Returns whether it took
+// the count.
+const _backlogAnswer = (at, count, why) => {
+    const took = typeof count === 'number' && at >= _backlogCountAt;
+    if (took) { _backlogCount = count; _backlogCountAt = at; }
+    if (at >= _backlogTriedAt) {
+        _backlogTriedAt = at;
+        _backlogWhy = typeof count === 'number' ? null : (why || 'fcc');
+    }
+    _paintBacklogCount(_backlogWhy);
+    return took;
+};
 
 // Group 52.1a: the dashboard heartbeat counts the backlog in its label_backlog
 // section (from the tick's own spool-list read plus one filament read), so the
 // button no longer re-reads Spoolman's whole spool and filament lists every 5 s.
-// A section that couldn't read Spoolman (read_ok false) keeps the count shown.
-window._renderBacklogCount = (sec) => {
-    if (!sec || sec.read_ok !== true || typeof sec.count !== 'number') return false;
-    _backlogCountFed = true;
-    const btn = document.getElementById('btn-backlog-count');
-    if (btn) btn.innerHTML = `🏷️ Backlog (${sec.count})`;
-    return true;
+// A section that couldn't read Spoolman (read_ok false) keeps the count shown,
+// marked stale, and so does a heartbeat FCC didn't answer at all ({read_ok:
+// false, unreachable: true}, inv_core.js; round 3). `opts.sentAt`: when that
+// heartbeat was sent (_backlogNow's clock); without it, now. Returns whether it
+// painted a count.
+window._renderBacklogCount = (sec, opts) => {
+    if (!sec || typeof sec !== 'object') return false;
+    const at = opts && Number.isFinite(opts.sentAt) ? opts.sentAt : _backlogNow();
+    if (sec.read_ok === true && typeof sec.count === 'number') {
+        _backlogCountFed = true;
+        return _backlogAnswer(at, sec.count, null);
+    }
+    _backlogAnswer(at, null, sec.unreachable ? 'unreachable'
+        : (sec.read_ok === false && sec.read_error && !sec.error ? 'spoolman' : 'fcc'));
+    return false;
 };
 
 // Group 52.1a: a refresh that fails while the list shows rows keeps them and
@@ -73,16 +154,24 @@ window.fetchBacklog = () => {
         list.innerHTML = `<div class="text-center text-light p-3">Loading backlog...</div>`;
     }
 
+    // The button's count is the whole backlog: a list filtered to spools or
+    // to filaments says nothing about it (round 4: it set the count to what the
+    // filter showed). A failed read of any of them marks it stale, though: it
+    // is the newest read sent, and Spoolman didn't answer it (the route reads
+    // nothing else).
+    const sentAt = _backlogNow();
+    const whole = filter === 'all';
     fetch(`/api/print_queue/pending?filter=${filter}&sort=${sort}`)
         .then(r => r.json())
         .then(data => {
             if (!data.success) {
+                _backlogAnswer(sentAt, null, 'spoolman');
                 _backlogReadFailed(`Error loading backlog: ${data.msg}`);
                 return;
             }
             _backlogNotice('');
             const items = data.items;
-            document.getElementById('btn-backlog-count').innerHTML = `🏷️ Backlog (${items.length})`;
+            if (whole) _backlogAnswer(sentAt, items.length, null);
 
             // --- HASH COMPARISON TO PREVENT UI WIGGLE ---
             const newHash = JSON.stringify(items);
@@ -170,6 +259,12 @@ window.fetchBacklog = () => {
             });
             list.innerHTML = html;
             window.updateBacklogQueueBtn();
+        }, (e) => {
+            // No answer from FCC (no connection, or a page that isn't JSON). A
+            // throw while drawing the list above is not this: the count was
+            // taken already, and it is only reported below.
+            _backlogAnswer(sentAt, null, 'unreachable');
+            throw e;
         })
         .catch(e => {
             console.error(e);

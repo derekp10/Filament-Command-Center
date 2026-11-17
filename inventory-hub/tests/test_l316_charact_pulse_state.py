@@ -52,7 +52,8 @@ def _capture_logs(monkeypatch):
 
 def _patch_all_pulse_sections_forbidden(monkeypatch):
     """Patch every section helper to explode if invoked — used by tests
-    that pin which sections do NOT fire. (Group 52.1a added label_backlog.)"""
+    that pin which sections do NOT fire. (Group 52.1a added label_backlog,
+    Group 57.2 low_stock.)"""
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
                         _fail_if_called("_pulse_section_logs"))
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_locations",
@@ -63,6 +64,8 @@ def _patch_all_pulse_sections_forbidden(monkeypatch):
                         _fail_if_called("_pulse_section_printer_status"))
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_label_backlog",
                         _fail_if_called("_pulse_section_label_backlog"))
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_low_stock",
+                        _fail_if_called("_pulse_section_low_stock"))
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +326,8 @@ def test_pulse_logs_dispatch_passthrough(monkeypatch):
 def test_pulse_status_derived_from_single_logs_call(monkeypatch):
     """include=status (alone) still runs _pulse_section_logs once (the
     health check lives there) but emits ONLY the derived 'status' section:
-    {spoolman, audit_active, undo_available, bulk_move_active, bulk_move_stage}
+    {spoolman, audit_active, audit_id, audit_location, audit_end, undo_available,
+    bulk_move_active, bulk_move_stage}
     — no 'filabridge' key (retired in Phase E Slice 4) and no 'logs' slot.
 
     PIN UPDATED DELIBERATELY (L298 Phase 3, 2026-08-02): the two bulk_move keys
@@ -332,9 +336,19 @@ def test_pulse_status_derived_from_single_logs_call(monkeypatch):
     the server-side idle watchdog could cancel the session while the deck kept
     painting a live SCAN DEST / COMMIT tile. This is an exact-dict pin: any
     FURTHER key added here must be a considered decision, not a drive-by.
+
+    PIN UPDATED DELIBERATELY (Group 58, 2026-11-02): audit_location and
+    audit_end, for the same reason: a tab with a paused Activity Log must still
+    learn which place is being audited, and why an audit it believed in is gone.
+
+    PIN UPDATED DELIBERATELY (Group 58 review, 2026-11-02): audit_id. A page stamps
+    each scan with the audit it believes in, and a hidden panel has no poll, so the
+    heartbeat is what keeps that id current, on a paused Activity Log's tab too.
     """
+    audit_end = {"id": "boot-3", "why": "idle", "location": "LR-MDB-1"}
     logs_payload = {"logs": [{"msg": "x"}], "status": {"spoolman": True},
-                    "audit_active": True, "undo_available": False,
+                    "audit_active": True, "undo_available": False, "audit_id": "boot-4",
+                    "audit_location": "LR-MDB-2", "audit_end": audit_end,
                     "bulk_move_active": True, "bulk_move_stage": "awaiting_dest"}
     calls = []
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
@@ -344,7 +358,8 @@ def test_pulse_status_derived_from_single_logs_call(monkeypatch):
     r = client.get("/api/dashboard_pulse?include=status")
     body = r.get_json()
     assert body == {"status": {
-        "spoolman": True, "audit_active": True, "undo_available": False,
+        "spoolman": True, "audit_active": True, "undo_available": False, "audit_id": "boot-4",
+        "audit_location": "LR-MDB-2", "audit_end": audit_end,
         "bulk_move_active": True, "bulk_move_stage": "awaiting_dest",
     }}
     assert len(calls) == 1
@@ -361,6 +376,8 @@ def test_pulse_status_defaults_false_on_sparse_logs_payload(monkeypatch):
     r = client.get("/api/dashboard_pulse?include=status")
     assert r.get_json() == {"status": {
         "spoolman": False, "audit_active": False, "undo_available": False,
+        # Group 58: no id, no place, and no last end, rather than a KeyError.
+        "audit_id": None, "audit_location": "", "audit_end": None,
         # L298 Phase 3 — the bulk-move signal defaults to a SAFE idle rather
         # than KeyError-ing or implying an armed session.
         "bulk_move_active": False, "bulk_move_stage": "idle",
@@ -537,7 +554,9 @@ def test_pulse_post_refresh_spool_ids_adds_spools_refresh_section(monkeypatch):
     seen = []
     sentinel = {"3": {"remaining_weight": 1.0}}
 
-    def fake_live(ids):
+    # **kw: a tick that read the spool list also passes it (spools=, Group
+    # 57.5); include=buffer reads none, so the ids come alone here.
+    def fake_live(ids, **kw):
         seen.append(ids)
         return sentinel
 
@@ -586,7 +605,7 @@ def test_pulse_spools_refresh_error_is_isolated(monkeypatch):
     """A raising get_live_spools_data degrades the spools_refresh slot to
     {'error': str(e)} while the response stays 200 with other sections
     intact."""
-    def _boom(ids):
+    def _boom(ids, **kw):
         raise RuntimeError("spoolman timeout")
 
     monkeypatch.setattr(app_module.logic, "get_live_spools_data", _boom)

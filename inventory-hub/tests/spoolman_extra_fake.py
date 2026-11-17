@@ -209,6 +209,10 @@ class _Resp:
     def json(self):
         return copy.deepcopy(self._body)
 
+    def raise_for_status(self):
+        if not self.ok:
+            raise RuntimeError(f"HTTP {self.status_code} (test)")
+
 
 class SpoolmanHTTPFake:
     """Spoolman over HTTP: records per entity with WIRE extras, a field list per
@@ -217,7 +221,11 @@ class SpoolmanHTTPFake:
     stored as `version` would (mode_for), or as `mode` says for every entity.
 
     `gets` lists every GET path in order; `patches` every PATCH as (entity, id,
-    body). `field_reads_fail` / `info_fails` make those reads answer a 503."""
+    body). `field_reads_fail` / `info_fails` / `list_reads_fail` make those reads
+    answer a 503, and `down` makes every GET raise, as a timeout does.
+
+    A list path (`/api/v1/spool`) answers every record, and for a spool only the
+    ones not archived unless the URL says `allow_archived=true`, as Spoolman does."""
 
     def __init__(self, *, version="0.27.0", mode=None, fields=None):
         self.version = version
@@ -228,6 +236,8 @@ class SpoolmanHTTPFake:
         self.patches = []
         self.field_reads_fail = False
         self.info_fails = False
+        self.list_reads_fail = False
+        self.down = False
 
     def add(self, entity, eid, extra=None, **fields):
         rec = {"id": int(eid), **fields, "extra": dict(extra or {})}
@@ -247,8 +257,19 @@ class SpoolmanHTTPFake:
         return version_tuple(self.version) >= NULLS_FROM
 
     def get(self, url, timeout=None, **kw):
-        path = urlsplit(str(url)).path.rstrip("/")
+        parts = urlsplit(str(url))
+        path = parts.path.rstrip("/")
         self.gets.append(path)
+        if self.down:
+            raise TimeoutError("Spoolman isn't answering (test)")
+        m = re.fullmatch(r"/api/v1/(spool|filament|vendor)", path)
+        if m:
+            if self.list_reads_fail:
+                return _Resp(503, {"message": "unavailable (test)"})
+            rows = list(self.records[m.group(1)].values())
+            if m.group(1) == "spool" and "allow_archived=true" not in parts.query:
+                rows = [r for r in rows if not r.get("archived")]
+            return _Resp(200, copy.deepcopy(rows))
         if path == "/api/v1/info":
             if self.info_fails:
                 return _Resp(503, {"message": "unavailable (test)"})

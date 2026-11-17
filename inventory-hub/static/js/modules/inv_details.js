@@ -113,10 +113,18 @@ const openSpoolDetails = (id, silent = false) => {
                 // of the UI (spool cards + Location Manager type badge). Was
                 // previously rendering blue, which read as a normal location.
                 if (isUnknown) {
-                    locBadge.innerText = '❓ Unknown';
-                    locBadge.className = "badge bg-warning text-dark ms-2 me-1";
+                    // Group 58: which audit lost it, in words on the badge itself,
+                    // for a screen with no hover. A sentence, so it may wrap, its
+                    // box id and day whole.
+                    const lost = window.auditLostWords(d.lost_from);
+                    if (lost) locBadge.innerHTML = window.fccKeepWhole(window.escHtml(`❓ Marked lost by ${lost.by}`));
+                    else locBadge.innerText = '❓ Unknown';
+                    locBadge.className = `badge bg-warning text-dark ms-2 me-1${lost ? ' text-wrap text-start' : ''}`;
                     locBadge.style.cursor = "pointer";
-                    locBadge.title = "Physically lost — last known location unknown. Click to open the Unknown bucket.";
+                    // Its tooltip can't say the place is unknown under a badge naming it.
+                    locBadge.title = lost
+                        ? `Marked lost by ${lost.by}. Click to open the Unknown list.`
+                        : "Physically lost — last known location unknown. Click to open the Unknown bucket.";
                     locBadge.onclick = () => {
                         if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
                         if (window.openManage) window.openManage('UNKNOWN');
@@ -1004,6 +1012,9 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
     const fromCard = !!(opts && opts.fromCard);
     let defaultLoc = currentLoc || "Unassigned";
     if (defaultLoc.startsWith("Deployed: ")) defaultLoc = defaultLoc.replace("Deployed: ", "");
+    // The spool window's ✏️ hands over its badge's words, and at Unknown those are
+    // no place: a Force Move with no pick wrote them to the spool as its location.
+    if (defaultLoc.startsWith("❓")) defaultLoc = "UNKNOWN";
     if (defaultLoc === "Unassigned") defaultLoc = "";
 
     fetch('/api/locations')
@@ -1013,7 +1024,9 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
             if (Array.isArray(locs)) {
                 locs.forEach(l => {
                     const type = (l.Type || '').toLowerCase();
-                    if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return;
+                    // Never a toolhead (window.isToolheadType: a custom Type that only
+                    // holds a head's word, "Toolbox", is a place like any other).
+                    if (window.isToolheadType(l.Type) || type === 'virtual') return;
                     // L271 Phase 5: Wall Shelf/Row are structural grouping nodes, never spool targets.
                     if (type === 'wall shelf' || type === 'row') return;
                     if (l.LocationID === 'Unassigned') return;
@@ -1230,6 +1243,9 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
                         // If the confirm overlay is already up, let mountOverlay's
                         // onEscape take it (it uses stopImmediatePropagation).
                         if (confirmShowing()) return;
+                        // The shortcut window over it takes this Escape (it closes
+                        // only itself); "Cancel Override?" opened under it, unseen.
+                        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
                         e.preventDefault();
                         e.stopImmediatePropagation();
                         showConfirmOverlay();
@@ -1504,7 +1520,13 @@ window.refreshFilamentSpools = () => {
 //   empty-weight storage cascade (all NATIVE Spoolman number fields):
 //     spool.spool_weight > filament.spool_weight > vendor.empty_spool_weight
 //   this prompt writes the FILAMENT default (always) + the VENDOR default (opt-in).
-window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight = null) => {
+// `opts.skipIf()`: true when the prompt should not open after all (the
+// weigh-out list: a spool has been scanned since the save, Group 57 review,
+// round 8). Asked right before it is drawn, after `opts.settle()` (a promise:
+// the weigh-out list's scan being answered, round 9: it opened over the scan,
+// and the scanned spool's reading went in its box). `opts.scanPending()`: true
+// while that list is answering a scan, and Save waits until it has.
+window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight = null, opts = {}) => {
     if (!filamentId) return;
     let fil;
     try {
@@ -1537,6 +1559,19 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     const pre = Number(prefillWeight);
     const prefillAttr = (Number.isFinite(pre) && pre > 0) ? ` value="${pre}"` : '';
 
+    // `opts.notice`: something the person must read about this spool, said on the
+    // prompt itself, since the toast layer is under every overlay (Group 54 review
+    // R5-1: the weigh page's "Spool #57 is archived but still at XL-1: …" was hidden
+    // behind this prompt for its whole 7 s). The label's own look, in yellow.
+    // A place id in it stays whole, as in every other dialog (fccKeepWhole; review R6-7:
+    // "still at LR-" / "MDB-1" on a phone at Extra Large); one longer than the line
+    // itself breaks at its hyphens again, measured once it is drawn (below).
+    const notice = (opts && opts.notice) ? String(opts.notice) : '';
+    const keepWhole = (h) => (typeof window.fccKeepWhole === 'function' ? window.fccKeepWhole(h) : h);
+    const noticeRow = notice
+        ? `<div id="fcc-archive-empty-notice" role="alert" class="text-warning small" style="margin-bottom:10px;">⚠️ ${keepWhole(esc(notice))}</div>`
+        : '';
+
     const propagateRow = canPropagate ? `
             <label style="display:flex; align-items:flex-start; gap:8px; margin-top:12px; cursor:pointer;">
                 <input type="checkbox" id="fcc-archive-propagate" class="form-check-input" style="margin-top:3px; flex:0 0 auto;">
@@ -1544,9 +1579,14 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
                     <span style="color:#9aa;">— every ${esc(vendorName)} spool without its own weight inherits it.</span></span>
             </label>` : '';
 
+    // data-fcc-weight-keys: a weight key typed on its vendor box or its buttons
+    // goes into its weight box (inv_core.js's weight capture; Group 57 review,
+    // round 7: after a tick of the vendor box a typed weight went to the scan
+    // path as a spool id).
     const content = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
+        <div data-fcc-weight-keys style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">📦 Spool archived — record the empty weight?</div>
+            ${noticeRow}
             <p style="color:#ddd; margin-bottom:8px; font-size:0.95em;">
                 Spool <strong>#${esc(spoolId)}</strong> just hit 0g and was auto-archived. Its filament
                 <strong>#${esc(fil.id)}</strong> (<em>${esc(vendorName)} ${esc(material)}, ${esc(colorName)}</em>)
@@ -1558,7 +1598,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
             </p>
             <label class="form-label text-warning small mb-1">Empty spool weight (g)</label>
             <input type="number" step="0.1" min="0" id="fcc-archive-empty-wt"
-                class="form-control bg-dark text-white border-warning" autocomplete="off"
+                class="form-control bg-dark text-white border-warning fcc-weight-box" autocomplete="off"
                 placeholder="e.g. 167"${prefillAttr}>
             <div id="fcc-archive-empty-err" class="text-danger small" style="margin-top:4px;"></div>
             ${propagateRow}
@@ -1569,10 +1609,33 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         </div>
     `;
 
+    if (opts && typeof opts.settle === 'function') await opts.settle();
+    if (opts && typeof opts.skipIf === 'function' && opts.skipIf()) {
+        showToast(`Didn't ask for #${spoolId}'s empty spool weight: the next spool was already scanned`, 'info', 5000);
+        return;
+    }
+
     let handle = null;
     let saving = false;
-    const cleanup = () => { if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; } };
+    // Closed (Later, Escape or a save), the focus goes back where it was: the
+    // weigh-out list's next box, whose reading went to the scan path as a spool
+    // id while the focus sat on the page (Group 57 review, round 7). A box the
+    // list drew again meanwhile is found by its spool (weighOutRefocus).
+    const returnTo = document.activeElement;
+    const cleanup = () => {
+        if (!handle) return;
+        try { handle.cleanup(); } catch (_) { /* noop */ }
+        handle = null;
+        if (returnTo && returnTo !== document.body && returnTo.isConnected && !returnTo.disabled
+            && typeof returnTo.focus === 'function') returnTo.focus();
+        else if (window.weighOutRefocus) window.weighOutRefocus();
+    };
 
+    // Its box is a weight box (fcc-weight-box): a label scanned into it goes to
+    // the scan path, never into the filament's empty weight (Group 57 review,
+    // round 6). It opens after a save, while the next spool's label may be on
+    // its way (inv_core.js's weight capture puts a label split by its focus
+    // back together).
     handle = window.mountOverlay({
         id: 'fcc-archive-empty-overlay',
         content,
@@ -1581,6 +1644,23 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         onEscape: cleanup,   // Escape == "Later" (no-op); mountOverlay owns Escape
     });
     const ov = handle.element;
+    // An id kept whole that is longer than the line itself widens the whole prompt
+    // past the window's sides (a 360 px phone at Extra Large), so then it breaks at its
+    // hyphens again, measured as fccFitQuestion measures a question.
+    const noticeEl = ov.querySelector('#fcc-archive-empty-notice');
+    const dialogEl = ov.querySelector('[data-fcc-weight-keys]');
+    if (noticeEl && dialogEl && noticeEl.querySelector('.fcc-keep-whole')) {
+        const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
+        if ((vw > 0 && dialogEl.getBoundingClientRect().width > vw + 0.5)
+            || noticeEl.scrollWidth > noticeEl.clientWidth + 1) {
+            noticeEl.classList.add('fcc-keep-whole-off');
+        }
+    }
+    // A spool scanned over it in the weigh-out list answers it Later: that
+    // spool is the one being weighed now, and its reading would go in this box
+    // as the filament's empty weight (inv_weigh_out.js, round 8). A save
+    // already on its way still lands.
+    ov.fccDismissForScan = cleanup;
     const wtEl = ov.querySelector('#fcc-archive-empty-wt');
     const errEl = ov.querySelector('#fcc-archive-empty-err');
     const propEl = ov.querySelector('#fcc-archive-propagate');
@@ -1591,6 +1671,10 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     if (wtEl && wtEl.value) { try { wtEl.select(); } catch (_) { /* noop */ } }
 
     const doSave = async () => {
+        if (opts && typeof opts.scanPending === 'function' && opts.scanPending()) {
+            showToast('A scan is still being read: press Enter again in a moment', 'info', 4000);
+            return;
+        }
         const raw = wtEl ? wtEl.value : '';
         const n = Number(raw);
         if (raw === '' || raw == null || !Number.isFinite(n) || n <= 0) {
@@ -2724,10 +2808,24 @@ const _editfilShowEscapeConfirm = (bsModal) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
         const yesBtn = document.getElementById('editfil-esc-yes');
         const noBtn = document.getElementById('editfil-esc-no');
+        // Group 61: a scan never answers it. Its Enter is the scan's (with
+        // Close Anyway focused it closed the editor unsaved, and either way
+        // the scan stayed in the buffer): the scan goes to the scan path and
+        // the question stays for a person. A Space inside a scan presses
+        // nothing.
+        if (e.key === ' ' && window.scanIsArriving && window.scanIsArriving()) { e.preventDefault(); return; }
         if (e.key === 'Enter') {
+            if (window.enterIsAScan && window.enterIsAScan()) return;
             const active = document.activeElement;
-            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); bsModal.hide(); }
-            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
+            if (active === yesBtn) {
+                e.preventDefault(); e.stopPropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                cleanup(); bsModal.hide();
+            } else if (active === noBtn) {
+                e.preventDefault(); e.stopPropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                cleanup();
+            }
             return;
         }
         if (e.key === 'Tab') {
@@ -2787,8 +2885,9 @@ const _maybePromptLabelReprint = (filId, displayName, changed, dirtyExtras, rawE
     // --- Spool labels (LIGHT, no prompt): Brand/Type/Color-NAME also print on
     // the spool labels of this filament's physical spools, so those go stale
     // when changed. Hex/RGB are NOT on the spool label, so a hex-only change is
-    // excluded. Flag the filament's spools' needs_label_print so the spool
-    // details badge + print queue surface them (Derek: a heads-up is enough).
+    // excluded. Flag the filament's spools' needs_label_print so the 🏷️ Backlog
+    // lists them (Derek: a heads-up is enough; the spool window has no label
+    // badge, only the filament window does).
     const spoolLabelChanged = has(changed, 'name') || has(changed, 'material')
         || has(changed, 'vendor_id') || has(dirtyExtras, 'original_color')
         || has(dirtyExtras, 'filament_attributes');
@@ -2871,7 +2970,8 @@ const _showLabelReprintPrompt = (filId, displayName, changedLabels) => {
     const no = panel.querySelector('#fcc-label-reprint-no');
     if (yes) yes.addEventListener('click', () => {
         // addToQueue both raises needs_label_print (surfaces the staleness in the
-        // pending list + Details badge) AND queues the label for the P-touch batch.
+        // 🏷️ Backlog and the filament window's badge) AND queues the label for the
+        // P-touch batch.
         const queued = (typeof window.addToQueue === 'function')
             ? window.addToQueue({ id: filId, type: 'filament', display: `Filament #${filId}` })
             : false;
@@ -2916,6 +3016,9 @@ const FCC_DELETE_OVERLAY_BASE_STYLE =
 const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel, onConfirm }) => {
     overlay.style.cssText = FCC_DELETE_OVERLAY_BASE_STYLE;
     overlay.style.display = 'flex';
+    // It covers its window but traps no Tab: while it shows, Enter presses no
+    // button of the window behind it (Group 50.6; the accumulator's rule).
+    overlay.dataset.fccCover = '1';
     const inputId = `${overlay.id}-input`;
     const errId = `${overlay.id}-err`;
     overlay.innerHTML = `
@@ -2957,6 +3060,7 @@ const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel,
     const close = () => {
         overlay.style.display = 'none';
         overlay.innerHTML = '';
+        delete overlay.dataset.fccCover;
         if (bsModalInst && bsModalInst._config && bsModalKeyboardWas !== null) {
             bsModalInst._config.keyboard = bsModalKeyboardWas;
         }
@@ -3402,6 +3506,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (ov) {
                 ov.style.display = 'none';
                 ov.innerHTML = '';
+                delete ov.dataset.fccCover;
             }
         });
         m.addEventListener('keydown', (e) => {
@@ -3517,7 +3622,12 @@ window.openVendorEditModal = (vendorId) => {
         });
 };
 
+// One save at a time (Group 50.6): a second press while the first was on its
+// way (a double click, or Enter now that it presses the focused Save) created
+// the manufacturer twice. The button stays disabled until the answer.
+let _vendorSaveInFlight = false;
 window.vendorEditSave = () => {
+    if (_vendorSaveInFlight) return;
     const vid = document.getElementById('vendoredit-id').value;
     const name = document.getElementById('vendoredit-name').value.trim();
     const website = document.getElementById('vendoredit-website').value.trim();
@@ -3570,6 +3680,9 @@ window.vendorEditSave = () => {
 
     const url = isCreate ? '/api/vendors' : `/api/vendors/${encodeURIComponent(vid)}`;
     const method = isCreate ? 'POST' : 'PATCH';
+    _vendorSaveInFlight = true;
+    const saveBtn = document.getElementById('vendoredit-save');
+    if (saveBtn) saveBtn.disabled = true;
     fetch(url, {
         method: method,
         headers: { 'Content-Type': 'application/json' },
@@ -3602,6 +3715,10 @@ window.vendorEditSave = () => {
         })
         .catch(e => {
             showErr(e.message || String(e));
+        })
+        .finally(() => {
+            _vendorSaveInFlight = false;
+            if (saveBtn) saveBtn.disabled = false;
         });
 };
 

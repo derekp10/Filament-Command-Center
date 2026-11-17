@@ -22,6 +22,8 @@ Preserved quirks (do not 'fix' in a move — see the carve plan):
 
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
+import re
+
 from flask import request, jsonify  # type: ignore
 import requests  # type: ignore
 
@@ -1103,6 +1105,42 @@ def _archived_off_note(sid, was, rec=None):
     return f"#{sid} is archived ({_archived_why(rec)}), so it was taken off {was}: it is Unassigned."
 
 
+def _is_spool_record(rec, spool_id):
+    """True when `rec` is Spool `spool_id`'s own record (Group 53 review, r3-3): a
+    dict whose id is the spool's, the id sent as a number or as text. get_spool
+    hands back Spoolman's body whatever the status, so a 404's or a 5xx's JSON
+    body is a truthy dict with no id. Read as the spool, Edit Spool diffed the form
+    against it, every field came out dirty and was written, and a Location in the
+    form was a move whose first write named where the body said the spool was:
+    '' (Unassigned)."""
+    if not isinstance(rec, dict) or isinstance(rec.get('id'), bool):
+        return False
+    try:
+        return int(rec.get('id')) == int(spool_id)
+    except (TypeError, ValueError):
+        return False
+
+
+def _pre_edit_read_refusal(spool_id, first):
+    """Why Edit Spool's pre-edit read gave no spool, in words a person reads
+    (Group 53 review, r3-3). Never LAST_SPOOLMAN_ERROR: get_spool doesn't set it,
+    so it held an earlier write's refusal (since Group 53.2 a refused filament
+    create's too), shown as the reason this edit failed.
+
+    get_spool answers None when Spoolman didn't answer or sent no JSON, and
+    Spoolman's own body otherwise, whatever the status: a 404's {"message": "No
+    spool with ID 57 found."} and a 500's {"message": "database is locked"}
+    alike. Only that second kind is asked again, through get_spool_answer, which
+    says whether Spoolman answered "no such spool" (a dict with no id). A read
+    with no answer isn't repeated: the edit has already waited for it."""
+    if isinstance(first, dict):
+        rec, answered = spoolman_api.get_spool_answer(spool_id)
+        if answered and isinstance(rec, dict) and rec.get('id') is None:
+            return f"There is no Spool {spool_id} in Spoolman."
+    return (f"Couldn't read Spool {spool_id} from Spoolman before the edit, so nothing was saved. "
+            f"Try again in a moment.")
+
+
 @app.route('/api/edit_spool_wizard', methods=['POST'])
 def api_edit_spool_wizard():
     """Endpoint to handle natively editing Filaments and Spools from the Wizard Edit UI.
@@ -1165,7 +1203,7 @@ def api_edit_spool_wizard():
         if spool_data:
             # Prevent 500 errors by only passing actual changes to Spoolman
             original_spool = spoolman_api.get_spool(spool_id)
-            if original_spool:
+            if _is_spool_record(original_spool, spool_id):
                 dirty_spool_data = {}
                 for k, v in spool_data.items():
                     if k == 'location':
@@ -1223,11 +1261,13 @@ def api_edit_spool_wizard():
                 # / physical_source verbatim and reopen the Item-4 slot-clobber
                 # window (the April-outage class the write-surface conventions
                 # exist to prevent). Fail closed and surface the error.
-                err = spoolman_api.LAST_SPOOLMAN_ERROR or (
-                    f"Could not read Spool {spool_id} before edit")
+                # Group 53 review (r3-3): in words of its own, never
+                # LAST_SPOOLMAN_ERROR, which get_spool doesn't set (it showed an
+                # earlier write's refusal as this edit's reason).
+                err = _pre_edit_read_refusal(spool_id, original_spool)
                 state.logger.warning(
-                    f"edit_spool_wizard: pre-edit get_spool({spool_id}) returned "
-                    f"None; refusing to write a raw-payload PATCH. {err}")
+                    f"edit_spool_wizard: pre-edit get_spool({spool_id}) gave no spool "
+                    f"({str(original_spool)[:200]}); refusing to write a raw-payload PATCH. {err}")
                 return jsonify({
                     "success": False,
                     "msg": f"Failed to update Spool {spool_id}: {err}",
@@ -1402,9 +1442,11 @@ def _direct_location_write(sid, pre, updates):
     change of location blanks the slot and trail of the place the spool LEFT
     (`container_slot`, `physical_source`, `physical_source_slot`, and a
     `fcc_pre_box_location` note; Derek, 2026-10-15: a forced location shouldn't
-    still flag the spool as coming from its old slot). Written as '', never
-    omitted, because the extras merge keeps an omitted key; a key the caller sent
-    itself is written as sent."""
+    still flag the spool as coming from its old slot). A change INTO UNKNOWN also
+    blanks an old `fcc_pre_audit_location` (Group 58 review), as the move engine's
+    generic branch does, so a note at Unknown is only ever an audit's. Written as
+    '', never omitted, because the extras merge keeps an omitted key; a key the
+    caller sent itself is written as sent."""
     if not isinstance(pre, dict) or pre.get('id') is None:
         msg = f"Couldn't read #{sid} from Spoolman to check where it is, so nothing was written. Try again."
         state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
@@ -1427,7 +1469,8 @@ def _direct_location_write(sid, pre, updates):
         state.add_log_entry(f"⚠️ #{sid} not moved: {msg}", "WARNING", "ffaa00")
         return {"status": "error", "blocked_reason": "toolhead", "msg": msg}, updates
     pre_extra = pre.get('extra') if isinstance(pre.get('extra'), dict) else {}
-    left = [k for k in _TRAIL_KEYS if str(pre_extra.get(k) or '').strip().strip('"')]
+    blank = _TRAIL_KEYS + ('fcc_pre_audit_location',) if new_loc == 'UNKNOWN' else _TRAIL_KEYS
+    left = [k for k in blank if str(pre_extra.get(k) or '').strip().strip('"')]
     if not left:
         return None, updates
     out = dict(updates)
@@ -1436,6 +1479,66 @@ def _direct_location_write(sid, pre, updates):
         extra.setdefault(k, '')
     out['extra'] = extra
     return None, out
+
+
+# Group 54 review R5-2: LAST_SPOOLMAN_ERROR's shape for a refusal Spoolman answered.
+_ANSWERED_REFUSAL_RE = re.compile(r"HTTP \d{3}:")
+# requests' MaxRetryError: its adapter retries nothing (Retry(0, read=False)), so this is
+# raised only while connecting (refused, timed out, a name that doesn't resolve) and the
+# request never left FCC (review R6-1). A read error comes out as itself instead.
+_NEVER_SENT_MARK = "Max retries exceeded"
+_LANDED_EPS_G = 0.05   # grams: Spoolman keeps weights as floats
+
+
+def _write_may_have_landed(err):
+    """Whether a write update_spool reported failed may have landed all the same:
+    its answer never came, or came broken (a read timeout, a dropped or cut-off
+    connection, a 200 whose body isn't JSON: update_spool's timeout is a READ
+    timeout). Not a refusal Spoolman answered ("HTTP nnn: …"), FCC's own before
+    sending (PREMERGE_READ_REFUSAL), nor one that never connected ("Max retries
+    exceeded": Spoolman down; review R6-1): those wrote nothing."""
+    s = str(err or '')
+    return not (_ANSWERED_REFUSAL_RE.match(s) or spoolman_api.PREMERGE_READ_REFUSAL in s
+                or _NEVER_SENT_MARK in s)
+
+
+def _landed_as_sent(rec, updates):
+    """Whether spool record `rec`, read back after a write whose answer was lost,
+    holds what `updates` asked (the write update_spool sent, as its edges left it:
+    the used-weight cap, the archive's `archived` and `location`): True when every
+    weight it sent, its `archived` and its location match; False when any doesn't
+    (a read-back of a spool that is gone, with no id, is False too); None when FCC
+    can't tell (a value the record doesn't hold, or a write naming none of them)."""
+    if not isinstance(rec, dict) or rec.get('id') is None:
+        return False
+    unknown, checked = False, False
+    for key in ('used_weight', 'initial_weight', 'remaining_weight'):
+        if key not in updates or (key == 'remaining_weight' and 'used_weight' in updates):
+            continue   # with both, Spoolman takes the used weight
+        try:
+            sent, held = float(updates[key]), float(rec.get(key))
+        except (TypeError, ValueError):
+            unknown = True
+            continue
+        if key == 'remaining_weight':
+            # Spoolman stores a weight left as used = max(initial - left, 0), so one
+            # above the spool's capacity reads back as the capacity (review R6-6).
+            try:
+                sent = min(sent, float(rec.get('initial_weight')))
+            except (TypeError, ValueError):
+                pass
+        if abs(held - sent) > _LANDED_EPS_G:
+            return False
+        checked = True
+    if 'archived' in updates:
+        if bool(rec.get('archived')) != bool(updates['archived']):
+            return False
+        checked = True
+    if 'location' in updates:
+        if _loc_key(rec.get('location')) != _loc_key(updates.get('location')):
+            return False
+        checked = True
+    return None if (unknown or not checked) else True
 
 
 @app.route('/api/spool/update', methods=['POST'])
@@ -1454,11 +1557,23 @@ def api_spool_update():
     a toolhead or a Printer row is refused with nothing written (`blocked_reason`
     "toolhead" / "printer_row"), and any other new place blanks the slot and trail
     the spool left behind.
+
+    Group 54 review R4-1: the answer also carries `location_now`, where the spool
+    is once the write landed ('' for Unassigned).
+
+    Group 54.7 (Derek, 2026-11-07: "Auto-Archive 0g" off means off): an optional
+    top-level `auto_archive` beside `id` and `updates`, the weigh screen's switch.
+    Only JSON false turns update_spool's archive-on-empty edge off
+    (`archive_on_empty=False`): a spool weighed to 0 g then stays in stock where it
+    is, and `auto_archived` is false. Absent, true or anything else keeps the rule
+    as it was. The keyword is passed only for false, so a two-argument stand-in for
+    update_spool still serves every other request.
     """
     try:
         data = request.json
         spool_id = data.get('id')
         updates = data.get('updates')
+        archive_on_empty = data.get('auto_archive') is not False
 
         if not spool_id or not updates:
             return jsonify({"status": "error", "msg": "Missing id or updates"})
@@ -1471,10 +1586,51 @@ def api_spool_update():
             if refusal:
                 return jsonify(refusal)
 
-        res = spoolman_api.update_spool(spool_id, updates)
+        if archive_on_empty:
+            res = spoolman_api.update_spool(spool_id, updates)
+        else:
+            res = spoolman_api.update_spool(spool_id, updates, archive_on_empty=False)
         if not res:
-            err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
-            return jsonify({"status": "error", "msg": f"Failed to update spool: {err}", "error": err})
+            # Group 54 review R4-2: `msg` is the weigh screens' 7 s toast, so it is
+            # put in words (refusal_words: no Spoolman address, no JSON, nothing
+            # that runs off a phone's screen); `error` keeps the raw text, which the
+            # page's Activity Log line carries after the words.
+            # No error text: update_spool had an OK answer with no record in it.
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman's answer couldn't be read."
+            words = spoolman_api.refusal_words(err)
+            # Group 54 review R5-2: a write whose answer was lost may have landed,
+            # so it is read back once before it is called failed, as the print
+            # deduct does (print_deduct._write_landed). Landed as sent, it is
+            # answered as saved, the normal way below: the weigh page's unassign
+            # after an archive then runs, and nobody saves it again (the
+            # Quick-Weigh's Additive mode added the grams a second time). A
+            # read-back that fails can't tell, and the answer says so.
+            if isinstance(updates, dict) and _write_may_have_landed(err):
+                back, _answered = spoolman_api.get_spool_answer(spool_id)
+                landed = _landed_as_sent(back, updates) if isinstance(back, dict) else None
+                if landed is None:
+                    # Review R6-3 / R6-8: a weigh to empty is safe to save again in
+                    # every mode (the weight is capped at empty) and the re-save
+                    # finishes it (its success runs the page's unassign, which takes
+                    # the spool off its place); any other is checked first (the
+                    # Quick-Weigh's Additive mode would add the grams twice).
+                    said = words.rstrip()
+                    if not said.endswith(('.', '!', '?')):
+                        said += '.'
+                    then = ("It was weighed empty, so saving the same reading again is safe and finishes it."
+                            if updates.get('archived') else
+                            "Check the weight FCC shows for it before saving again.")
+                    return jsonify({"status": "error", "may_have_saved": True,
+                                    "msg": f"Couldn't tell whether Spool #{spool_id} saved: {said} {then}",
+                                    "error": err})
+                if landed:
+                    state.logger.warning(f"Spool #{spool_id}: the save's answer was lost ({err}), "
+                                         f"but a read-back shows it landed")
+                    res = back
+            if not res:
+                return jsonify({"status": "error",
+                                "msg": f"Couldn't save Spool #{spool_id}: {words}",
+                                "error": err})
         # Group 42 review: a location change off a head releases the spool's own
         # single-slot box, as a move would (the engine never ran).
         logic.release_box_after_direct_write(spool_id, pre, res)
@@ -1509,6 +1665,12 @@ def api_spool_update():
             "auto_archived": auto_archived,
             "needs_empty_weight_prompt": needs_prompt,
             "filament_id": filament_id,
+            # Group 54 review R4-1: where the spool is once the write landed ('' for
+            # Unassigned). A weigh screen that archived it reads it: '' means the
+            # archive edge already took it off its place; a place means it didn't
+            # (FCC couldn't read the spool, review R1-1), so the page's own
+            # force-unassign is what takes it off, and a failure of that is said.
+            "location_now": str(res.get('location') or '').strip(),
         }
         # Group 42.3c: an auto-unarchived spool whose old toolhead holds another
         # spool now went to Unassigned; the weigh screen toasts this at 7 s.
@@ -1564,6 +1726,10 @@ def api_search_inventory():
     # Sort axis. Currently filament-only: 'spools_desc' / 'spools_asc'.
     # Empty / unknown tokens fall through to the default sort path.
     sort = request.args.get('sort', '').strip().lower()
+    # Group 58 (the audit's 🔎 Find a spool): a search that couldn't be made
+    # answers success: false, never an empty list (spoolman_api.SearchUnreadable).
+    # Passed only when asked, so the search panel's call is the one it was.
+    strict = {'strict': True} if request.args.get('strict', '').strip().lower() in ('1', 'true') else {}
 
     try:
         results = spoolman_api.search_inventory(
@@ -1578,6 +1744,7 @@ def api_search_inventory():
             max_weight=max_weight,
             deployed_state=deployed_state,
             sort=sort,
+            **strict,
         )
         return jsonify({"success": True, "results": results})
     except Exception as e:

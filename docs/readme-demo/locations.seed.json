@@ -1,0 +1,229 @@
+[
+    {
+        "LocationID": "WORKSHOP",
+        "Name": "Workshop",
+        "Type": "Room",
+        "Max Spools": "0",
+        "parent_id": null,
+        "Location": "",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "OFFICE",
+        "Name": "Office",
+        "Type": "Room",
+        "Max Spools": "0",
+        "parent_id": null,
+        "Location": "",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "SHELF-1",
+        "Name": "Workshop Shelf 1",
+        "Type": "Shelf",
+        "Max Spools": "",
+        "parent_id": "WORKSHOP",
+        "Location": "Workshop",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "SHELF-2",
+        "Name": "Workshop Shelf 2",
+        "Type": "Shelf",
+        "Max Spools": "",
+        "parent_id": "WORKSHOP",
+        "Location": "Workshop",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "BIN-1",
+        "Name": "Office Bin 1",
+        "Type": "Bin",
+        "Max Spools": "",
+        "parent_id": "OFFICE",
+        "Location": "Office",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "DRYBOX-1",
+        "Name": "Workshop Dryer Box",
+        "Type": "Dryer Box",
+        "Max Spools": "4",
+        "parent_id": "WORKSHOP",
+        "Location": "Workshop",
+        "Device Identifier": "",
+        "Device Type": "Multi",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {
+                "1": "HEAD-1",
+                "2": "HEAD-2",
+                "3": "HEAD-3",
+                "4": "HEAD-1"
+            },
+            "slot_order": "ltr"
+        }
+    },
+    {
+        "LocationID": "DRYBOX-2",
+        "Name": "Single Dryer 1",
+        "Type": "Dryer Box",
+        "Max Spools": "1",
+        "parent_id": "WORKSHOP",
+        "Location": "Workshop",
+        "Device Identifier": "",
+        "Device Type": "Single",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes",
+        "extra": {
+            "slot_targets": {},
+            "slot_order": "ltr"
+        }
+    },
+    {
+        "LocationID": "PRINTER-1",
+        "Name": "Printer 1",
+        "Type": "Printer",
+        "Max Spools": "0",
+        "parent_id": "WORKSHOP",
+        "Location": "Workshop",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes",
+        "toolheads": [
+            {
+                "location_id": "HEAD-1",
+                "position": 0
+            },
+            {
+                "location_id": "HEAD-2",
+                "position": 1
+            },
+            {
+                "location_id": "HEAD-3",
+                "position": 2
+            },
+            {
+                "location_id": "HEAD-4",
+                "position": 3
+            }
+        ],
+        "printer_creds": {
+            "ip_address": "fakelink:8081",
+            "api_key": "demo-not-a-real-key"
+        }
+    },
+    {
+        "LocationID": "HEAD-1",
+        "Name": "Printer 1 Head 1",
+        "Type": "Tool Head",
+        "Max Spools": "1",
+        "parent_id": "PRINTER-1",
+        "Location": "Workshop",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "HEAD-2",
+        "Name": "Printer 1 Head 2",
+        "Type": "Tool Head",
+        "Max Spools": "1",
+        "parent_id": "PRINTER-1",
+        "Location": "Workshop",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "HEAD-3",
+        "Name": "Printer 1 Head 3",
+        "Type": "Tool Head",
+        "Max Spools": "1",
+        "parent_id": "PRINTER-1",
+        "Location": "Workshop",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "HEAD-4",
+        "Name": "Printer 1 Head 4",
+        "Type": "Tool Head",
+        "Max Spools": "1",
+        "parent_id": "PRINTER-1",
+        "Location": "Workshop",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    },
+    {
+        "LocationID": "PRINTER-2",
+        "Name": "Printer 2",
+        "Type": "Printer",
+        "Max Spools": "0",
+        "parent_id": "OFFICE",
+        "Location": "Office",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes",
+        "toolheads": [
+            {
+                "location_id": "HEAD-5",
+                "position": 0
+            }
+        ],
+        "printer_creds": {
+            "ip_address": "fakelink:8082",
+            "api_key": "demo-not-a-real-key"
+        }
+    },
+    {
+        "LocationID": "HEAD-5",
+        "Name": "Printer 2 Head",
+        "Type": "Tool Head",
+        "Max Spools": "1",
+        "parent_id": "PRINTER-2",
+        "Location": "Office",
+        "Device Identifier": "",
+        "Device Type": "",
+        "Order": "1",
+        "Row": "",
+        "Label Printed": "Yes"
+    }
+]

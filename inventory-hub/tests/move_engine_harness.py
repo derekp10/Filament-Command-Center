@@ -62,7 +62,9 @@ class FakeSpoolman:
             return None
         return {"id": int(sid), **copy.deepcopy(rec)}
 
-    def update_spool(self, sid, data):
+    def update_spool(self, sid, data, archive_on_empty=True):
+        """`archive_on_empty` is update_spool's own keyword (Group 54.7): this
+        stand-in runs no archive edge, so it has nothing to switch off."""
         self.writes.append((int(sid), copy.deepcopy(data)))
         if int(sid) in self.reject_ids or str(data.get("location", "")).upper() in self.reject_locations:
             logic.spoolman_api.LAST_SPOOLMAN_ERROR = "400: rejected by test"
@@ -189,24 +191,54 @@ class WireSpoolman(FakeSpoolman):
         return MagicMock(ok=True, status_code=200,
                          json=MagicMock(return_value={"id": sid, **copy.deepcopy(rec)}))
 
-    def update_spool(self, sid, data):
+    def update_spool(self, sid, data, archive_on_empty=True):
+        """The REAL update_spool. `archive_on_empty` (Group 54.7) goes on only when
+        it is False, as /api/spool/update passes it, so the harness still drives
+        an update_spool from before the keyword."""
         self.writes.append((int(sid), copy.deepcopy(data)))
+        kw = {} if archive_on_empty else {"archive_on_empty": False}
         with patch.object(logic.spoolman_api.requests, "get", side_effect=self._http_get), \
              patch.object(logic.spoolman_api.requests, "patch", side_effect=self._http_patch):
-            return REAL_UPDATE_SPOOL(sid, copy.deepcopy(data))
+            return REAL_UPDATE_SPOOL(sid, copy.deepcopy(data), **kw)
 
 
 class WeighedWireSpoolman(WireSpoolman):
     """WireSpoolman that also keeps the weights and `archived` a PATCH sends and
     answers them on every read and in the PATCH's own answer, as Spoolman does:
     the REAL update_spool's archive and refill edges read them (Group 40.7
-    review; shared since Group 51.1)."""
+    review; shared since Group 51.1).
+
+    A `remaining_weight` is stored as Spoolman stores it (Group 54.6): as the
+    used weight it leaves, from the spool's own initial weight, else its
+    filament's net weight, never below 0; with neither, or with `used_weight`
+    beside it, Spoolman refuses the PATCH and nothing is stored."""
 
     def _http_patch(self, url, json=None, **k):
         sid = int(str(url).rstrip("/").rsplit("/", 1)[-1])
         body = copy.deepcopy(json)
         self.patch_bodies.append((sid, body))
         rec = self.spools.setdefault(sid, {"location": "", "extra": {}})
+        used_from_left = None
+        if "remaining_weight" in body:
+            initial = body.get("initial_weight", rec.get("initial_weight"))
+            if initial is None:
+                initial = (rec.get("filament") or {}).get("weight")
+            try:
+                left = float(body["remaining_weight"])
+            except (TypeError, ValueError):
+                left = None
+            if left is None or left != left:
+                msg = "Input should be a valid number"
+            elif "used_weight" in body:
+                msg = "Only specify either used_weight or remaining_weight."
+            elif initial is None:
+                msg = "remaining_weight can only be set if the spool or its filament has a weight."
+            else:
+                msg = None
+                used_from_left = max(float(initial) - left, 0.0)
+            if msg:
+                return MagicMock(ok=False, status_code=422 if left is None or left != left else 400,
+                                 text=msg, json=MagicMock(return_value={"message": msg}))
         if "extra" in body:
             extra, refused = _patched_extra(rec, body)
             if refused is not None:
@@ -215,6 +247,8 @@ class WeighedWireSpoolman(WireSpoolman):
         for key in ("location", "used_weight", "initial_weight", "archived"):
             if key in body:
                 rec[key] = body[key]
+        if used_from_left is not None:
+            rec["used_weight"] = used_from_left
         return MagicMock(ok=True, status_code=200,
                          json=MagicMock(return_value={"id": sid, **copy.deepcopy(rec)}))
 

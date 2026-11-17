@@ -13,27 +13,14 @@ import json
 import pytest
 from playwright.sync_api import Page, expect
 
+from test_audit_page_58_js import SESSION
 
-# An ACTIVE session payload, shaped like /api/audit_session's enriched response.
+
+# An ACTIVE session payload: /api/audit_session's shape, from the sample
+# test_the_session_above_is_the_routes_shape pins to the route.
 # The panel's 2s poll closes itself the moment it sees `active: false`, so this
 # has to be in place before openAuditPanel() runs.
-_ACTIVE_SESSION = {
-    "active": True,
-    "location_id": "PM-DB-1",
-    "stats": {"total_expected": 1, "found": 1, "missing": 0, "rogue": 0},
-    "expected": [{
-        "id": 1,
-        "display": "Test Spool",
-        "color": "#ff0000",
-        "color_direction": "longitudinal",
-        "multi_color_hexes": "",
-        "remaining_weight": 500,
-        "slot": "1",
-        "found": True,
-    }],
-    "rogue": [],
-    "idle_timeout_min": 20,
-}
+_ACTIVE_SESSION = dict(SESSION, location_id="PM-DB-1")
 
 
 @pytest.mark.usefixtures("require_server")

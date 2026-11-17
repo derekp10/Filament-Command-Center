@@ -214,10 +214,13 @@ def test_a_test_without_a_browser_records_nothing(run_state):
 # --- the host leaves the container's hub.log alone ----------------------------
 
 def test_the_host_test_process_holds_no_handle_on_hub_log():
-    """Review test-infra-1: state.py opens a RotatingFileHandler on 'hub.log'
+    """Review test-infra-1: state.py's RotatingFileHandler logs to 'hub.log'
     relative to the working directory, which from inventory-hub/ is the dev
-    container's own log. Held by the host, the container's 1 MB rollover
-    failed on Windows and the container's log records were dropped."""
+    container's own log. It used to open that file at import, and held by the
+    host, the container's 1 MB rollover failed on Windows and the container's
+    log records were dropped. Since Group 45.9 it opens nothing before its
+    first log line (delay=True, pinned in test_host_data_dir_45_9.py), and
+    conftest still detaches it, so no host line ever reaches that log."""
     import logging.handlers
     import state
     held = [h for h in state.logger.handlers

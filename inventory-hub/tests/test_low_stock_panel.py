@@ -45,8 +45,9 @@ FILTER = "#fcc-low-stock-overlay [data-stock-filter]"
 # shim), a fetch that answers /api/stock_report from window.__answers and the
 # stock_exclusion writes from window.__writeAnswers (one per request; the last repeats;
 # {network:true} rejects like a dropped connection, {delay:ms} holds the
-# answer), and recorders for openFilamentDetails (inv_details.js's global) and
-# processScan (inv_cmd.js's).
+# answer, {hold:true} holds it until the test calls window.__release()), and
+# recorders for openFilamentDetails (inv_details.js's global) and processScan
+# (inv_cmd.js's).
 PRELUDE = r"""
 window.__pendingShortcuts = [];
 window.registerShortcut = function (s) { window.__pendingShortcuts.push(s); };
@@ -79,6 +80,7 @@ window.fetch = function (url, opts) {
                                    : Promise.resolve(JSON.parse(JSON.stringify(a.body)))),
         });
     };
+    if (a && a.hold) return new Promise((r) => { window.__release = () => r(go()); });
     return a && a.delay ? new Promise((r) => setTimeout(r, a.delay)).then(go) : go();
 };
 window.processScan = function (txt, source) { window.__scans.push([txt, source]); };
@@ -196,7 +198,10 @@ def _ok(display, mark=MARK):
 def panel(isolated_page):
     """The page with the real modules loaded; returns (page, open(answers...))."""
     page = isolated_page
-    page.set_content(PAGE.format(css=GLOBAL_CSS.read_text(encoding="utf-8")))
+    # With Bootstrap 5.3's reboot rule, which the real page loads: it made 57.1's
+    # first "keep the tabs row's room" (a [hidden] rule) do nothing there, and
+    # this page didn't have it (Group 57 review).
+    page.set_content(PAGE.format(css=GLOBAL_CSS.read_text(encoding="utf-8") + "[hidden]{display:none!important}"))
     page.add_script_tag(content=PRELUDE)
     for name in ("overlay_mount.js", "inv_core.js", "inv_stock.js"):
         page.add_script_tag(content=(MODULES / name).read_text(encoding="utf-8"))
@@ -417,18 +422,22 @@ def test_an_empty_list_says_so(panel):
         "those lists, with your reason.")
 
 
-@pytest.mark.parametrize("answer", [
-    _answer(DOWN, status=502),
-    _answer(None, network=True),
-    _answer(None, status=502, badJson=True),
-    _answer({"success": True}, status=200),          # no lists: not a report
+@pytest.mark.parametrize("answer, said", [
+    (_answer(DOWN, status=502), "Spoolman didn't answer"),
+    # No answer from FCC itself, as the title bar's count says (Group 57 review,
+    # round 4: the list blamed Spoolman while the button said FCC didn't answer).
+    (_answer(None, network=True), "FCC didn't answer"),
+    (_answer(None, status=502, badJson=True), "FCC didn't answer"),
+    (_answer({"success": True}, status=200), "FCC couldn't build the list"),     # no lists: not a report
 ])
-def test_a_failed_read_is_an_error_never_an_empty_list(panel, answer):
+def test_a_failed_read_is_an_error_never_an_empty_list(panel, answer, said):
     page, open_ = panel
     open_(answer)
     _wait_state(page, "error")
     text = page.locator(BODY).inner_text()
-    assert "Spoolman didn't answer" in text
+    assert said in text, text
+    if said != "FCC couldn't build the list":
+        assert "This is not an empty list" in text, text
     assert "Nothing is low" not in text
     assert page.locator(PANEL + " .fcc-stock-row").count() == 0
     assert page.locator(PANEL + " [role=alert]").count() == 1
@@ -582,11 +591,18 @@ def test_a_scanners_enter_is_left_to_the_scan_accumulator(panel):
 
 
 def test_escape_closes_and_stops_listening(panel):
+    """PIN UPDATED DELIBERATELY (Group 57 review, 2026-10-26): closing hands the
+    focus back to the button that opened it (it used to drop to the page), so
+    the keys after it are sent from the page itself here: on the real page an
+    Enter on that button is the scan accumulator's, but this page has none, and
+    the button would open the list again."""
     page, open_ = panel
     open_(_answer(REPORT))
     _wait_state(page, "ready")
     page.keyboard.press("Escape")
     assert page.locator("#fcc-low-stock-overlay").count() == 0
+    assert page.evaluate("() => document.activeElement.id") == "global-search-low-stock"
+    page.evaluate("() => document.activeElement.blur()")
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
     page.keyboard.press("Delete")
@@ -1165,6 +1181,61 @@ def test_a_scan_typed_onto_a_reason_radio_never_saves_the_dialog(panel):
     page.wait_for_function("() => window.__sent.length === 1")
 
 
+# Date.now `ms` ahead of the real one, from now on (the reason radios' capture
+# reads it; the scan accumulator's 2 s reset is a timer this leaves alone).
+LATER_JS = """(ms) => { const real = window.__realDateNow || Date.now.bind(Date);
+    window.__realDateNow = real; const ahead = (window.__ahead || 0) + ms; window.__ahead = ahead;
+    Date.now = () => real() + ahead; }"""
+
+
+@pytest.mark.parametrize("between", ["ArrowDown", "Space", "late", "stale"])
+def test_a_persons_stray_key_on_a_reason_never_takes_their_enter(panel, between):
+    """Group 57 review, round 4: a key a person typed onto a reason radio (a '/'
+    from habit) made their next Enter a scan of it, however much later and
+    whatever they pressed between: Del, '/', ArrowDown, Enter scanned "/" and
+    saved nothing. A scanner sends no arrow or Space mid-label, so those start
+    afresh; at the Enter, one lone key 500 ms or more before it is a person's,
+    and keys over 2 s old are dropped (the accumulator's own reset). Each of
+    these Enters saves, with no scan. RED on dd81587: a scan of "/", nothing
+    sent."""
+    page, open_ = panel
+    open_(_answer(REPORT), _answer(REPORT), writes=[_ok("Prusament - PLA - Galaxy Black")])
+    _wait_state(page, "ready")
+    page.keyboard.press("Delete")
+    assert _focused(page)["value"] == "discontinued"
+    page.locator(DIALOG + " input[value='discontinued']").check()     # a reason picked, by mouse
+    if between == "stale":
+        page.keyboard.type("//")                               # two keys: they'd be a scan if fresh
+    else:
+        page.keyboard.press("/")
+    if between == "ArrowDown":
+        page.keyboard.press("ArrowDown")
+    elif between == "Space":
+        page.keyboard.press("Space")
+    elif between == "late":
+        page.evaluate(LATER_JS, 600)
+    else:
+        page.evaluate(LATER_JS, 2100)
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => window.__sent.length === 1")
+    assert page.evaluate("window.__scans") == [], between
+    assert page.evaluate("window.__sent[0].body.reason") in ("discontinued", "cant_find"), between
+
+
+def test_a_one_key_label_scanned_onto_a_reason_is_still_a_scan(panel):
+    """The 500 ms rule is for a person's lone key: a scanner's one-character
+    label (spool #7's bare id) lands with its Enter right after it, and is a
+    scan, as before (the dialog stays, nothing sent)."""
+    page, open_ = panel
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    page.keyboard.press("Delete")
+    page.keyboard.type("7")
+    page.keyboard.press("Enter")
+    assert [s[0] for s in page.evaluate("window.__scans")] == ["7"]
+    assert page.evaluate("window.__sent") == [] and _dialog_open(page)
+
+
 def test_a_quiet_re_read_never_takes_the_focus_from_an_open_dialog(panel):
     """browser-4 (orange): the re-read after a change landed while the next
     dialog's note was being typed and moved the focus onto a row behind it.
@@ -1266,3 +1337,110 @@ def test_a_double_click_on_the_button_leaves_its_dialog_open(panel):
     page.wait_for_timeout(450)
     page.mouse.click(5, 5)                                    # a real click outside still closes it
     assert not _dialog_open(page)
+
+
+# --- Group 57.1 (Derek, 2026-10-25): one size, whatever it shows ------------------------
+
+def _frame(page):
+    """Where the window and its fixed parts are, rounded to the pixel."""
+    return page.evaluate("""(sel) => {
+        const p = document.querySelector(sel);
+        const at = (q) => { const r = p.querySelector(q).getBoundingClientRect();
+                            return [Math.round(r.top), Math.round(r.height)]; };
+        const r = p.getBoundingClientRect();
+        return { box: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+                 sub: at('[data-stock-sub]'), tools: at('[data-stock-tools]'),
+                 body: at('[data-stock-body]'), foot: at('[data-stock-foot]') };
+    }""", PANEL)
+
+
+def _many(n):
+    rep = copy.deepcopy(REPORT)
+    rep["low"] = [_row(1000 + i, f"Brand{i:02d} - PLA - Colour {i:02d}", 10.0 + i, 1, 1) for i in range(n)]
+    return rep
+
+
+def test_the_window_keeps_one_size_whatever_it_shows(panel):
+    """It jumped in size with its content (Derek, 2026-10-25: "which makes
+    everything move around in a weird way"): now the window, the line under its
+    title, the tabs and filter row and the key legend are in the same place
+    while it reads, on every list, with a filter that matches nothing, a long
+    list, nothing at all and an error. RED on the base: the panel was as tall as
+    its content (max-height: 86vh), and the tabs row was taken out while it
+    read."""
+    page, open_ = panel
+    # Held until it is measured: a timed hold could end first on a slow run
+    # (Group 57 review, round 5, saw it once).
+    open_(_answer(_many(30), hold=True))
+    # Measured while it reads, or the test compares ready with ready (round 2).
+    assert _state(page) == "loading", _state(page)
+    frames = {"loading": _frame(page)}
+    page.evaluate("() => window.__release()")
+    _wait_state(page, "ready")
+    frames["low (30 rows)"] = _frame(page)
+    for key in ("out", "excluded"):
+        _tab(page, key)
+        frames[key] = _frame(page)
+    page.locator(FILTER).fill("nothing matches this")
+    frames["no match"] = _frame(page)
+    open_(_answer(EMPTY), click=False)
+    _wait_state(page, "empty")
+    frames["nothing at all"] = _frame(page)
+    open_(_answer(DOWN, status=502), click=False)
+    _wait_state(page, "error")
+    frames["error"] = _frame(page)
+    first = frames["loading"]
+    moved = {name: f for name, f in frames.items() if f != first}
+    assert not moved, f"the window or its fixed parts moved: {first} vs {moved}"
+
+
+@pytest.mark.parametrize("size,viewport,height", [
+    ("standard", (1600, 1300), 768),     # 48rem (57.3, Derek: "I'm ok with it growing a little")
+    ("xlarge", (1600, 1300), 960),       # 48rem at a 20 px root
+    ("standard", (1280, 600), 516),      # 86vh: a short window still fits
+])
+def test_its_height_is_set_in_rem_and_fits_the_window(panel, size, viewport, height):
+    page, open_ = panel
+    page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
+    page.evaluate("(s) => document.documentElement.setAttribute('data-fcc-text-size', s)", size)
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    box = _frame(page)["box"]
+    assert abs(box[3] - height) <= 1, box
+    assert box[1] >= 0 and box[1] + box[3] <= viewport[1], box
+
+
+def test_a_long_list_scrolls_inside_the_window(panel):
+    """Only the list scrolls (Derek: "If that means adding a scrollbar to the
+    list of filaments, that's fine"); ↑ from the first row wraps to the last,
+    which is scrolled into view inside the window."""
+    page, open_ = panel
+    open_(_answer(_many(40)))
+    _wait_state(page, "ready")
+    before = _frame(page)
+    assert page.locator(BODY).evaluate("b => b.scrollHeight > b.clientHeight + 100")
+    page.keyboard.press("ArrowUp")
+    assert _active_fid(page) == "1039"
+    assert page.locator(BODY).evaluate("b => b.scrollTop > 0")
+    row = page.locator(BODY + " .fcc-stock-row.kb-active").bounding_box()
+    body = page.locator(BODY).bounding_box()
+    assert row["y"] >= body["y"] - 1 and row["y"] + row["height"] <= body["y"] + body["height"] + 1, (row, body)
+    assert _frame(page) == before
+
+
+def test_the_line_under_the_title_keeps_its_words_while_it_reads(panel):
+    """It reads the same before the list arrives, with the line the dashboard's
+    count last said (else "…"), so it never changes length once the list is in."""
+    page, open_ = panel
+    open_(_answer(REPORT, hold=True))                 # held until it is read (round 5)
+    sub = page.locator(PANEL + " [data-stock-sub]")
+    assert sub.text_content().strip() == ("Per filament, across its in-stock spools: low is under … g "
+                                          "(⚙️ Settings → Behavior).")
+    page.evaluate("() => window.__release()")
+    _wait_state(page, "ready")
+    assert "low is under 250 g" in sub.text_content()
+    page.keyboard.press("Escape")
+    page.evaluate("() => window._renderLowStockCount({read_ok: true, count: 3, low: 1, out: 2, threshold_g: 300})")
+    open_(_answer(REPORT, hold=True), click=False)
+    assert "low is under 300 g" in sub.text_content()
+    page.evaluate("() => window.__release()")

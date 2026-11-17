@@ -245,7 +245,7 @@
         // Existing LocationIDs are read-only (renaming = remove+add, which the
         // backend guards); new rows get an editable LocationID.
         const locInput = isNew
-            ? `<input class="form-control form-control-sm pm-loc bg-dark text-white border-secondary" type="text" value="${loc}" placeholder="LocationID (e.g. CORE1-M6)" autocomplete="off" style="max-width:170px;">`
+            ? `<input class="form-control form-control-sm pm-loc bg-dark text-white border-secondary" type="text" value="${loc}" placeholder="LocationID (e.g. PRINTER-1)" autocomplete="off" style="max-width:170px;">`
             : `<input class="form-control form-control-sm pm-loc bg-dark text-white border-secondary" type="text" value="${loc}" readonly title="LocationID is fixed for existing toolheads — add or remove instead" style="max-width:170px; opacity:.7;">`;
         return `<div class="d-flex align-items-center gap-2 py-1 pm-row">
             ${locInput}
@@ -327,7 +327,7 @@
         if (!host) return;
         let html = `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">
             Toolheads keyed by LocationID. Add new ones (e.g. an MMU / indxx upgrade) or edit a name / position.
-            A printer's toolheads share its ID prefix (RCOI-1 … RCOI-8 belong to printer RCOI); each toolhead gets its
+            A printer's toolheads share its ID prefix (PRINTER-1 … PRINTER-8 belong to printer PRINTER); each toolhead gets its
             Location Manager row automatically, and renaming the printer on one row renames it on all of them.
             Existing LocationIDs can't be renamed; removing one a dryer-box slot or spool still uses is blocked.
         </div>`;
@@ -673,17 +673,40 @@
                     <button type="button" class="btn btn-sm btn-info fw-bold" id="cfgio-apply" ${diff.length ? '' : 'disabled'}>Apply ${diff.length} change(s)</button>
                 </div>
             </div>`;
+        // Opens on Cancel, and backing out with changes listed says nothing was
+        // imported (Group 50.6; Derek, 2026-10-29: "moving to cancel also works
+        // here too, and just doing a toast or something that the settings
+        // weren't imported, just in case that wasn't the user's intent"). An
+        // import overwrites settings, so a stray or held Enter must not apply it.
+        const host = document.getElementById('configModal');
+        let answered = false;
+        const onHostGone = () => cancel();
+        const cancel = () => {
+            if (answered) return;
+            answered = true;
+            if (host) host.removeEventListener('hidden.bs.modal', onHostGone);
+            handle.cleanup();
+            if (diff.length && window.showToast) {
+                window.showToast('Settings not imported: nothing was changed. To import them, choose the file again.',
+                    'warning', 7000);
+            }
+        };
         const handle = window.mountOverlay({
             id: 'fcc-config-import-overlay',
             content: body,
             tier: 'confirm',
-            host: document.getElementById('configModal'),
-            initialFocus: '#cfgio-apply',
+            host: host || undefined,
+            initialFocus: '#cfgio-cancel',
+            onEscape: cancel,
         });
+        if (host) host.addEventListener('hidden.bs.modal', onHostGone);
         const root = handle.panel;
-        root.querySelector('#cfgio-cancel').addEventListener('click', () => handle.cleanup());
+        root.querySelector('#cfgio-cancel').addEventListener('click', cancel);
         const applyBtn = root.querySelector('#cfgio-apply');
         if (applyBtn) applyBtn.addEventListener('click', async () => {
+            if (answered) return;
+            answered = true;
+            if (host) host.removeEventListener('hidden.bs.modal', onHostGone);
             applyBtn.disabled = true;
             applyBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Applying…';
             try {

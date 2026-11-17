@@ -22,6 +22,8 @@
     const STORAGE_KEY = 'fcc.printerStatus.collapsed';
     const ORDER_KEY = 'fcc.printerStatus.order';
     const LABEL_KEY = 'fcc.printerStatus.toolheadLabel';
+    const NAME_KEY = 'fcc.printerStatus.printerName';
+    const WEIGHT_KEY = 'fcc.printerStatus.stripWeight';
     const REFRESH_DEBOUNCE_MS = 250;
     // If nothing has rendered this long after load (the heartbeat keeps
     // failing), fetch once the old way so the widget doesn't sit on its
@@ -96,6 +98,11 @@
             return {};
         }
         const printers = pmBody.printers || {};
+        // Group 50.1: each printer's ID, as the heartbeat gives it (`id`).
+        const idByName = {};
+        (pmBody.printer_rows || []).forEach((p) => {
+            if (p && p.name && p.location_id && !idByName[p.name]) idByName[p.name] = String(p.location_id);
+        });
         const out = {};
         await Promise.all(Object.entries(printers).map(async ([name, entries]) => {
             // Per-printer bindings (also exposes printer_pool for future use).
@@ -148,28 +155,56 @@
             }));
             // Re-sort by position so the visual order matches printer layout.
             allRows.sort((a, b) => (a.position || 0) - (b.position || 0));
-            out[name] = { toolheads: allRows };
+            out[name] = { toolheads: allRows, id: idByName[name] || '' };
         }));
         return out;
     };
 
-    // Group 46.3 — how a toolhead tile is labelled (Settings → This Browser): its
-    // full id (XL-3, the default), just its number (3), or "Tool 3". The number is
-    // the head's position + 1: positions count from 0, the printer's own screen
-    // and the Feeds/Quick-Swap pickers count from 1. Visible text only: the
-    // data-toolhead attribute and the tooltips keep the full id, and the collapsed
-    // strip keeps it too, because it puts every printer's heads side by side
-    // (XL's and the INDX's first heads would both read "1").
-    const _labelMode = () => {
-        try { return localStorage.getItem(LABEL_KEY) || 'XL-3'; }
-        catch (e) { return 'XL-3'; }
+    // The Printer Status settings (Settings → 🖥️ This Browser; config_schema.py),
+    // by the names their selects show. Group 46.3's toolhead labels: the head's
+    // ID (the default), its number, or "Tool" and its number; the number is the
+    // head's position + 1 (positions count from 0, a printer's own screen and the
+    // Feeds / Quick-Swap pickers from 1). Group 50.1 (Derek, 2026-10-29): the
+    // folded strip follows that setting too (each printer's heads sit behind its
+    // own name now, so two printers' "1"s can't be confused), shows each printer
+    // by its name or its ID, and shows each loaded head's grams beside it (the
+    // default: "it's kind of the point for me"), under it, or not at all. The
+    // labels' old names were what one head of Derek's read ("XL-3" / "3" /
+    // "Tool 3"); a browser's old pick is stored under its new name at load, so
+    // Settings shows it (it shows the default for a value its select lacks).
+    // Visible text only: data-toolhead and the tooltips keep the full ID.
+    const PREFS = Object.freeze({
+        label: Object.freeze({ key: LABEL_KEY, def: 'By ID', label: 'Printer Status toolhead labels',
+            choices: Object.freeze(['By ID', 'By number', 'By Tool + number']),
+            legacy: Object.freeze({ 'XL-3': 'By ID', '3': 'By number', 'Tool 3': 'By Tool + number' }) }),
+        name: Object.freeze({ key: NAME_KEY, def: 'By name', label: 'Printers in the folded Printer Status',
+            choices: Object.freeze(['By name', 'By ID']) }),
+        weight: Object.freeze({ key: WEIGHT_KEY, def: 'Beside each toolhead', label: 'Weights in the folded Printer Status',
+            choices: Object.freeze(['Beside each toolhead', 'Under each toolhead', 'Off']) }),
+    });
+    // A pick this page couldn't store (private mode, blocked storage) still
+    // shows until the page is reloaded.
+    const _picked = {};
+    const _pref = (which) => {
+        const p = PREFS[which];
+        if (_picked[which]) return _picked[which];
+        let v = null;
+        try { v = localStorage.getItem(p.key); } catch (e) { /* blocked storage: the default */ }
+        if (p.legacy && typeof v === 'string' && Object.prototype.hasOwnProperty.call(p.legacy, v)) v = p.legacy[v];
+        return p.choices.includes(v) ? v : p.def;
     };
+    try {
+        const old = localStorage.getItem(LABEL_KEY);
+        if (old && Object.prototype.hasOwnProperty.call(PREFS.label.legacy, old)) {
+            localStorage.setItem(LABEL_KEY, PREFS.label.legacy[old]);
+        }
+    } catch (e) { /* blocked storage: _pref reads the old name as the new one */ }
     const _thLabel = (th) => {
-        const mode = _labelMode();
+        const mode = _pref('label');
         const n = Number(th.position);
         if (!Number.isFinite(n)) return th.id;
-        if (mode === '3') return String(n + 1);
-        if (mode === 'Tool 3') return `Tool ${n + 1}`;
+        if (mode === 'By number') return String(n + 1);
+        if (mode === 'By Tool + number') return `Tool ${n + 1}`;
         return th.id;
     };
 
@@ -177,11 +212,11 @@
     // identical state — keeps a tight sync-pulse cadence cheap. The label mode
     // is part of it, so changing it in Settings repaints on the next pulse.
     const _fingerprint = (rows) => {
-        const parts = ['label=' + _labelMode()];
+        const parts = ['label=' + _pref('label'), 'name=' + _pref('name'), 'weight=' + _pref('weight')];
         Object.entries(rows).sort().forEach(([name, info]) => {
             const stateFp = info.state === null ? 'offline'
                 : info.state ? String(info.state.state || '') : '';
-            parts.push(name + '@' + stateFp + '|' + info.toolheads.map(th => {
+            parts.push(name + '#' + String(info.id || '') + '@' + stateFp + '|' + info.toolheads.map(th => {
                 const it = th.item;
                 // Include the unbound flag so binding a/unbinding a slot while a
                 // spool stays loaded still re-renders the 🔗 hint (occupancy no
@@ -194,7 +229,9 @@
                 // repaints the new material line.
                 // 42.4: a second loaded spool appearing or leaving repaints the chip.
                 // reads-1: "? not read" and "empty" are different tiles.
-                return th.id + (th.unbound ? '!u' : '') + (th.unread ? '!r' : '') + ((th.loaded_count || 0) > 1 ? `!n${th.loaded_count}` : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
+                // 50.4: a spool stored for the head, or loaded from its slot, repaints it.
+                const waiting = (th.waiting || []).map(w => `${w.id}@${w.box}:${w.slot}`).join('/');
+                return th.id + (th.unbound ? '!u' : '') + (th.unread ? '!r' : '') + ((th.loaded_count || 0) > 1 ? `!n${th.loaded_count}` : '') + (waiting ? `!w${waiting}` : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
             }).join(','));
         });
         return parts.join('||');
@@ -224,9 +261,51 @@
         : '');
     window.fccDoubledHeadText = _doubledText;
 
+    // Group 50.4 ("stored, not loaded"; Derek, 2026-10-14 and 30): a spool
+    // stored in a box slot that feeds this head but not loaded on it, as a
+    // mid-print "Just store it" leaves one (the heartbeat's `waiting`, every
+    // such spool, a slot prepped on purpose included). No notice at a print's
+    // end and no "Load now": the head shows it quietly until the spool is
+    // loaded by any path or leaves the slot. The words, for a tooltip or a
+    // screen reader: the full head id whatever the label setting.
+    const _waitingText = (th) => {
+        const w = th.waiting || [];
+        if (!w.length) return '';
+        const one = (x) => `${x.display || `#${x.id}`} in ${x.box} slot ${x.slot}`;
+        const list = w.length === 1 ? one(w[0])
+            : `${w.slice(0, -1).map(one).join(', ')} and ${one(w[w.length - 1])}`;
+        return `Stored for ${th.id}, not loaded: ${list}.`;
+    };
+    // The open tile's quiet line. One spool: "📦 #93 waits in slot 2" and
+    // "I loaded it", which runs the Quick-Swap tap's own load of that slot onto
+    // the head (window.quickSwapTap: its confirm, a printing head's question,
+    // Group 51.5's check that the slot still holds that spool, Undo), never a
+    // write of its own: FCC can't see what is on the head. Several: their
+    // count, and the tile opens the head, whose Quick-Swap slots load each.
+    const _waitingBlock = (th) => {
+        const w = th.waiting || [];
+        if (!w.length) return '';
+        const tip = _waitingText(th) + (w.length === 1
+            ? ` "I loaded it" records it on ${th.id}, as a Quick-Swap does, asking first.`
+            : ` Open ${th.id} to load one from its Quick-Swap slots.`);
+        if (w.length > 1) {
+            return `<div class="fcc-ps-th-waiting" title="${_esc(tip)}">`
+                + `<div class="fcc-ps-th-waiting-text text-truncate">📦 ${w.length} spools wait</div></div>`;
+        }
+        const x = w[0];
+        return `<div class="fcc-ps-th-waiting" title="${_esc(tip)}">`
+            + `<div class="fcc-ps-th-waiting-text text-truncate"><span class="fcc-ps-th-waiting-id">📦 #${_esc(x.id)}</span>`
+            + `<span class="fcc-ps-th-waiting-where"> waits in slot ${_esc(x.slot)}</span></div>`
+            + `<button type="button" class="fcc-ps-loaded-it" data-toolhead="${_esc(th.id)}" data-box="${_esc(x.box)}"`
+            + ` data-slot="${_esc(x.slot)}" data-spool-id="${_esc(x.id)}" data-spool-label="${_esc(x.display || `#${x.id}`)}">`
+            + '✓ I loaded it</button></div>';
+    };
+
     const _renderToolheadBlock = (th) => {
         const it = th.item;
-        const positionAttr = `data-toolhead="${th.id}"`;
+        // Group 50.3: every tile is a tab stop and a button (Enter or Space
+        // opens the head, _wireDelegation), as a click does.
+        const positionAttr = `data-toolhead="${th.id}" tabindex="0" role="button"`;
         if (th.unread && !it) {
             // reads-1: Spoolman didn't answer and FCC has no earlier answer for
             // this head, so it doesn't know what is loaded: "? not read", never
@@ -234,7 +313,7 @@
             return `
                 <div class="fcc-ps-th fcc-ps-th-unread" ${positionAttr}
                      style="cursor:pointer;"
-                     title="${th.id} — Spoolman didn't answer, so FCC couldn't check what is loaded here. It tries again every few seconds.">
+                     title="${th.id} — Spoolman didn't answer, so FCC couldn't check what is loaded here. It tries again every few seconds. Click to open ${th.id}.">
                     <div class="fcc-ps-th-bar"><div class="fcc-ps-th-bar-fill" style="width:0%;"></div></div>
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
                         <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
@@ -257,7 +336,7 @@
             return `
                 <div class="fcc-ps-th fcc-ps-th-unbound" ${positionAttr}
                      style="cursor:pointer; border:1px dashed #ffd54a;"
-                     title="${th.id} — no dryer-box slot is bound to this toolhead. Bind one in the Location Manager → Feeds editor for a dryer box.">
+                     title="${th.id} — no dryer-box slot is bound to this toolhead. Bind one in the Location Manager → Feeds editor for a dryer box. Click to open ${th.id}.">
                     <div class="fcc-ps-th-bar"><div class="fcc-ps-th-bar-fill" style="width:0%;"></div></div>
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
                         <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
@@ -273,12 +352,13 @@
             return `
                 <div class="fcc-ps-th fcc-ps-th-empty" ${positionAttr}
                      style="cursor:pointer;"
-                     title="${th.id} — empty">
+                     title="${th.id} — empty. Click to open ${th.id}.">
                     <div class="fcc-ps-th-bar"><div class="fcc-ps-th-bar-fill" style="width:0%;"></div></div>
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
                         <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                     </div>
                     <div class="fcc-ps-th-chip" style="color: rgba(255,255,255,0.65);">empty</div>
+                    ${_waitingBlock(th)}
                 </div>
             `;
         }
@@ -305,6 +385,11 @@
         const chipHtml = window.SpoolCardBuilder
             ? window.SpoolCardBuilder.buildCard(it, 'printer-status', {})
             : `<div class="fcc-ps-th-chip text-light">${weight}g</div>`;
+        // Group 50.7 (Derek, 2026-10-30): on a window too short for the open
+        // widget its material line under the name gives way, and the material
+        // shows here in the colour band, beside the head's label (hidden
+        // otherwise; global.css, .fcc-ps-tight).
+        const material = (it.details && it.details.material) || '';
         // A loaded toolhead that ALSO has no dryer-box slot bound keeps the
         // dashed accent + a 🔗 hint (preserves L140 discoverability) WHILE
         // showing its real spool. The 🔗 chip sits on the dark tile area
@@ -319,91 +404,118 @@
             <div class="fcc-ps-th${unboundCls}" ${positionAttr}
                  data-spool-id="${it.id}"
                  style="cursor:pointer;${unboundBorder}"
-                 title="${th.id} — ${(it.display || `#${it.id}`).replace(/"/g, '&quot;')} — ${Math.round(weight)}g remaining (click to Quick-Swap)">
+                 title="${th.id} — ${(it.display || `#${it.id}`).replace(/"/g, '&quot;')} — ${Math.round(weight)}g remaining. Click to open ${th.id}: what it holds, and its Quick-Swap slots.">
                 <div class="fcc-ps-th-bar">
                     <div class="fcc-ps-th-bar-fill" style="width:${pct}%; background:${barColor};"></div>
                 </div>
                 <div class="fcc-ps-th-body" style="background:${bodyBg};">
                     <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
+                    ${material ? `<div class="fcc-ps-th-mat text-truncate text-pop">${_esc(material)}</div>` : ''}
                 </div>
                 ${chipHtml}
                 ${unboundHint}
                 ${_doubledChip(th)}
+                ${_waitingBlock(th)}
             </div>
         `;
     };
 
-    // Collapsed-mode chip: super-compact one-liner per toolhead with just
-    // the swatch + ID + weight. Same click target as the full block so the
-    // collapsed view is fully interactive. Routes the swatch through
-    // makeSwatchHtml so multi-color filaments render as gradients (not
-    // gray fallback) and contrast is consistent with all other chips.
+    // --- THE FOLDED STRIP (Group 50.1; Derek, 2026-10-19 / 25 / 29) ----------
+    // Each printer reads as it does open: its name (or its ID, the "Printers"
+    // setting; hovering shows both), its state, its 🛑 count, then its heads.
+    // A head is its label (the toolhead-label setting) on its spool's colour,
+    // ringed in the colour of the tiles' weight bars (_weightPalette: cyan,
+    // amber under 100 g, red at 0); a hollow grey ring holds no spool, a dashed
+    // one has no box slot feeding it, a dotted amber one couldn't be read
+    // (reads-1, "?"). With the weights setting on (the default) its grams sit
+    // beside the ring or under it, in the ring's colour; off, they are in the
+    // head's tooltip. A doubled head (Group 42.4) says ⚠️N beside it. The head
+    // keeps the .fcc-ps-mini class, so the widget's one delegated click opens
+    // it (L361), and data-toolhead keeps the full ID.
     const _renderToolheadCompact = (th) => {
         const it = th.item;
+        const label = _esc(_thLabel(th));
+        const shape = _pref('label') === 'By number' ? 'fcc-ps-ring' : 'fcc-ps-ring fcc-ps-ring-pill';
+        const weightMode = _pref('weight');
+        const unb = th.unbound ? ' fcc-ps-ring-unbound' : '';
+        const feed = th.unbound ? ' No box slot feeds it.' : '';
+        const open = ` Click to open ${th.id}.`;
+        // Group 50.4 (Derek's pick, 2026-10-30): an amber dot on the ring when
+        // a spool is stored for the head and not loaded; the words are in its
+        // tooltip and its accessible name (a screen reader), and a tap, a click
+        // or Enter opens the head, whose Quick-Swap slots show and load it.
+        const waitTip = (th.waiting || []).length ? ` ${_waitingText(th)}` : '';
+        const waitCls = waitTip ? ' fcc-ps-ring-waiting' : '';
+        let ring;
+        let tip;
+        let below = '';
         if (th.unread && !it) {
-            // reads-1: the collapsed form of "? not read" (see _renderToolheadBlock).
-            return `<span class="fcc-ps-mini fcc-ps-mini-empty fcc-ps-mini-unread"
-                          data-toolhead="${th.id}"
-                          title="${th.id} — Spoolman didn't answer, so FCC couldn't check what is loaded here">
-                <span class="fcc-ps-mini-swatch fcc-ps-mini-swatch-empty"></span>
-                <span class="fcc-ps-mini-id">${th.id}</span>
-                <span class="fcc-ps-mini-weight" style="color:#ffd54a;">? not read</span>
-            </span>`;
+            tip = `${th.id}: Spoolman didn't answer, so FCC couldn't check what is loaded here.${open}`;
+            ring = `<span class="${shape} fcc-ps-ring-empty fcc-ps-ring-unread">${label}</span>`;
+            below = '<span class="fcc-ps-mini-weight fcc-ps-strip-unread">?</span>';
+        } else if (!it) {
+            tip = `${th.id}: empty.${feed}${waitTip}${open}`;
+            ring = `<span class="${shape} fcc-ps-ring-empty${unb}${waitCls}">${label}</span>`;
+            // Under: an invisible line keeps the ring in line with its neighbours'.
+            if (weightMode === 'Under each toolhead') {
+                below = '<span class="fcc-ps-mini-weight fcc-ps-strip-w-none" aria-hidden="true">0g</span>';
+            }
+        } else {
+            // A spool whose weight Spoolman doesn't know reads "---" (as its open
+            // tile does) in a plain ring, never a red "0g" that says empty.
+            const known = it.remaining_weight !== undefined && it.remaining_weight !== null
+                && Number.isFinite(Number(it.remaining_weight));
+            const weight = known ? Number(it.remaining_weight) : 0;
+            const pal = known ? _weightPalette(weight) : null;
+            const fill = typeof window.getFilamentStyle === 'function'
+                ? window.getFilamentStyle(it.color, it.color_direction || 'longitudinal').frame
+                : '#444';
+            tip = `${th.id}: ${it.display || `#${it.id}`}, ${known ? `${Math.round(weight)} g left` : 'weight unknown'}.${feed}${waitTip}${open}`;
+            ring = `<span class="${shape}${unb}${waitCls} text-pop" style="${pal ? `--fcc-ring:${pal}; ` : ''}background:${fill};">${label}</span>`;
+            if (weightMode !== 'Off') {
+                below = known
+                    ? `<span class="fcc-ps-mini-weight" style="color:${pal};">${Math.round(weight)}g</span>`
+                    : '<span class="fcc-ps-mini-weight fcc-ps-strip-w-unknown">---</span>';
+            }
         }
-        if (th.unbound && !it) {
-            // L140 companion — collapsed-mode placeholder for unbound AND empty
-            // toolheads. An unbound toolhead that holds a spool falls through to
-            // the occupied chip below (box-bounding fix).
-            return `<span class="fcc-ps-mini fcc-ps-mini-empty"
-                          data-toolhead="${th.id}"
-                          style="border:1px dashed #ffd54a;"
-                          title="${th.id} — no dryer-box slot bound (bind one in the Location Manager)">
-                <span class="fcc-ps-mini-swatch fcc-ps-mini-swatch-empty"></span>
-                <span class="fcc-ps-mini-id">${th.id}</span>
-                <span class="fcc-ps-mini-weight" style="color:#ffd54a;">🔗</span>
-            </span>`;
-        }
-        if (!it) {
-            // "empty" text uses an explicit light color (not Bootstrap's
-            // text-muted, which sits at ~#6c757d and disappears against
-            // the dark widget background — recurring contrast pitfall).
-            return `<span class="fcc-ps-mini fcc-ps-mini-empty"
-                          data-toolhead="${th.id}"
-                          title="${th.id} — empty">
-                <span class="fcc-ps-mini-swatch fcc-ps-mini-swatch-empty"></span>
-                <span class="fcc-ps-mini-id">${th.id}</span>
-                <span class="fcc-ps-mini-weight" style="color: rgba(255,255,255,0.65);">empty</span>
-            </span>`;
-        }
-        const swatch = window.makeSwatchHtml(it.color, it.color_direction, {
-            size: 16,
-            borderColor: 'rgba(255,255,255,0.5)',
-            marginRight: 0,
-        });
-        const weight = (it.remaining_weight !== undefined && it.remaining_weight !== null)
-            ? Number(it.remaining_weight) : 0;
-        const wColor = _weightPalette(weight);
-        const safeDisplay = (it.display || `#${it.id}`).replace(/"/g, '&quot;');
-        // Occupied chip; if the toolhead is also unbound, keep the dashed
-        // accent + a trailing 🔗 hint while still showing the swatch + weight.
-        const unboundMiniCls = th.unbound ? ' fcc-ps-mini-unbound' : '';
-        const unboundMiniBorder = th.unbound ? 'border:1px dashed #ffd54a;' : '';
-        const unboundMiniHint = (th.unbound
-            ? ` <span class="fcc-ps-mini-unbound-hint" style="color:#ffd54a;" title="No dryer-box slot bound (auto-deduct still follows the toolhead)">🔗</span>`
-            : '')
-            // Group 42.4: the doubled-head warning, compact.
-            + ((th.loaded_count || 0) > 1
-                ? ` <span class="fcc-ps-mini-doubled" style="color:#ffd54a; background:#2b2200;" title="${_doubledText(th).replace(/"/g, '&quot;')}">⚠️${th.loaded_count}</span>`
-                : '');
-        return `<span class="fcc-ps-mini${unboundMiniCls}"
-                      data-toolhead="${th.id}"
-                      style="${unboundMiniBorder}"
-                      title="${th.id} — ${safeDisplay} — ${Math.round(weight)}g (click to Quick-Swap)">
-            ${swatch}
-            <span class="fcc-ps-mini-id">${th.id}</span>
-            <span class="fcc-ps-mini-weight" style="color:${wColor};">${Math.round(weight)}g</span>${unboundMiniHint}
-        </span>`;
+        const doubled = (th.loaded_count || 0) > 1
+            ? `<span class="fcc-ps-mini-doubled" title="${_esc(_doubledText(th))}">⚠️${th.loaded_count}</span>`
+            : '';
+        return `<span class="fcc-ps-mini fcc-ps-strip-head" data-toolhead="${_esc(th.id)}" tabindex="0" role="button" title="${_esc(tip)}" aria-label="${_esc(tip)}">`
+            + `<span class="fcc-ps-strip-stack">${ring}${below}</span>${doubled}</span>`;
     };
+
+    // One printer's group in the folded strip. Its 🛑 count goes in its own slot
+    // (cancel_review.js), between the state and the heads.
+    const _renderStripGroup = (name, info) => {
+        const id = String((info && info.id) || '').trim();
+        const shown = (_pref('name') === 'By ID' && id) ? id : name;
+        const tip = id ? `${name} · ID ${id}` : name;
+        return `<div class="fcc-ps-printer-group" data-printer="${_esc(name)}">`
+            + `<span class="fcc-ps-strip-name" title="${_esc(tip)}">${_esc(shown)}</span>`
+            + `<span class="fcc-ps-strip-state">${_renderStateChip(info.state)}</span>`
+            + '<span class="fcc-ps-strip-count"></span>'
+            + `<span class="fcc-ps-strip-heads">${info.toolheads.map(_renderToolheadCompact).join('')}</span>`
+            + '</div>';
+    };
+
+    // Beside the title while every printer's heads fit there (the strip takes
+    // what the title leaves, at least 20rem); else under the title, where it has
+    // the whole width (.fcc-ps-strip-under); a printer whose heads don't fit
+    // even there scrolls them sideways (Derek's fallback). Two printers that
+    // don't fit on one line take a line each, from the same edge. Measured,
+    // never estimated, and only while the strip shows (the widget folded):
+    // after a render, a resize, a Text size change, a 🛑 count change, folding.
+    const _fitStrip = () => {
+        const widget = document.getElementById('printer-status-widget');
+        const strip = widget && widget.querySelector('.fcc-ps-header-chips');
+        if (!strip || !widget.classList.contains('collapsed')) return;
+        strip.classList.remove('fcc-ps-strip-under');
+        const overflows = Array.from(strip.querySelectorAll('.fcc-ps-strip-heads'))
+            .some((h) => h.scrollWidth > h.clientWidth + 1);
+        if (overflows) strip.classList.add('fcc-ps-strip-under');
+    };
+    window.fitPrinterStatusStrip = _fitStrip;
 
     // L56 — printer-state vocabulary → badge {class,label,title}, in ONE
     // place so the expanded-row badge (_renderStateBadge) and the collapsed
@@ -595,6 +707,32 @@
     // a line of tiles wider than its area is laid out again with one tile
     // fewer per line, so a rounding the sums don't see (a gap at another
     // scale, a margin) can't leave it wrong either.
+    // Group 50.7 (Derek, 2026-10-30, option (b) of the short-window samples):
+    // on a window too short for the open widget (it would scroll inside
+    // itself; it may take 45 % of the window, global.css), each printer's
+    // state and 🛑 count go beside its name, one line for two, and each tile's
+    // material moves from its own line up into its colour band (.fcc-ps-tight),
+    // so every head shows whole and the Buffer Zone and the Activity Log keep
+    // their room. Measured, never estimated: the widget is drawn without the
+    // step first, and takes it only when that would scroll, so a tall window
+    // never does. After every layout of the rows (_balanceRows) and when the
+    // window's height alone changes.
+    const _fitTight = () => {
+        const widget = document.getElementById('printer-status-widget');
+        const body = widget && widget.querySelector('.fcc-ps-body');
+        if (!body || !widget.classList || widget.classList.contains('collapsed')) return;
+        widget.classList.remove('fcc-ps-tight');
+        if (body.scrollHeight > body.clientHeight + 1) widget.classList.add('fcc-ps-tight');
+    };
+    window.fitPrinterStatusTight = _fitTight;
+    let _tightFrame = 0;
+    if (typeof window.addEventListener === 'function') {
+        window.addEventListener('resize', () => {
+            if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_tightFrame);
+            _tightFrame = requestAnimationFrame(_fitTight);
+        });
+    }
+
     const _balanceRows = () => {
         const widget = document.getElementById('printer-status-widget');
         const body = widget && widget.querySelector('.fcc-ps-body');
@@ -661,6 +799,7 @@
                 lay(r);
             });
         }
+        _fitTight();
     };
     window.balancePrinterStatusRows = _balanceRows;
 
@@ -685,8 +824,9 @@
             _widthFrame = requestAnimationFrame(() => _balanceRows());
         }).observe(body);
     };
-    // A Text size change grows or shrinks every tile (rem), not the window.
-    document.addEventListener('fcc:text-size', () => _balanceRows());
+    // A Text size change grows or shrinks every tile (rem), not the window,
+    // and every head in the folded strip.
+    document.addEventListener('fcc:text-size', () => { _balanceRows(); _fitStrip(); });
 
     // A ▲ / ▼ reached by keyboard keeps the focus through a repaint (the
     // reorder draws the rows again, and so does a heartbeat that changed a
@@ -729,6 +869,21 @@
         }
         widget.style.display = '';
         const kept = _focusedArrow(body);
+        // Group 50.3: a head that has the focus keeps it through a repaint (a
+        // heartbeat that changed a tile draws them all again).
+        const keptHead = (() => {
+            const el = document.activeElement;
+            if (!el || !widget.contains(el) || !el.dataset || !el.dataset.toolhead
+                || !el.classList || !(el.classList.contains('fcc-ps-th') || el.classList.contains('fcc-ps-mini'))) return null;
+            return { id: el.dataset.toolhead, strip: el.classList.contains('fcc-ps-mini') };
+        })();
+        // ... and so does "I loaded it", on the same head's button for the same
+        // spool, else on its tile (the spool was loaded, or left the slot).
+        const keptLoaded = (() => {
+            const el = document.activeElement;
+            if (!el || !widget.contains(el) || !el.classList || !el.classList.contains('fcc-ps-loaded-it')) return null;
+            return { id: el.dataset.toolhead, spool: el.dataset.spoolId };
+        })();
         body.innerHTML = printerNames
             .map((name, idx) => _renderRow(name, rows[name], idx, printerNames.length))
             .join('');
@@ -740,20 +895,20 @@
         _balanceRows();
         _watchBodyWidth(body);
         if (kept) _refocusArrow(body, kept);
-        // Header chip strip — every toolhead from every printer in the
-        // user's printer order. Each printer's chips are wrapped in a
-        // group div so CSS can add a vertical divider between groups,
-        // making it clear at a glance which chips belong to which printer.
+        // The folded strip (Group 50.1): every printer in the user's order, each
+        // its name, state, 🛑 count and heads (_renderStripGroup); the weights
+        // setting picks where the grams go (global.css).
         const headerChips = widget.querySelector('.fcc-ps-header-chips');
+        const stripScroll = {};   // a printer's heads scrolled sideways stay where they were
         if (headerChips) {
-            headerChips.innerHTML = printerNames.map(name => {
-                // Lead each group with a compact state badge so live printer
-                // state (PRINTING / IDLE / PAUSED / OFFLINE …) is visible in
-                // the collapsed strip without expanding the widget.
-                const stateChip = _renderStateChip(rows[name].state);
-                const chips = rows[name].toolheads.map(_renderToolheadCompact).join('');
-                return `<div class="fcc-ps-printer-group" data-printer="${_esc(name)}">${stateChip}${chips}</div>`;
-            }).join('');
+            const weight = _pref('weight');
+            headerChips.classList.toggle('fcc-ps-strip-wt-beside', weight === 'Beside each toolhead');
+            headerChips.classList.toggle('fcc-ps-strip-wt-under', weight === 'Under each toolhead');
+            headerChips.querySelectorAll('.fcc-ps-printer-group').forEach((g) => {
+                const box = g.querySelector('.fcc-ps-strip-heads');
+                if (box && box.scrollLeft) stripScroll[g.dataset.printer] = box.scrollLeft;
+            });
+            headerChips.innerHTML = printerNames.map(name => _renderStripGroup(name, rows[name])).join('');
         }
         // Delegated click handler — bound ONCE on the stable widget root
         // (see _wireDelegation). Re-attaching per render lost clicks when
@@ -761,36 +916,149 @@
         // and click, especially during active PRINTING when state/weight
         // ticks invalidated the fingerprint frequently (L361).
         _wireDelegation(widget);
-        // The collapsed strip's groups get their 🛑 N counts too.
+        _watchHeaderWidth(widget);
+        // The collapsed strip's groups get their 🛑 N counts too, before the
+        // strip is measured (a count takes room).
         if (window.cancelReviewDecorate) window.cancelReviewDecorate();
+        _fitStrip();
+        if (headerChips) {
+            headerChips.querySelectorAll('.fcc-ps-printer-group').forEach((g) => {
+                const left = stripScroll[g.dataset.printer];
+                const box = g.querySelector('.fcc-ps-strip-heads');
+                if (left && box) box.scrollLeft = left;
+            });
+        }
+        if (keptLoaded) {
+            const all = Array.from(widget.querySelectorAll('.fcc-ps-loaded-it'));
+            const same = all.find((el) => el.dataset.toolhead === keptLoaded.id && el.dataset.spoolId === keptLoaded.spool);
+            const tile = same || Array.from(widget.querySelectorAll('.fcc-ps-th')).find((el) => el.dataset.toolhead === keptLoaded.id);
+            if (tile) tile.focus();
+        }
+        if (keptHead) {
+            const again = Array.from(widget.querySelectorAll(keptHead.strip ? '.fcc-ps-mini' : '.fcc-ps-th'))
+                .find((el) => el.dataset.toolhead === keptHead.id);
+            if (again) again.focus();
+        }
     };
+
+    // Draws the widget again from the rows it last drew: a Printer Status
+    // setting changed (the strip's look, or every tile's label).
+    const _repaint = () => {
+        const rows = _state.rowsByPrinter;
+        if (!rows || !Object.keys(rows).length) return;
+        _state.lastFingerprint = _fingerprint(rows);
+        _render(rows);
+    };
+
+    // The header's width (the window, a scrollbar): the strip may now fit
+    // beside the title again, or no longer. Only a change of width measures it
+    // again; the strip moving under the title changes the header's height.
+    let _headerWidth = -1;
+    let _headerFrame = 0;
+    const _watchHeaderWidth = (widget) => {
+        const header = widget && widget.querySelector('.fcc-ps-header');
+        if (!header || header._fccPsWidthWatched || typeof ResizeObserver !== 'function') return;
+        header._fccPsWidthWatched = true;
+        new ResizeObserver((entries) => {
+            const entry = entries && entries[entries.length - 1];
+            const w = entry ? entry.contentRect.width : -1;
+            if (w === _headerWidth) return;
+            _headerWidth = w;
+            if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_headerFrame);
+            _headerFrame = requestAnimationFrame(() => _fitStrip());
+        }).observe(header);
+    };
+
+    // Settings: a pick applies at once and is kept in this browser, with no
+    // Save (as Text size and the title bar's settings do). Delegated, so it
+    // works on every redraw of the Settings card; a mouse pick and the arrow
+    // keys both fire `change`.
+    const _prefOf = (el) => {
+        if (!el || typeof el.matches !== 'function') return null;
+        return Object.keys(PREFS).find((w) => el.matches('.cfgset-input[data-key="' + PREFS[w].key + '"]')) || null;
+    };
+    document.addEventListener('change', (e) => {
+        const which = _prefOf(e.target);
+        if (!which) return;
+        const name = e.target.value;
+        if (!PREFS[which].choices.includes(name)) return;
+        _picked[which] = name;
+        let stored = true;
+        try { localStorage.setItem(PREFS[which].key, name); } catch (err) { stored = false; }
+        // Stored already, so "Save settings" has nothing left to do for it.
+        if (stored) e.target.dataset.initial = name;
+        else if (typeof window.showToast === 'function') {
+            window.showToast(PREFS[which].label + ' changed, but this browser could not keep it (private mode or '
+                + 'storage blocked): it goes back when the page reloads.', 'warning', 7000);
+        }
+        _repaint();
+    });
+    // A scan never picks a choice (text_size.js's rule): a scanner types into
+    // whatever has the focus, and a select takes each character as type-ahead.
+    // Not stopped, so the scan accumulator still reads the whole scan; the
+    // arrow keys, Home / End and Page Up / Down still pick.
+    document.addEventListener('keydown', (e) => {
+        if (!_prefOf(e.target)) return;
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+        if (typeof e.key === 'string' && e.key.length === 1) e.preventDefault();
+    }, true);
 
     const _wireDelegation = (widget) => {
         if (widget._fccPsClicksWired) return;
         widget._fccPsClicksWired = true;
         widget.addEventListener('click', (e) => {
+            // Group 50.4: "I loaded it" runs the Quick-Swap tap's load of its
+            // slot onto the head (its confirm and questions), and never also
+            // opens the head its tile stands for.
+            const loadedIt = e.target.closest('.fcc-ps-loaded-it');
+            if (loadedIt && widget.contains(loadedIt)) {
+                e.stopPropagation();
+                if (typeof window.quickSwapTap === 'function') window.quickSwapTap(loadedIt);
+                return;
+            }
             const el = e.target.closest('.fcc-ps-th, .fcc-ps-mini');
             if (!el || !widget.contains(el)) return;
             e.stopPropagation();
             const tid = el.dataset.toolhead;
             if (tid && window.openManage) window.openManage(tid);
         });
-        // Enter on a focused ▲ / ▼ moves the printer, as a click does (review,
-        // 2026-10-23). The dashboard's scan accumulator (scripts.html) cancels
-        // every Enter outside a text field, a button's own press included, so
-        // Enter never reached the arrows there (Space did). A scan ends in
-        // Enter too: one still arriving (window.enterIsAScan) is left to the
-        // accumulator, and the press clears the scan buffer it consumed.
+        // Enter on a focused ▲ / ▼ moves the printer as a click does: the
+        // scan accumulator (scripts.html) lets a person's Enter press a button
+        // since Group 50.6 (the arrows pressed themselves until then, 2026-10-23
+        // review). The heads below are [role=button] spans and tiles, which
+        // the browser never presses on Enter, so they answer it here.
         widget.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
-            const btn = e.target && typeof e.target.closest === 'function'
-                ? e.target.closest('button.fcc-ps-reorder') : null;
-            if (!btn || !widget.contains(btn)) return;
-            if (typeof window.enterIsAScan === 'function' && window.enterIsAScan()) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
-            btn.click();
+            if (e.ctrlKey || e.altKey || e.metaKey) return;
+            // Group 50.3 (the keyboard standing order): a head reached by Tab, a
+            // tile or one in the folded strip, opens on Enter or Space, as a
+            // click does. A scan's keys stay the scan's: an Enter while one is
+            // arriving (window.enterIsAScan) and a Space inside a label
+            // (window.scanIsArriving: a LocationID may hold one) go on to the
+            // accumulator; the press clears the stray key a person may have left
+            // in the scan buffer.
+            const isSpace = e.key === ' ' || e.key === 'Spacebar';
+            const head = (e.key === 'Enter' || isSpace) && e.target && e.target.getAttribute
+                && e.target.getAttribute('role') === 'button' && typeof e.target.closest === 'function'
+                ? e.target.closest('.fcc-ps-th, .fcc-ps-mini') : null;
+            if (head && head === e.target && widget.contains(head)) {
+                if (e.shiftKey) return;
+                if (!isSpace && typeof window.enterIsAScan === 'function' && window.enterIsAScan()) return;
+                if (isSpace && typeof window.scanIsArriving === 'function' && window.scanIsArriving()) return;
+                // Only where a mouse could click it now, once per press (the
+                // accumulator's rule, Group 50 review): under the dim openManage
+                // lifted the dim and the next scan passed the queue, behind an
+                // overlay it opened the head underneath, and a held Space opened
+                // it on every repeat.
+                if (e.repeat || (typeof window.personMayPress === 'function' && !window.personMayPress(e, head))) {
+                    e.preventDefault();
+                    return;
+                }
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
+                const tid = head.dataset.toolhead;
+                if (tid && window.openManage) window.openManage(tid);
+            }
         });
     };
 
@@ -833,6 +1101,9 @@
                         head.item = p.item || null;
                         head.loaded_count = p.loaded_count || 0;
                         if (p.loaded_ids) head.loaded_ids = p.loaded_ids;
+                        // 50.4: the mark stays with the kept tile: it goes only
+                        // when a read says the spool was loaded or left the slot.
+                        if (p.waiting) head.waiting = p.waiting;
                         delete head.unread;
                     } else {
                         unread++;
@@ -899,6 +1170,17 @@
                 if (cached && cached.state !== undefined && rows[name].state === undefined) {
                     rows[name].state = cached.state;
                 }
+                // Group 50.4: likewise `waiting`, which only the heartbeat works
+                // out: without it every local change wiped the marks until a
+                // heartbeat past the 15 s settle. A head keeps its last, less a
+                // spool the fan-out now finds loaded on it.
+                const lastHeads = new Map(((cached && cached.toolheads) || []).map(th => [th && th.id, th]));
+                (rows[name].toolheads || []).forEach(th => {
+                    const last = lastHeads.get(th.id);
+                    if (!last || !last.waiting) return;
+                    const left = last.waiting.filter(w => !(th.item && String(th.item.id) === String(w.id)));
+                    if (left.length) th.waiting = left;
+                });
             });
             // reads-1: a head whose strict read failed keeps its last tile.
             const anyUnread = Object.keys(rows).some(name => {
@@ -949,8 +1231,10 @@
         _setCollapsed(!_isCollapsed());
         _renderShell();
         // Opened: the rows are measured again (the window may have changed
-        // size, or the Text size, while the body had no width).
+        // size, or the Text size, while the body had no width). Folded: the
+        // strip is, for the same reason (it has no width while open).
         if (!_isCollapsed()) _balanceRows();
+        else _fitStrip();
     };
 
     // Group 45.8: every heartbeat tick renders this widget from its
@@ -1022,6 +1306,17 @@
         _render(rows);
     };
     window.refreshPrinterStatusWidgetFromAggregate = refreshFromAggregate;
+
+    // Group 50.3: the keyboard reach, in the shortcut list (the ? overlay).
+    const _registerShortcuts = () => {
+        if (typeof window.registerShortcut !== 'function') return;
+        window.registerShortcut({
+            id: 'printer-status-open-head', scope: 'Printer Status', keys: ['Tab', 'Enter'],
+            description: 'Reach a toolhead (a tile, or one in the folded strip) with Tab; Enter or Space opens it, as a click does.',
+        });
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _registerShortcuts);
+    else _registerShortcuts();
 
     // Exposed for tests + manual debugging.
     window.refreshPrinterStatusWidget = refresh;

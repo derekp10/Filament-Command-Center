@@ -24,6 +24,7 @@ Preserved quirks (do not 'fix' in a move — see the carve plan):
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
 from flask import request, jsonify  # type: ignore
+import html
 import requests  # type: ignore
 
 import state  # type: ignore
@@ -166,10 +167,7 @@ def build_locations_response(spools=None):
     # Immediate-child counts so a row can be classified parent-vs-leaf for the
     # occupancy display (a real parent shows a subtree Total; a leaf shows
     # curr/max). Pseudo-prefix parents never count as real parents.
-    children_count: dict[str, int] = {}
-    for _lid, _p in parent_map.items():
-        if _p and _p not in locations_db.PSEUDO_ROOM_PREFIXES:
-            children_count[_p] = children_count.get(_p, 0) + 1
+    children_count = locations_db.child_row_counts(parent_map)
 
     subtree_ids: dict[str, set] = {}   # ancestor -> set of distinct spool ids
     ancestor_hit: set[str] = set()     # non-row prefixes that need a Virtual Room
@@ -882,6 +880,90 @@ def api_delete_filament(fid):
     })
 
 
+def _sentence(words):
+    """`words` ending as a sentence, for an answer that says more after them."""
+    words = str(words or '').strip()
+    return words if words.endswith(('.', '!', '?')) else words + '.'
+
+
+def _int_id(value):
+    """An id as Spoolman sends one: an int, and not a bool (True is an int)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+_MERGE_RETRY = " Nothing was merged; try again in a moment."
+_MERGE_LIST_UNREAD = "Could not list source spools: Spoolman's answer couldn't be read." + _MERGE_RETRY
+
+
+def _merge_filament(fid, role):
+    """One end of a merge, read through get_filament_answer (Group 53 review,
+    D3b): (the filament, None), or (None, the route's answer). get_filament
+    handed back Spoolman's body whatever the status, so a deleted filament's 404
+    body, and a 500's error body, read as found and the merge went on. A read
+    that gives no filament has its hub.log line from get_filament_answer, which
+    alone sees what came back (rd-1: this logged "couldn't read filament 9:
+    None")."""
+    rec, answered = spoolman_api.get_filament_answer(fid)
+    if isinstance(rec, dict) and rec.get('id') == fid:
+        return rec, None
+    if answered and isinstance(rec, dict) and rec.get('id') is None:
+        # Spoolman's own "no such filament" ({"message": "No filament with ID …"}).
+        return None, (jsonify({"success": False, "error": f"{role} filament #{fid} not found."}), 404)
+    return None, (jsonify({
+        "success": False,
+        "error": f"Couldn't read filament #{fid} from Spoolman, so nothing was merged. Try again in a moment.",
+    }), 502)
+
+
+def _merge_source_spools(r, src_fid):
+    """Spoolman's answer to Merge Filament's spool-list read, as (spools, None),
+    or (None, (detail for hub.log, the answer's error)) when the merge must not
+    go on (Group 53.2, and the Group 53 review, D1 / D2):
+      - a refusal, in Spoolman's words (refusal_words), and "try again" only for a
+        5xx: a 4xx comes back the same;
+      - an answer FCC can't read: a body that isn't JSON, JSON that isn't a list,
+        or an entry that isn't a spool record: a dict whose `id` is an int (not a
+        bool), with a `filament` object whose `id` is one. The re-parent loop
+        skipped an entry with no id, so [{"name": "x"}] merged nothing and then
+        deleted the source;
+      - a spool of another filament. Spoolman ignores a query parameter it
+        doesn't know and answers every spool, which the merge would all have
+        re-parented onto the target."""
+    if not r.ok:
+        status = r.status_code
+        detail = f"HTTP {status}: {(r.text or '')[:400]}"
+        words = _sentence(spoolman_api.refusal_words(detail))
+        retry = _MERGE_RETRY if isinstance(status, int) and status >= 500 else " Nothing was merged."
+        return None, (detail, f"Could not list source spools: {words}{retry}")
+    try:
+        listed = r.json()
+    except ValueError as e:
+        # What came back, not only where parsing stopped (Group 53 review, rd-1).
+        return None, (f"its answer isn't JSON ({e}): HTTP {r.status_code}: {(r.text or '')[:400]}",
+                      _MERGE_LIST_UNREAD)
+    if not isinstance(listed, list):
+        return None, (f"its answer isn't a list of spools: {str(listed)[:200]}", _MERGE_LIST_UNREAD)
+    foreign = []
+    for s in listed:
+        fil = s.get('filament') if isinstance(s, dict) else None
+        if not (isinstance(s, dict) and _int_id(s.get('id'))
+                and isinstance(fil, dict) and _int_id(fil.get('id'))):
+            return None, (f"its answer holds an entry that isn't a spool record: {str(s)[:200]}",
+                          _MERGE_LIST_UNREAD)
+        if fil['id'] != src_fid:
+            foreign.append((s['id'], fil['id']))
+    if foreign:
+        (sid, fid), more = foreign[0], len(foreign) - 1
+        others = (f" (and {more} more spool{'' if more == 1 else 's'} of "
+                  f"{'another filament' if more == 1 else 'other filaments'})") if more else ""
+        return None, (
+            "its answer holds other filaments' spools: "
+            + ", ".join(f"#{s} (filament {f})" for s, f in foreign[:20]) + (" …" if len(foreign) > 20 else ""),
+            f"Spoolman listed spool #{sid} under filament #{src_fid}, but it belongs to filament "
+            f"#{fid}{others}. Nothing was merged.")
+    return listed, None
+
+
 @app.route('/api/filament/<int:src_fid>/merge_into/<int:dst_fid>', methods=['POST'])
 def api_merge_filament(src_fid, dst_fid):
     """Merge `src_fid` into `dst_fid`: re-parent every spool from source to
@@ -889,7 +971,17 @@ def api_merge_filament(src_fid, dst_fid):
     "Merge into another filament…" action on the Filament Details modal
     to clean up duplicates that pre-date the tier-1 product-id matcher
     (Group 11.2). Atomic-ish: if any spool re-parent fails, we abort
-    before deleting the source so partial state stays recoverable.
+    before deleting the source so partial state stays recoverable. A spool
+    list FCC can't read refuses the merge before anything is written, and so
+    does a filament Spoolman has no record of or couldn't send, and a list
+    holding another filament's spool (Group 53 review). Every answer is in
+    words (refusal_words). hub.log keeps what came back (rd-1): for a
+    filament read that gave no filament, get_filament_answer's one WARNING line
+    (the status and the body's first 200 characters, or the address asked and
+    the exception); for the spool list, an ERROR line with the status and the
+    body's first 400 characters, the address asked and requests' words when it
+    didn't answer, or the JSON it couldn't use. A refused write's Activity Log line
+    keeps Spoolman's refusal as LAST_SPOOLMAN_ERROR holds it (400 characters).
     """
     if src_fid == dst_fid:
         return jsonify({
@@ -897,54 +989,59 @@ def api_merge_filament(src_fid, dst_fid):
             "error": "Source and target filaments must differ.",
         }), 400
 
-    src = spoolman_api.get_filament(src_fid)
-    if not src:
-        return jsonify({
-            "success": False,
-            "error": f"Source filament #{src_fid} not found.",
-        }), 404
-    dst = spoolman_api.get_filament(dst_fid)
-    if not dst:
-        return jsonify({
-            "success": False,
-            "error": f"Target filament #{dst_fid} not found.",
-        }), 404
+    src, refused = _merge_filament(src_fid, "Source")
+    if refused:
+        return refused
+    dst, refused = _merge_filament(dst_fid, "Target")
+    if refused:
+        return refused
 
     src_label = f"#{src_fid}" + (f" ({src.get('name')})" if src.get('name') else "")
     dst_label = f"#{dst_fid}" + (f" ({dst.get('name')})" if dst.get('name') else "")
+    # The Activity Log is HTML: the names are Spoolman's free text (Group 53 review, D2).
+    merge_line = f"Merge {html.escape(src_label, quote=False)} → {html.escape(dst_label, quote=False)}"
 
     # Include archived — they're owned by the source filament too and have to
-    # follow it to the target so we can safely delete the source.
+    # follow it to the target so we can safely delete the source. By
+    # `filament.id`, as stock_report reads it: Spoolman deprecated the
+    # `filament_id` alias (Group 53 review, D1).
     sm_url, _ = config_loader.get_api_urls()
+    list_url = f"{sm_url}/api/v1/spool?filament.id={src_fid}&allow_archived=true"
     try:
-        r = requests.get(
-            f"{sm_url}/api/v1/spool?filament_id={src_fid}&allow_archived=true",
-            timeout=5,
-        )
-        children = r.json() if r.ok else []
+        r = requests.get(list_url, timeout=5)
+        children, unread = _merge_source_spools(r, src_fid)
     except Exception as e:
-        state.logger.error(f"Merge: failed to enumerate spools for filament {src_fid}: {e}")
+        # Spoolman didn't answer: its words (refusal_words), never requests', which
+        # name its address (Group 53 review, D2). hub.log keeps them, with the
+        # address asked: requests' words lack it for a connection Spoolman dropped.
+        state.logger.error(f"Merge: failed to enumerate spools for filament {src_fid} from {list_url}: {e}")
         return jsonify({
             "success": False,
-            "error": f"Could not list source spools: {e}",
+            "error": f"Could not list source spools: {_sentence(spoolman_api.refusal_words(str(e)))}{_MERGE_RETRY}",
         }), 502
+    if unread:
+        # Group 53.2: a refused or unreadable list is not "no spools". Read as
+        # one, the merge went straight on to delete the source filament, and
+        # only Spoolman's refusal to delete a filament that still has spools
+        # kept them.
+        detail, error = unread
+        state.logger.error(f"Merge: failed to enumerate spools for filament {src_fid}: {detail}")
+        return jsonify({"success": False, "error": error}), 502
 
     reparented_spool_ids = []
     spool_errors = []
     for s in children:
         sid = s.get('id')
-        if sid is None:
-            continue
         try:
             spoolman_api.update_spool_or_raise(sid, {"filament_id": dst_fid})
             reparented_spool_ids.append(sid)
         except spoolman_api.SpoolmanRejection as e:
             err = str(e) or "Spoolman rejected the re-parent"
             state.add_log_entry(
-                f"❌ Merge {src_label} → {dst_label}: failed to re-parent Spool #{sid}: {err}",
+                f"❌ {merge_line}: failed to re-parent Spool #{sid}: {html.escape(err, quote=False)}",
                 "ERROR", "ff4444",
             )
-            spool_errors.append({"spool_id": sid, "error": err})
+            spool_errors.append({"spool_id": sid, "error": spoolman_api.refusal_words(err)})
 
     if spool_errors:
         # Abort — leave source intact so the user can retry / inspect.
@@ -958,18 +1055,20 @@ def api_merge_filament(src_fid, dst_fid):
     if not spoolman_api.delete_filament(src_fid):
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the delete"
         state.add_log_entry(
-            f"❌ Merge {src_label} → {dst_label}: spools re-parented but source delete failed: {err}",
+            f"❌ {merge_line}: spools re-parented but source delete failed: {html.escape(err, quote=False)}",
             "ERROR", "ff4444",
         )
         return jsonify({
             "success": False,
-            "error": f"Spools re-parented, but source filament delete failed: {err}",
+            "error": ("Spools re-parented, but source filament delete failed: "
+                      f"{_sentence(spoolman_api.refusal_words(err))}"),
             "reparented_spool_ids": reparented_spool_ids,
         }), 502
 
     n = len(reparented_spool_ids)
     state.add_log_entry(
-        f"🔗 Merged Filament {src_label} → {dst_label} ({n} spool{'' if n == 1 else 's'} re-parented; source deleted)",
+        f"🔗 Merged Filament {html.escape(src_label, quote=False)} → {html.escape(dst_label, quote=False)} "
+        f"({n} spool{'' if n == 1 else 's'} re-parented; source deleted)",
         "INFO", "00ccff",
     )
     return jsonify({
@@ -1078,11 +1177,94 @@ def contents_batch(ids, spools=None):
     return {"read_ok": True, "read_error": None,
             "contents": {lid: buckets.get(lid.upper(), []) for lid in wanted}}
 
+
+@app.route('/api/loose_spools', methods=['GET'])
+def api_loose_spools():
+    """Every loose spool, for the Loose spools list (Group 58.4). Read-only: one
+    spool-list read, no write, opened on demand, never on the heartbeat.
+
+    A spool is loose when its own `location` is exactly a place
+    locations_db.loose_place_ids names, or a place with no locations.json row (FCC
+    can't say what that is, so it is shown rather than hidden). Exact, never through
+    spoolman_api's matcher, whose prefix match would pull a room's rows in, and
+    whose trail match would count a spool that runs on a head. Unassigned and
+    UNKNOWN are lists of their own and stay out, and so does a head with no row of
+    its own (Settings can make one): a loaded spool is as exact as a spool gets.
+
+      {"read_ok": True, "read_error": None, "count": 54,
+       "places": [{"id", "name", "type", "spools": [{"id", "display", "color",
+                                                      "color_direction", "remaining_weight"}]}]}
+      {"read_ok": False, "read_error": "...", "count": 0, "places": []}   (200, like
+          /api/get_contents?ids=, so a blip is never an empty list)
+
+    `type` is the row's Type, '' for a place with no row. Places and their spools
+    come sorted by id."""
+    failed = {"read_ok": False, "count": 0, "places": []}
+    try:
+        rows = locations_db.load_locations_list()
+    except locations_db.LocationsCorruptError as e:
+        state.logger.warning(f"loose_spools: {e}")
+        return jsonify({**failed, "read_error": f"couldn't read locations.json ({e})"})
+    spools, why = spoolman_api.read_spool_list()
+    if spools is None:
+        state.logger.warning(f"loose_spools: {why}")
+        return jsonify({**failed, "read_error": f"couldn't read Spoolman ({why})"})
+
+    by_id = {}
+    for row in rows:
+        lid = str(row.get('LocationID', '')).strip().upper() if isinstance(row, dict) else ''
+        if lid:
+            by_id.setdefault(lid, row)
+    heads = locations_db.get_active_printer_map(rows)
+    loose = locations_db.loose_place_ids(rows, heads)
+
+    places = {}
+    count = 0
+    for s in spools:
+        if not isinstance(s, dict) or s.get('archived'):
+            continue
+        loc = str(s.get('location') or '').strip()
+        lid = loc.upper()
+        if not lid or lid in ('UNASSIGNED', 'UNKNOWN') or lid in heads:
+            continue
+        row = by_id.get(lid)
+        if row is not None and lid not in loose:
+            continue
+        place = places.get(lid)
+        if place is None:
+            place_id = str(row.get('LocationID')).strip() if row is not None else loc
+            place = places[lid] = {
+                "id": place_id,
+                "name": str(row.get('Name') or place_id) if row is not None else loc,
+                "type": str(row.get('Type') or '').strip() if row is not None else '',
+                "spools": [],
+            }
+        info = spoolman_api.format_spool_display(s)
+        place["spools"].append({
+            "id": s.get('id'),
+            "display": info.get('text'),
+            "color": info.get('color'),
+            "color_direction": info.get('color_direction', 'longitudinal'),
+            "remaining_weight": s.get('remaining_weight'),
+        })
+        count += 1
+    ordered = [places[k] for k in sorted(places)]
+    for place in ordered:
+        place["spools"].sort(key=lambda sp: str(sp.get('id')).zfill(12))
+    return jsonify({"read_ok": True, "read_error": None, "count": count, "places": ordered})
+
+
 @app.route('/api/spool_details', methods=['GET'])
 def api_spool_details():
     sid = request.args.get('id')
     if not sid: return jsonify({})
-    return jsonify(spoolman_api.get_spool(sid))
+    rec = spoolman_api.get_spool(sid)
+    if isinstance(rec, dict):
+        # Group 58, section 8: the spool window says which audit lost it.
+        lost = spoolman_api.audit_lost_from(rec.get('location'), rec.get('extra'))
+        if lost:
+            rec['lost_from'] = lost
+    return jsonify(rec)
 
 @app.route('/api/filament_details', methods=['GET'])
 def api_filament_details():

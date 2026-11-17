@@ -115,6 +115,14 @@ def test_quickswap_refreshes_manage_view_after_yes(page: Page, open_manage_modal
     if not hit:
         pytest.skip("No bound+loaded slot available to exercise the swap.")
     box, slot, toolhead, spool_id = hit
+    # A test never confirms a real print (Group 39.2), and this one's Yes loads
+    # the spool onto the head: while its printer prints, the Yes confirms that
+    # (the overlay's banner). The 57.3 sweep swapped #134 onto XL-3 during a
+    # real print on dev, then its restore Return, rightly, asked to confirm and
+    # the test left #134 on the head.
+    printer = requests.get(f"{api_base_url}/api/printer_state/{toolhead}", timeout=15).json()
+    if printer.get("known") and printer.get("is_active"):
+        pytest.skip(f"{printer.get('printer_name') or toolhead} is printing, and a test never confirms a real print.")
 
     open_manage_modal(toolhead)
 
@@ -142,6 +150,10 @@ def test_quickswap_refreshes_manage_view_after_yes(page: Page, open_manage_modal
     # up to ~3-4s to mount in a dev environment with no reachable PrusaLink.
     # Group 14.2.
     expect(page.locator("#fcc-quickswap-confirm-overlay")).to_be_visible(timeout=6000)
+    if page.locator("#fcc-quickswap-confirm-body .alert-warning").count():
+        # A print that began since the check above: the overlay's probe saw it.
+        page.locator("#fcc-quickswap-no").click()
+        pytest.skip(f"{toolhead}'s printer started printing, and a test never confirms a real print.")
     page.locator("#fcc-quickswap-yes").click()
 
     # Wait for the follow-up refresh — the backend swap + Spoolman PATCH +

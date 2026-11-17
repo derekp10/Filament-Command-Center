@@ -208,8 +208,8 @@ def test_a_press_from_a_page_older_than_41_4_is_refused_and_logged(client, logs)
 
 
 def test_undo_is_off_while_an_audit_runs(client, logs, monkeypatch):
-    """Like a bulk move: the audit panel hides the dialog, and the scans it then
-    swallowed were auto-parked to UNKNOWN by the audit's Done."""
+    """Like a bulk move: the audit panel hides the dialog, and the audit would
+    swallow every scan meant for it."""
     monkeypatch.setattr(state, "AUDIT_SESSION", {"active": True, "location_id": "CR-CT-2-R1"})
     sm = FakeSpoolman({57: {"location": "CR-CT-2-R1", "extra": {}}})
     _move(sm, target="CR-CT-2-R2", raw_spools=[57])

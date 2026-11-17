@@ -15,6 +15,8 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import app as app_module  # noqa: E402
+import cancel_fetch_store  # noqa: E402
+import cancel_review_store  # noqa: E402
 import print_deduct_ledger  # noqa: E402
 
 
@@ -40,8 +42,14 @@ def _cancelled_gcode():
 
 @pytest.fixture
 def ledger_tmp(tmp_path, monkeypatch):
+    # The review and fetch stores too (as test_completion_deduct.py's stores_tmp):
+    # the cancel deduct asks the review store whether the job holds an
+    # uncharged-grams card (print_deduct._shortfall_card_exists), which read the
+    # live store before Group 45.9.
     monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH",
                         str(tmp_path / "ledger.json"))
+    monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "review.json"))
+    monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetch.json"))
 
 
 @pytest.fixture

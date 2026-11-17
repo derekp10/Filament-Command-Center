@@ -192,6 +192,35 @@ def test_bind_picker_opens_from_quickswap_header(page: Page, open_manage_modal):
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")
+def test_unbind_takes_a_deliberate_chord_and_tab_never_lands_on_it(page: Page, open_manage_modal):
+    """Group 50 review: Enter presses a focused button now, so search, Tab,
+    Enter cleared a slot that may feed another head, under text saying "Enter
+    selects". The row's button left the Tab order (a click still presses it),
+    and Shift+Del unbinds the highlighted row. The PUT is answered here, so
+    nothing is unbound."""
+    puts = []
+
+    def _put(route):
+        puts.append(route.request.post_data)
+        route.fulfill(status=200, content_type="application/json", body='{"success": true}')
+    page.route("**/api/dryer_box/*/bindings/*", _put)
+    open_manage_modal(TEST_TOOLHEAD)
+    page.locator("#quickswap-bind-slot-btn").click()
+    expect(page.locator("#fcc-bind-picker-overlay")).to_be_visible(timeout=3000)
+    search = page.locator("#fcc-bind-picker-search")
+    search.fill(TEST_TOOLHEAD)                               # only the slots bound to it: each row offers Unbind
+    unbind = page.locator(".fcc-bind-picker-unbind").first
+    expect(unbind).to_be_visible(timeout=3000)
+    assert unbind.get_attribute("tabindex") == "-1"
+    search.press("Tab")
+    assert not page.evaluate("() => document.activeElement.classList.contains('fcc-bind-picker-unbind')")
+    search.focus()
+    search.press("Shift+Delete")
+    page.wait_for_timeout(200)
+    assert len(puts) == 1 and '"target":null' in puts[0].replace(" ", ""), puts
+
+
+@pytest.mark.usefixtures("require_server", "bound_slot")
 def test_bind_picker_search_filters_list(page: Page, open_manage_modal):
     open_manage_modal(TEST_TOOLHEAD)
     page.locator("#quickswap-bind-slot-btn").click()

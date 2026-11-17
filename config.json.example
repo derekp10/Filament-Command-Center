@@ -11,17 +11,15 @@
     "backup_directory": "./backups",
     "export_directory": "./exports",
 
-    "comment_print": "--- LABEL PRINTING (browser or csv) ---",
+    "comment_print": "--- LABELS: FCC writes its label CSVs into this path's folder (/output is LABEL_OUTPUT_PATH in inventory-hub/.env), and P-touch Editor reads them as its database to print ---",
     "print_settings": {
-        "mode": "browser",
-        "csv_path": "./labels/print_queue.csv"
+        "csv_path": "/output/labels.csv"
     },
     "buy_more_url_template": "https://www.amazon.com/s?k={{vendor}}+{{color}}+{{material}}",
     
-    "comment_maps": "--- INVENTORY HUB SETTINGS ---",
-    "printer_map": {
-        "PRINTER_1": {"printer_name": "My Printer", "position": 0}
-    },
+    "comment_maps": "--- FILAMENT COMMAND CENTER SETTINGS ---",
+    "comment_printers": "Printers and their toolheads are made in FCC: LOCATIONS > Add Location (Type Printer), then the title bar's ⚙️ window, under 🖨️ Printers & Toolheads. printer_map stays empty: an entry here would make that printer again at every start, until some printer has toolheads.",
+    "printer_map": {},
     "comment_bindings": "Dryer-box-to-toolhead bindings are stored per-slot on each Dryer Box location in locations.json under extra.slot_targets — edit via Location Manager UI.",
     "dryer_slots": [],
 

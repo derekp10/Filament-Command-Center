@@ -280,6 +280,15 @@ def api_filament_attributes_bulk_set():
     record's extras (CLAUDE.md write-surface convention — Spoolman's
     PATCH replaces the whole `extra` dict, so partial payloads silently
     wipe siblings otherwise). Surfaces LAST_SPOOLMAN_ERROR per-failure.
+
+    Each filament is read through get_filament_answer (Group 53 review, r3-4):
+    Spoolman's own "no such filament" (its 404 body) is "filament not found",
+    and one it couldn't send (a 5xx, no answer) is an error saying so; nothing
+    is written for either. get_filament handed back those bodies as filaments
+    with no attributes: a remove counted a deleted filament "unchanged" with
+    success: true, and an add over a 5xx-blipped read wrote the added choices
+    alone over the filament's own. A read that gives no filament has its one
+    hub.log line from get_filament_answer, saying what came back (rd-1).
     """
     import json as _json
     payload = request.get_json(silent=True) or {}
@@ -301,9 +310,13 @@ def api_filament_attributes_bulk_set():
         except (ValueError, TypeError):
             errors.append({"id": raw_id, "msg": "not an integer id"})
             continue
-        fil = spoolman_api.get_filament(fid)
-        if not fil:
-            errors.append({"id": fid, "msg": "filament not found"})
+        fil, answered = spoolman_api.get_filament_answer(fid)
+        if not (isinstance(fil, dict) and fil.get('id') == fid):
+            # hub.log has get_filament_answer's line saying what came back (rd-1).
+            if answered and isinstance(fil, dict) and fil.get('id') is None:
+                errors.append({"id": fid, "msg": "filament not found"})
+            else:
+                errors.append({"id": fid, "msg": "couldn't read it from Spoolman, so nothing was changed on it"})
             continue
         existing_attrs = spoolman_api._parse_filament_attrs_value(
             (fil.get('extra') or {}).get('filament_attributes')

@@ -21,12 +21,23 @@ Group 45.3 (2026-10-13) composites the FOREGROUND the same way: translucent
 text is painted onto its composited background before it is scored. Before
 that, the faint-text test's 2.24:1 pair scored 18.36:1 and passed. The OFFLINE
 chip's text went from alpha 0.45 (4.41:1 as painted) to 0.50 (5.28:1; filed as 5.29) with it.
+
+Group 58's review reads a computed `filter: brightness(n)`. Before that a filter was
+invisible to the guard: the audit tile's whole hover is one, so a brightness(40) tile,
+white on white, scored as its unlit colours and passed. The cases here are each held
+to the pixels Chromium paints, so the guard's model can't drift from the browser's.
+
+Group 45.12 pins which elements the walker scores: never the root (a text-only
+element is judged through its parent), and the children of a display: none
+element too (so a big parent's offenders are filtered to the element meant).
 """
 from __future__ import annotations
 
+import io
 import os
 
 import pytest
+from PIL import Image
 
 import conftest
 
@@ -157,6 +168,46 @@ def test_translucent_text_is_scored_as_painted_onto_its_background(isolated_page
     assert "(text at alpha 0.25, as painted)" in str(exc.value), str(exc.value)
 
 
+def test_a_text_only_element_is_scored_through_its_parent_never_as_the_root(isolated_page):
+    """Group 45.12. The walker starts at the root's first descendant, so a
+    text-only element passed as its own root is never scored, whatever its paint:
+    Group 52's two read-notice checks passed their notice that way and judged
+    nothing. Through its parent it is scored (at an impossible ratio it is
+    listed), and #555 on #444 is reported at 1.31:1."""
+    page = isolated_page
+    page.set_content("""
+      <style>html, body { background: #000; margin: 0; font: 16px sans-serif; }</style>
+      <div id="parent" style="background: #1a1a1a; padding: 8px">
+        <div id="notice" style="background: #444444; color: #555555">Spoolman didn't answer</div>
+      </div>""")
+    notice, parent = page.locator("#notice"), page.locator("#parent")
+    assert conftest.contrast_offenders(notice) == []
+    assert conftest.contrast_offenders(notice, min_ratio=100) == [], "the root itself was scored"
+    assert [o["id"] for o in conftest.contrast_offenders(parent, min_ratio=100)] == ["notice"]
+    offenders = conftest.contrast_offenders(parent)
+    assert [(o["id"], o["ratio"]) for o in offenders] == [("notice", 1.31)], offenders
+    assert offenders[0]["fg"] == "rgb(85, 85, 85)" and offenders[0]["bg"] == "rgb(68, 68, 68)", offenders[0]
+
+
+def test_a_hidden_elements_children_are_still_scored(isolated_page):
+    """Why a big parent's offenders are filtered to the element meant (CLAUDE.md's
+    contrast standing order): the walker skips an element that is display: none
+    but still walks its children, whose own computed display isn't none, and the
+    innerText of text that isn't drawn is its textContent. So text in a hidden
+    view under the same parent is judged too."""
+    page = isolated_page
+    page.set_content("""
+      <style>html, body { background: #000; margin: 0; font: 16px sans-serif; }</style>
+      <div id="parent" style="background: #1a1a1a; padding: 8px">
+        <div id="shown" style="color: #ffffff">shown</div>
+        <div id="hidden-view" style="display: none; color: #555555">hidden view
+          <span id="hidden-child" style="color: #555555">hidden child</span>
+        </div>
+      </div>""")
+    ids = [o["id"] for o in conftest.contrast_offenders(page.locator("#parent"))]
+    assert ids == ["hidden-child"], ids
+
+
 def test_the_offline_chip_passes_as_painted_and_stays_dimmer_than_idle(isolated_page):
     """The CSS half of 45.3: OFFLINE's text alpha 0.50 paints at 5.28:1 over
     the dashboard (0.45 was 4.41:1, under AA). It must stay the dimmest state."""
@@ -174,3 +225,85 @@ def test_the_offline_chip_passes_as_painted_and_stays_dimmer_than_idle(isolated_
     assert conftest.contrast_offenders(widget, min_ratio=5.25) == [], "OFFLINE paints under 5.28:1"
     assert [o["text"] for o in conftest.contrast_offenders(widget, min_ratio=5.35)
             if "OFFLINE" in o["text"]] == ["OFFLINE", "OFFLINE"], "OFFLINE got brighter than 0.50"
+
+
+# --- a computed filter: brightness(n) ---------------------------------------------------
+
+# `#probe` holds the text. Its top-left corner shows the background behind the text, and
+# its `.ink` block is painted in the text's own colour, so both can be read off a real
+# screenshot: (markup around the probe, the probe's own style, painted text, painted back).
+_PROBE = ('<div id="probe" style="width: 120px; padding: 12px; font: 16px sans-serif; {style}">probe'
+          '<div class="ink" style="width: 16px; height: 16px; background: currentColor"></div></div>')
+FILTER_CASES = {
+    "no-filter": ("{probe}", "background: #202020; color: #404040", 64, 32),
+    "a-filter-function-it-doesnt-model": ("{probe}", "filter: saturate(0.5); background: #202020; color: #404040", 64, 32),
+    "on-the-element-and-its-own-background": ("{probe}", "filter: brightness(2); background: #202020; color: #404040", 128, 64),
+    "a-percentage": ("{probe}", "filter: brightness(50%); background: #404040; color: #808080", 64, 32),
+    "two-of-them": ("{probe}", "filter: brightness(2) brightness(1.5); background: #202020; color: #404040", 192, 96),
+    "on-the-text-never-the-background-behind-it": (
+        '<div style="background: #202020">{probe}</div>', "filter: brightness(2); color: #404040", 128, 32),
+    "on-an-ancestor-reaches-all-it-holds": (
+        '<div style="filter: brightness(2)"><div style="background: #202020">{probe}</div></div>',
+        "color: #404040", 128, 64),
+    "on-a-layer-between-the-two": (
+        '<div style="background: #202020"><div style="filter: brightness(2); background: #202020">'
+        '<div style="background: rgba(64, 64, 64, 0.5)">{probe}</div></div></div>', "color: #404040", 128, 96),
+    "a-translucent-layer-over-an-unlit-ground": (
+        '<div style="background: #202020">{probe}</div>',
+        "filter: brightness(2); background: rgba(64, 64, 64, 0.5); color: #404040", 128, 80),
+    "translucent-text": (
+        '<div style="background: #202020">{probe}</div>',
+        "filter: brightness(2); color: rgba(64, 64, 64, 0.5)", 80, 32),
+    "clamped-at-255": ("{probe}", "filter: brightness(40); background: #1a1a1a; color: #ffffff", 255, 255),
+    "clamped-at-each-step": (
+        '<div style="filter: brightness(0.5)">{probe}</div>',
+        "filter: brightness(40); background: #1a1a1a; color: #808080", 128, 128),
+}
+
+
+def _painted(page, selector, x=2, y=2):
+    """What the browser really painted at a point of `selector`: a grey level."""
+    box = page.locator(selector).bounding_box()
+    png = page.screenshot(clip={"x": box["x"] + x, "y": box["y"] + y, "width": 1, "height": 1})
+    r, g, b = Image.open(io.BytesIO(png)).convert("RGB").getpixel((0, 0))
+    assert r == g == b, (r, g, b)
+    return r
+
+
+@pytest.mark.parametrize("markup, style, text, back", FILTER_CASES.values(), ids=FILTER_CASES.keys())
+def test_a_brightness_filter_is_scored_as_the_browser_paints_it(isolated_page, markup, style, text, back):
+    """RED before the guard read `filter`: every case but the first two scored its unlit
+    colours. Each `fg` and `bg` is the guard's; what it is held to is the screenshot."""
+    page = isolated_page
+    page.set_content('<style>html, body { background: #000; margin: 0; }</style><div id="root">'
+                     + markup.replace("{probe}", _PROBE.format(style=style)) + "</div>")
+    assert abs(_painted(page, "#probe") - back) <= 1          # the expectation is the browser's
+    assert abs(_painted(page, "#probe .ink", 8, 8) - text) <= 1
+    offender = next(o for o in conftest.contrast_offenders(page.locator("#root"), min_ratio=100) if o["id"] == "probe")
+    assert offender["fg"] == f"rgb({text}, {text}, {text})", offender
+    assert offender["bg"] == f"rgb({back}, {back}, {back})", offender
+
+
+def test_a_filter_that_washes_a_tile_out_is_an_offender_and_the_real_one_isnt(isolated_page):
+    """Findings 14 and 43, on a tile as the audit panel draws it under the real
+    global.css. RED before the guard read `filter`: brightness(40) paints white on white
+    and scored as the unlit tile, with nothing reported.
+    test_audit_panel_58_js has it on the real panel."""
+    page = isolated_page
+    with open(GLOBAL_CSS, encoding="utf-8") as fh:
+        css = fh.read()
+    page.set_content(f"""<style>{css}</style>
+      <div id="root" style="background: #000; padding: 8px">
+        <button type="button" class="fcc-audit-tile-box fcc-audit-tile" style="background: #1a1a1a; border: 1px solid #555">
+          <span id="name" style="color: #fff">#99 Some Brand PLA (Red)</span>
+          <span id="word" class="fcc-audit-tile-word">found, no label read</span>
+        </button>
+      </div>""")
+    page.hover("button.fcc-audit-tile")
+    assert page.evaluate("getComputedStyle(document.querySelector('button.fcc-audit-tile')).filter") == "brightness(1.3)"
+    root = page.locator("#root")
+    assert conftest.contrast_offenders(root) == []
+    page.add_style_tag(content="button.fcc-audit-tile:hover { filter: brightness(40); }")
+    offenders = conftest.contrast_offenders(root)
+    assert sorted(o["id"] for o in offenders) == ["name", "word"], offenders
+    assert all(o["bg"] == "rgb(255, 255, 255)" and o["ratio"] < 1.5 for o in offenders), offenders

@@ -19,11 +19,12 @@ ctl('state') (spools, writes, bindings, buffer, logs, requests).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-from test_core1_return_ejectall_js import DRIVER_JS, NODE, RESULT_MARK
+from test_core1_return_ejectall_js import DRIVER_JS, NODE, RESULT_MARK, toolhead_types_block
 
 HERE = Path(__file__).resolve().parent
 HUB = HERE.parent
@@ -157,6 +158,7 @@ def run(tmp_path: Path, setup: dict, modules: list, scenario: str) -> dict:
     setup_path = tmp_path / "setup.json"
     setup_path.write_text(json.dumps(setup), encoding="utf-8")
     driver = (DRIVER_JS
+              .replace("__TOOLHEAD_TYPES_BLOCK__", json.dumps(toolhead_types_block()), 1)
               .replace("__MODULE_PATHS__", json.dumps([str(MODULES / m) for m in modules]))
               .replace("__SCENARIO__", PRELUDE + scenario))
     bridge = (BRIDGE_JS
@@ -177,8 +179,13 @@ def run(tmp_path: Path, setup: dict, modules: list, scenario: str) -> dict:
                             "  console.error(__pyErr.slice(-4000));\n  process.exit(3);", 1)
     script = tmp_path / "driver.js"
     script.write_text(driver, encoding="utf-8")
+    # Node hands its environment to the bridge (BRIDGE_JS's spawn), which imports
+    # app: it gets this scenario's own data folder, where its working directory
+    # put it before Group 45.9, never the run's shared copy (conftest's
+    # FCC_DATA_DIR), so it writes nothing outside tmp_path.
     proc = subprocess.run([NODE, str(script)], capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=180, cwd=str(tmp_path))
+                          errors="replace", timeout=180, cwd=str(tmp_path),
+                          env={**os.environ, "FCC_DATA_DIR": str(tmp_path / "data")})
     lines = [ln for ln in proc.stdout.splitlines() if ln.startswith(RESULT_MARK)]
     assert proc.returncode == 0 and lines, (
         f"round-trip driver failed (rc={proc.returncode})\nstdout:\n{proc.stdout[-6000:]}\n"

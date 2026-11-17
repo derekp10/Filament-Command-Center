@@ -22,8 +22,9 @@ description: Finish a working group — commit, archive completed items, update 
 * `git add .`
 * `git commit -m "feat(<group-scope>): <summary of changes>"`
 * `git checkout dev`
-* `git merge <current-branch>`
-* `git branch -d <current-branch>`
+* `git merge --no-ff <current-branch>`
+* `git push origin dev`
+* Delete the branch here and on GitHub, where it was pushed as a backup, with its name written out in each command: `git branch -d <current-branch>` and `git push origin --delete <current-branch>`. A sub-branch merged into it goes the same way. Nothing else to record: the merge keeps its commits (CLAUDE.md, "Branches: delete at merge").
 
 **Step 5: The Handoff**
 * Report what was completed, what remains, and suggest the next group to tackle.

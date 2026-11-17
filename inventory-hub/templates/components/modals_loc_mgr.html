@@ -20,12 +20,17 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">📍 Location List</h5>
+                <!-- Group 55.3: this window's help (help_texts.js, "location-list"). -->
+                <button type="button" class="fcc-help-btn" data-fcc-help="location-list"
+                    title="How this window works (?)" aria-label="Help: how this window works">?</button>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body p-0">
                 <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-dark">
                     <span id="loc-count" class="text-info fw-bold fcc-loc-count">Loading...</span>
-                    <div class="d-flex gap-2">
+                    <div class="d-flex flex-wrap justify-content-end gap-2">
+                        <!-- Group 58.4: every spool filed at a room or a cart itself, in one list -->
+                        <button id="loc-loose-list-btn" class="btn btn-outline-info" onclick="window.openLooseList({ host: document.getElementById('locMgrModal') })" title="Every spool filed at a room or a cart itself, with no more exact place">🧺 Loose spools</button>
                         <!-- L271 Phase 3.5: float printers to a pinned top group of the tree -->
                         <button id="loc-pin-printers-btn" class="btn btn-outline-warning" onclick="window.toggleLocPinPrinters()" aria-pressed="false" title="Float printers to the top of the tree for quick access (when sorting by ID)">📌 Pin Printers</button>
                         <button class="btn btn-success" onclick="openAddModal()">➕ Add Location</button>
@@ -114,6 +119,9 @@
                 </div>
                 <button class="btn btn-sm btn-outline-warning fw-bold me-2"
                     onclick="window.printCurrentLocationLabel()">🖨️ Print Location Label</button>
+                <!-- Group 55.3: this window's help (help_texts.js, "location-window"). -->
+                <button type="button" class="fcc-help-btn" data-fcc-help="location-window"
+                    title="How this window works (?)" aria-label="Help: how this window works">?</button>
                 <button type="button" class="btn-close btn-close-white me-2" onclick="closeManage()"></button>
             </div>
 
@@ -124,7 +132,7 @@
 
                 <div id="manage-grid-view" class="container-fluid px-1" style="display:none;">
                     <div class="alert alert-info py-1 mb-3 small text-center fw-bold text-uppercase fcc-alert-scan">
-                        Tap button or scan slot QR (CMD:SLOT:X)
+                        Tap a slot, or scan the QR on its tile
                     </div>
                     <div id="slot-grid-container" class="slot-grid"></div>
                     <div id="unslotted-container" class="mt-4" style="display:none;"></div>
@@ -215,7 +223,7 @@
                             placeholder="Search dryer box slots…" autocomplete="off"
                             style="font-size:1.05rem;">
                         <div class="text-light mb-2" style="font-size:0.95rem;">
-                            Arrow keys navigate. Enter selects. Esc cancels.
+                            Arrow keys navigate. Enter selects. Shift+Del unbinds. Esc cancels.
                             Unbound slots appear first so you can promote them in one tap.
                         </div>
                         <div id="fcc-bind-picker-list" class="d-flex flex-column"
