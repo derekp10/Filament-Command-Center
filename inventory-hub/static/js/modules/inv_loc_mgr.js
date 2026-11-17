@@ -76,9 +76,9 @@ window.updateManageTitle = (loc, itemArray = null) => {
     // L298 Phase 2 — "Move all →" (the mouse entry to Bulk Moves; the scanner
     // entry is the CMD:BULKMOVE deck QR). Lives in the TITLE so it renders for
     // EVERY location type: the DANGER-ZONE Eject-All it parallels is built only
-    // by renderGrid, and renderList's `qr-eject-all-list` target doesn't exist
-    // in the live template — so a button placed there would be invisible on
-    // Rooms / Shelves / Carts, which are the most likely bulk-move sources.
+    // by renderGrid (under Unslotted Items, Derek's 62.9 answer (a), 2026-11-17:
+    // kept as it is), and renderList draws no Eject All, so a button placed there
+    // would be missing on Rooms / Shelves / Carts, the likeliest bulk-move sources.
     // Suppressed on single-occupancy locations, a head or a Printer row
     // (window.isHeadOrPrinterType), where every spool would be skipped as
     // "loaded in a toolhead slot" (a guaranteed no-op).
@@ -1342,7 +1342,8 @@ const renderList = (data, locId) => {
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 reOrderedData.forEach((s, i) => renderBadgeQRs(s, i));
-                generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+                // (No Eject All QR: the list view draws no Eject All. A call for a
+                // target that didn't exist was removed, Group 62.9 answer (a).)
 
                 if (document.getElementById('qr-deposit-trigger')) {
                     const safeId = String(locId).replace(/['"]/g, '');
