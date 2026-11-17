@@ -54,7 +54,7 @@
             'A dryer box has 🔗 Slot → Toolhead Feeds (press Show): choose which toolhead each slot feeds, then 💾 Save Feeds. 🖨️ Print Location Label adds this place\'s label to the print queue, and its small QR opens bigger, to scan from the screen.',
             'Scans while it is open: the QR on a slot\'s tile does what clicking that slot does, and this place\'s own label puts your buffer here, as above.',
             'In a box with slots, spools with no slot are under Unslotted Items. EJECT ALL in the ☢️ DANGER ZONE below them (or its QR) asks, then sends each back where it came from, or to Unassigned after one more question. A spool loaded on a toolhead stays.',
-            '✅ Done / Sync closes the window, or goes back to the place you came from. The QR beside it does the same, except during an audit, where it is the audit\'s Done, or a bulk move, where it commits the move.',
+            '✅ Done / Sync closes the window, or goes back to the place you came from, and so does the QR beside it, whatever else is running.',
         ],
         sections: [{
             title: '⚡ Quick-Swap (a toolhead or a printer)',

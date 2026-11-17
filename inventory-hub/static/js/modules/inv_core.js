@@ -2933,11 +2933,30 @@ const _readLastSeenTime = () => {
 const _writeLastSeenTime = (t) => {
     try { localStorage.setItem(LOG_PILL_KEY, t || ''); } catch (_) { /* private mode */ }
 };
+// Group 62.7(d): the entry's `ts` (epoch ms, strictly increasing; state.py) sorts across
+// midnight, which 'HH:MM:SS' compared as text didn't: a line after midnight never raised
+// the pill. An entry with no `ts` (an older FCC) keeps the text compare; with no seen
+// `ts` stored yet (a browser that last saw an older FCC), every entry reads as unseen,
+// once, until the list is opened.
+const LOG_PILL_TS_KEY = 'fcc.logPill.lastSeenTs';
+const _readLastSeenTs = () => {
+    try {
+        const v = localStorage.getItem(LOG_PILL_TS_KEY);
+        const n = v == null || v === '' ? NaN : Number(v);
+        return Number.isFinite(n) ? n : null;
+    } catch (_) { return null; }
+};
+const _writeLastSeenTs = (ts) => {
+    try { localStorage.setItem(LOG_PILL_TS_KEY, String(ts)); } catch (_) { /* private mode */ }
+};
 const _updateLogPill = (logs) => {
     const pill = document.getElementById('fcc-log-pill');
     if (!pill) return;
     const lastSeen = _readLastSeenTime();
-    const unseen = (logs || []).filter(l => (l.time || '') > lastSeen);
+    const lastSeenTs = _readLastSeenTs();
+    const unseen = (logs || []).filter(l => (typeof l.ts === 'number'
+        ? (lastSeenTs == null || l.ts > lastSeenTs)
+        : (l.time || '') > lastSeen));
     if (unseen.length === 0) {
         pill.style.display = 'none';
         return;
@@ -2968,7 +2987,10 @@ window.openLogPillOverlay = () => {
     // panel sits above any modal stack. Closing marks every entry as seen.
     fetch('/api/logs').then(r => r.json()).then(d => {
         const logs = (d && d.logs) || [];
-        if (logs.length) _writeLastSeenTime(logs[0].time || '');
+        if (logs.length) {
+            _writeLastSeenTime(logs[0].time || '');
+            if (typeof logs[0].ts === 'number') _writeLastSeenTs(logs[0].ts);
+        }
         // Contrast note: avoid Bootstrap's `text-muted` (#6c757d) — it
         // hits ~1.4:1 against the dark overlay bg and reads as gray-on-gray.
         // Use explicit rgba(255,255,255,0.7) for low-emphasis text instead.

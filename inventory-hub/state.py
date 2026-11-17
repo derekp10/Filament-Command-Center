@@ -1,11 +1,18 @@
 import logging
 import sys
+import threading
 import time
 from logging.handlers import RotatingFileHandler
 
 # --- GLOBAL STATE ---
 UNDO_STACK = []
 RECENT_LOGS = []
+# Each Activity Log entry's `ts` (Group 62.7d): epoch milliseconds, strictly
+# increasing across entries, so the 📡 pill can count the lines newer than the
+# last one seen. Its 'HH:MM:SS' text compared as text, so after midnight a line
+# earlier than the last-seen time never raised the pill.
+_LAST_LOG_TS = 0
+_LOG_TS_LOCK = threading.Lock()
 ACKNOWLEDGED_FILABRIDGE_ERRORS = set()
 
 # --- PERSISTENT STATE ---
@@ -100,6 +107,15 @@ f_handler = RotatingFileHandler('hub.log', maxBytes=1000000, backupCount=5, dela
 f_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(f_handler)
 
+def _next_log_ts():
+    """Now in epoch milliseconds, one past the last entry's when two come in the
+    same millisecond (or the clock steps back): strictly increasing."""
+    global _LAST_LOG_TS
+    with _LOG_TS_LOCK:
+        _LAST_LOG_TS = max(int(time.time() * 1000), _LAST_LOG_TS + 1)
+        return _LAST_LOG_TS
+
+
 def add_log_entry(msg, category="INFO", color_hex=None, meta=None):
     """Adds a log entry to the in-memory list and the system log."""
     timestamp = time.strftime("%H:%M:%S")
@@ -140,7 +156,7 @@ def add_log_entry(msg, category="INFO", color_hex=None, meta=None):
     else:
         ui_msg = msg
 
-    entry = {"time": timestamp, "msg": ui_msg, "type": category}
+    entry = {"time": timestamp, "msg": ui_msg, "type": category, "ts": _next_log_ts()}
     if meta:
         entry["meta"] = meta
         

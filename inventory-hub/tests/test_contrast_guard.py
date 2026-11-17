@@ -100,6 +100,35 @@ def test_quickswap_confirm_overlay_has_no_gray_on_gray_text(page: Page, open_man
 
 
 @pytest.mark.usefixtures("require_server")
+def test_the_slot_pickers_cancel_qr_reads_while_it_loads_and_on_its_message(page: Page, base_url: str, assert_contrast):
+    """Group 62.7(c): the slot picker draws its 📷 CANCEL QR from the start, in the loading
+    view and on its "couldn't read" message too. Its read held in the page, then answered
+    as failed; nothing sent."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openSlotPicker === 'function' && typeof state !== 'undefined'")
+    page.evaluate("""() => { const real = window.fetch; window.__held = [];
+        window.fetch = (url, opts) => (String(url).includes('/api/placement_options')
+            ? new Promise((r) => window.__held.push(() => r(new Response(
+                JSON.stringify({ read_ok: false, read_error: 'Spoolman did not answer' }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } }))))
+            : real(url, opts));
+        window.openSlotPicker({ location: 'LR-MDB-1', spool: 57 }); }""")
+    picker = page.locator("#fcc-slot-picker")
+    expect(picker.locator("[data-sp-state='loading'] .fcc-qr-caption")).to_be_visible()
+    assert_contrast(picker)
+    assert "CANCEL" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(picker, min_ratio=100))
+    page.evaluate("() => window.__held.forEach((f) => f())")
+    expect(picker.locator("[data-sp-state='message'] .fcc-qr-caption")).to_be_visible()
+    assert_contrast(picker)
+    page.keyboard.press("Escape")
+    expect(picker).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
 def test_a_questions_held_off_scan_line_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 62.2: the printing yes / no and the Quick-Swap confirm hold off other scans
     now, and say on themselves why a scan did nothing (toasts sit under them), in the

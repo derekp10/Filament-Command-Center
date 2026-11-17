@@ -297,7 +297,10 @@ window.openManage = (id) => {
             // Generate QR for specific location
             const safeId = String(id).replace(/['"]/g, '');
             generateSafeQR('manage-loc-qr-mini', 'LOC:' + safeId, 45);
-            generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
+            // Its own code (Group 62.7a): CMD:DONE finishes an audit and commits a bulk
+            // move, and scanned while either ran (this window can be open under a
+            // hidden panel) it did that instead of closing the window.
+            generateSafeQR('qr-modal-done', 'CMD:CLOSE', 58);
 
             // Prime the Hash to prevent "First Pulse Wiggle". Nothing drawn (a
             // read that failed): no hash, so the first answer renders.
@@ -1849,6 +1852,11 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
 };
 
 window.ejectSpool = (sid, loc, pickup) => {
+    // Group 62.7(b): a card's own 🗑️ waits for an audit as CMD:TRASH: does (the scan's
+    // words, nothing sent), and for a bulk move, where its question would open behind
+    // the bulk panel.
+    if (!pickup && window.auditPressRefused && window.auditPressRefused('CMD:TRASH')) return;
+    if (!pickup && window.bulkMovePressWaits && window.bulkMovePressWaits('Eject')) return;
     if (pickup) {
         // Group 58 review: the buffer is kept during an audit, and this door's ID: goes
         // to the audit as a scan, so a press would count as finding the spool. The
@@ -2074,6 +2082,11 @@ window.triggerBulkMove = (loc, replace = false) => {
 };
 
 window.triggerEjectAll = (loc) => {
+    // Group 62.7(b): its button waits for an audit as its scan does (the scan's words,
+    // nothing sent), and both wait for a bulk move ("Nuke all?" opened behind the
+    // bulk panel and swallowed the session's scans).
+    if (window.auditPressRefused && window.auditPressRefused('CMD:EJECTALL')) return;
+    if (window.bulkMovePressWaits && window.bulkMovePressWaits('Eject All')) return;
     const target = String(loc == null ? '' : loc).trim();
     // Never prompt, let alone send, an Eject All with no location: the backend
     // matcher reads "" as every Unassigned spool (2026-09-13). The scan route

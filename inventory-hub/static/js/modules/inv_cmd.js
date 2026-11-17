@@ -271,6 +271,8 @@ const _AUDIT_REFUSES = new Map([
     ['CMD:DROP', 'Drop mode waits until the audit is finished or cancelled.'],
     ['CMD:EJECT', 'Eject mode waits until the audit is finished or cancelled.'],
     ['CMD:EJECTALL', 'Eject All waits until the audit is finished or cancelled.'],
+    // CMD:TRASH:<id> (matched by its start below), and a spool card's own 🗑️ (62.7b).
+    ['CMD:TRASH', 'Eject waits until the audit is finished or cancelled.'],
     ['CMD:CLEAR', 'The buffer is kept during an audit: finish or cancel it first.'],
     ['CMD:UNDO', 'Undo Last Move is off while an audit is running. Finish or cancel the audit first.'],
     ['CMD:BULKMOVE', 'A bulk move waits until the audit is finished or cancelled.'],
@@ -278,7 +280,7 @@ const _AUDIT_REFUSES = new Map([
 const _AUDIT_PANEL_COVERS = ['CMD:LOCATIONS', 'CMD:WEIGH', 'CMD:PREV', 'CMD:NEXT'];
 const _auditCommandRefusal = (upper) => {
     if (_AUDIT_REFUSES.has(upper)) return _AUDIT_REFUSES.get(upper);
-    if (upper.startsWith('CMD:TRASH:')) return 'Eject waits until the audit is finished or cancelled.';
+    if (upper.startsWith('CMD:TRASH:')) return _AUDIT_REFUSES.get('CMD:TRASH');
     const covered = _AUDIT_PANEL_COVERS.includes(upper) || upper.startsWith('CMD:PRINT:');
     if (covered && window.isAuditPanelOpen && window.isAuditPanelOpen()) {
         return 'The audit panel is on top: press Hide, then scan that again.';
@@ -292,6 +294,17 @@ const _auditCommandRefusal = (upper) => {
 window.auditPressRefused = (cmd) => {
     if (!state.auditActive) return false;
     _auditSay(_AUDIT_REFUSES.get(cmd), 'warning');
+    return true;
+};
+
+// A press, or a scan, whose question would open behind the bulk move's panel waits
+// until the move is finished or cancelled, as CMD:TRASH: does (Group 39.9; 62.7b: Eject
+// All's "Nuke all?" and a card's 🗑️ asked behind the panel, z 20000, and their gating
+// dialog then swallowed every scan meant for the session). True when it waited.
+window.bulkMovePressWaits = (what) => {
+    if (!state.bulkMoveActive) return false;
+    showToast(`${what} waits until the bulk move is finished or cancelled`, 'info', 4000);
+    if (window.logClientEvent) window.logClientEvent(`ℹ️ ${what} ignored: a bulk move is armed — finish or cancel it first`, 'INFO');
     return true;
 };
 
@@ -3406,6 +3419,15 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     if (auditRefusal) {
         _auditSay(auditRefusal, 'warning');
         if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: ${escLog(auditRefusal)}`, 'WARNING');
+        return;
+    }
+    // Group 62.7(a): the location window's own Done / Sync QR. CMD:DONE is the audit's
+    // and the bulk move's, which took it while either ran (the window can be open under
+    // a hidden panel); this code, read only here, closes the window whatever else runs.
+    if (upper === 'CMD:CLOSE') {
+        const m = document.getElementById('manageModal');
+        if (m && m.classList.contains('show') && typeof window.closeManage === 'function') window.closeManage();
+        else showToast('ℹ️ No location window is open to close', 'info', 3000);
         return;
     }
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }

@@ -498,12 +498,21 @@
                 <div>${feeds}</div>
             </div>
             <div class="d-flex align-items-center gap-3">
+                ${_cancelQrBlock(s)}
+                <button type="button" class="btn btn-sm btn-secondary" data-sp-act="cancel">Cancel</button>
+            </div>`;
+    };
+
+    // Its 📷 CANCEL QR, in every view (Group 62.7c: the loading view and the "couldn't
+    // read" message drew none, though a cancel scan works there too). _drawCancelQr
+    // draws the code once the view is on the page.
+    const _cancelQrBlock = (s) => `
                 <div class="d-flex flex-column align-items-center" title="Scan to cancel">
                     <div class="fcc-sp-qr" id="fcc-sp-qr-${s.id}-cancel"></div>
                     <div class="fcc-qr-caption" style="font-size:var(--fcc-fs-label); color:#c8c8c8; font-weight:700;">📷 CANCEL</div>
-                </div>
-                <button type="button" class="btn btn-sm btn-secondary" data-sp-act="cancel">Cancel</button>
-            </div>`;
+                </div>`;
+    const _drawCancelQr = (s) => {
+        if (typeof generateSafeQR === 'function') generateSafeQR(`fcc-sp-qr-${s.id}-cancel`, 'CMD:CANCEL', 48);
     };
 
     const _header = (s, chips) => {
@@ -536,7 +545,9 @@
             <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="loading" tabindex="-1">
                 ${_header(s)}
                 <div class="fcc-sp-msg">⏳ Loading ${_esc(s.location)}…</div>
+                <div class="card-footer d-flex justify-content-end">${_cancelQrBlock(s)}</div>
             </div>`);
+        _drawCancelQr(s);
         // D1: the panel takes the focus at once, so a field behind it (the
         // Location Manager's ID box, say) no longer receives a scanner's keys.
         const panel = s.handle && s.handle.element.querySelector('.fcc-sp-panel');
@@ -548,11 +559,13 @@
             <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="message">
                 ${_header(s)}
                 <div class="fcc-sp-msg">${_esc(text)}</div>
-                <div class="card-footer d-flex justify-content-end gap-2">
+                <div class="card-footer d-flex justify-content-end align-items-center gap-2">
+                    ${_cancelQrBlock(s)}
                     ${retry ? '<button type="button" class="btn btn-sm btn-info" data-sp-act="retry">Retry</button>' : ''}
                     <button type="button" class="btn btn-sm btn-secondary" data-sp-act="cancel">Cancel</button>
                 </div>
             </div>`);
+        _drawCancelQr(s);
         const first = s.handle && s.handle.element.querySelector('[data-sp-act="retry"], [data-sp-act="cancel"]');
         if (first) { try { first.focus(); } catch (_) { /* noop */ } }
     };
@@ -585,7 +598,7 @@
         // QR codes: each choice's own label, so the screen can be scanned too.
         if (typeof generateSafeQR === 'function') {
             s.tiles.forEach((t, i) => { const q = _qrText(t); if (q) generateSafeQR(`fcc-sp-qr-${s.id}-${i}`, q, 56); });
-            generateSafeQR(`fcc-sp-qr-${s.id}-cancel`, 'CMD:CANCEL', 48);
+            _drawCancelQr(s);
         }
         // First highlight: the caller's preselect (or the tile a Back returned
         // from), else the ⭐, else the first slot the picker can take.
