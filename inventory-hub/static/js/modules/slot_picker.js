@@ -835,10 +835,17 @@
     // it), one in flight (under 500 ms), a scanner-speed burst, or a buffer that
     // looks like a scan payload. That Enter reaches processScan, then
     // routePickerScan, which refuses it. Only the lone digit just taken as a
-    // hotkey, then Enter, is a person picking.
+    // hotkey, then Enter, is a person picking. Also the Enter right behind a
+    // scan's own, under 100 ms (window.enterIsAScan's clause, state.lastScanEnterAt;
+    // Group 62.10): a scanner whose end-of-scan key sends two Enters (CR LF) left
+    // the second one an empty buffer, and it picked the highlighted ⭐ after a
+    // refused scan, or answered Swap (or "Swap it out") after an occupied slot's
+    // label. A scanner that sends one Enter never meets this rule.
     const _enterIsAScans = (s) => {
-        const buf = String(_st().scanBuffer || '');
+        const st = _st();
+        const buf = String(st.scanBuffer || '');
         if (s && s.hotkey && buf === s.hotkey.digit) return false;
+        if (st.lastScanEnterAt && Date.now() - st.lastScanEnterAt < 100) return true;
         if (buf.length >= 2) return true;
         if (window.isScanInFlight && window.isScanInFlight()) return true;
         if (window.isScannerBurst && window.isScannerBurst()) return true;
