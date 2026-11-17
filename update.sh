@@ -60,7 +60,8 @@ find . -name "__pycache__" -delete
 # 6. Run Database Schema Setup & Migrations
 echo "🏗️  Applying Database Configurations..."
 python3 setup-and-rebuild/setup_fields.py
-python3 setup-and-rebuild/migrate_spool_links.py
+# Every line here runs at EVERY deploy, so a migration added here must do nothing once its work is done.
+# (migrate_spool_links.py, a one-time job, was taken out by Group 68.3, 2026-11-16.)
 
 # 7. The Magic: Restart the App (TrueNAS Electric Eel / 24.10+)
 echo "♻️  Restarting '$APP_NAME'..."
