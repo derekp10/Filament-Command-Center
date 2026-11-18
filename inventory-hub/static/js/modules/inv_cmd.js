@@ -3244,9 +3244,14 @@ const LOC_REPEAT_MS = 1500;
 // text read within LOC_REPEAT_MS of it as a scanner's double read.
 let _lastScanRead = null;
 window._fccLastLocScan = window._fccLastLocScan || null;
+// DEPOSIT HERE's own QR (CMD:DEPOSIT:<place>, Group 62.6) is read twice as a location
+// label is, by the same rule (the review of Group 62): it was the place's LOC: label, and
+// its second read, queued while the first move was answered, put the NEXT spool in the
+// buffer there (on a toolhead, Smart Load then took the first one back off).
+const _readOnceKey = (key) => key.startsWith('LOC:') || key.startsWith('CMD:DEPOSIT:');
 const _isLocRepeat = (key, capturedAt) => {
     const last = window._fccLastLocScan;
-    if (!key.startsWith('LOC:') || !last || last.text !== key) return false;
+    if (!_readOnceKey(key) || !last || last.text !== key) return false;
     const at = capturedAt || Date.now();
     return last.doneAt == null || at < last.doneAt + LOC_REPEAT_MS;
 };
@@ -3313,7 +3318,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // Answered at once unless it reaches the server below (every early return
     // here is an answer); in flight from the request until its answer.
     const locBefore = window._fccLastLocScan;
-    const locScan = locKey.startsWith('LOC:') ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
+    const locScan = _readOnceKey(locKey) ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
     const locInFlight = () => { if (locScan) locScan.doneAt = null; };
     const locDone = () => { if (locScan && locScan.doneAt == null) locScan.doneAt = Date.now(); };
     // A read the open question or the slot picker took by its last label (a key
@@ -3422,6 +3427,20 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     if (auditRefusal) {
         _auditSay(auditRefusal, 'warning');
         if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: ${escLog(auditRefusal)}`, 'WARNING');
+        unread();
+        return;
+    }
+    // The review of Group 62: the two codes below are read only here, above the gating
+    // dialogs' gate further down, so they acted behind "Clear entire Buffer?" or "Nuke
+    // all?" (DEPOSIT HERE moved the top spool under the question, and CMD:CLOSE closed
+    // the window there), where the LOC: label and CMD:DONE they replaced were dropped.
+    // While one is up they wait, and say so; the dialog's own QRs still answer it.
+    if ((upper === 'CMD:CLOSE' || upper.startsWith('CMD:DEPOSIT:'))
+        && (state.activeModal === 'safety' || state.activeModal === 'confirm')) {
+        const why = 'Answer the question on screen first, then scan that again';
+        showToast(why, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: a question is still open`, 'WARNING');
+        unread();
         return;
     }
     // Group 62.7(a): the location window's own Done / Sync QR. CMD:DONE is the audit's
@@ -3469,9 +3488,11 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // its slot or Printer picker where the click opens one. It was the place's LOC:
     // label, which files the whole buffer (that printed label still does). Read only
     // here: anywhere else, during a bulk move or (above) an audit, it moves nothing.
+    // Read twice, it acts once (_isLocRepeat); a read refused here is no read, so the
+    // QR scanned again once its window is open acts.
     if (upper.startsWith('CMD:DEPOSIT:')) {
         const place = upper.slice('CMD:DEPOSIT:'.length).trim();
-        if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) return;
+        if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) { unread(); return; }
         const m = document.getElementById('manageModal');
         const locEl = document.getElementById('manage-loc-id');
         const open = (m && m.classList.contains('show') && locEl) ? String(locEl.value || '').trim() : '';
@@ -3479,6 +3500,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             showToast(`⬇️ DEPOSIT HERE ignored: open ${place || 'its place'}'s window first, then scan it again`, 'warning', 7000);
             if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: DEPOSIT HERE `
                 + `${open ? `for another place (${escLog(open)}'s window is open)` : 'with no location window open'}`, 'WARNING');
+            unread();
             return;
         }
         if (typeof window.depositShownSpool === 'function') window.depositShownSpool(open);

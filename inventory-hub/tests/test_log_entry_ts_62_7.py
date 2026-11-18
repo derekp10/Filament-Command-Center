@@ -34,3 +34,38 @@ def test_a_swatch_line_and_a_meta_line_carry_it_too(monkeypatch):
     state.add_log_entry("a report", "INFO", meta={"type": "audit_report", "audit_id": "x-1"})
     a, b = state.RECENT_LOGS[1], state.RECENT_LOGS[0]
     assert isinstance(a["ts"], int) and b["ts"] > a["ts"] and b["meta"]["type"] == "audit_report"
+
+
+def test_a_lines_stamp_and_its_place_in_the_list_are_taken_together(monkeypatch):
+    """The review of Group 62: the stamp was taken under its lock and the line put in the
+    list after it, outside. A thread held between the two, while another stamped and put
+    its line in, put the older stamp on top, and the 📡 pill counted a line already read
+    as new. Here A is held inside its insert. RED before the review's fix: B's line went
+    in under A's."""
+    import threading
+
+    entered, gate = threading.Event(), threading.Event()
+
+    class HeldOnce(list):
+        held = False
+
+        def insert(self, i, x):
+            if not HeldOnce.held:
+                HeldOnce.held = True
+                entered.set()
+                gate.wait(timeout=5)
+            super().insert(i, x)
+
+    monkeypatch.setattr(state, "RECENT_LOGS", HeldOnce())
+    a = threading.Thread(target=state.add_log_entry, args=("a", "INFO"))
+    a.start()
+    assert entered.wait(timeout=5)
+    b = threading.Thread(target=state.add_log_entry, args=("b", "INFO"))
+    b.start()
+    b.join(timeout=0.3)          # with the fix B waits on the lock A holds
+    gate.set()
+    a.join(timeout=5)
+    b.join(timeout=5)
+    stamps = [e["ts"] for e in state.RECENT_LOGS]
+    assert [e["msg"] for e in state.RECENT_LOGS] == ["b", "a"], state.RECENT_LOGS
+    assert stamps == sorted(stamps, reverse=True), stamps

@@ -105,3 +105,72 @@ await __settle(80);
 return { scans: scans() };
 """, modules=LM)
     assert res["scans"] == ["LOC:SHELF-1"]
+
+
+# --- the review round (2026-11-17) -------------------------------------------------------
+
+def test_a_scanners_double_read_deposits_once(tmp_path):
+    """All three reviewers: the QR read twice (a scanner's double read, the second
+    queued behind the first's processing dim) deposited the NEXT spool too, since
+    CMD:DEPOSIT: wasn't under the LOC: double-read rule the old QR had. RED before the
+    review's fix: two adds, #57 then #99."""
+    res = _run(tmp_path, SETUP + """
+openOn('SHELF-1');
+const t0 = Date.now();
+window.processScan('CMD:DEPOSIT:SHELF-1', 'barcode', t0);
+await __settle(80);
+state.heldSpools = state.heldSpools.filter((s) => s.id !== 57);     // the first move landed
+window.processScan('CMD:DEPOSIT:SHELF-1', 'barcode', t0 + 30);       // its double read, replayed
+await __settle(80);
+return { sent: sent(), toasts: toasts().map((t) => t.msg) };
+""", modules=LM)
+    adds = [b for u, b in res["sent"] if u == "/api/manage_contents"]
+    assert len(adds) == 1 and str(adds[0]).endswith("57"), res
+    assert any("second read" in t for t in res["toasts"]), res["toasts"]
+
+
+def test_a_refused_read_is_no_read_and_the_label_acts_once_the_window_is_open(tmp_path):
+    """A refusal (no window open) doesn't count as the label's read: scanned again a
+    moment later, with the window open, it deposits (Derek: no hidden stop)."""
+    res = _run(tmp_path, SETUP + """
+const t0 = Date.now();
+window.processScan('CMD:DEPOSIT:SHELF-1', 'barcode', t0);
+await __settle(40);
+openOn('SHELF-1');
+window.processScan('CMD:DEPOSIT:SHELF-1', 'barcode', t0 + 400);
+await __settle(80);
+return { sent: sent() };
+""", modules=LM)
+    assert [u for u, _ in res["sent"]].count("/api/manage_contents") == 1, res
+
+
+@pytest.mark.parametrize("what", ["an-audit", "a-bulk-move"])
+def test_the_cards_click_waits_as_its_qr_does(tmp_path, what):
+    """Two reviewers: during an audit or a bulk move the QR was refused while the card's
+    click still moved the spool shown. RED before the review's fix: the click posted."""
+    setup = {"an-audit": "await running(SESSION);",
+             "a-bulk-move": "window.FCC_BULK_MOVE_ENABLED = true; state.bulkMoveActive = true;"}[what]
+    res = _run(tmp_path, SETUP + """
+openOn('SHELF-1');
+%s
+window.depositShownSpool('SHELF-1');
+await __settle(80);
+return { sent: sent(), picks: window.__picks, toasts: toasts().map((t) => t.msg) };
+""" % setup, modules=LM)
+    assert res["sent"] == [] and res["picks"] == [], res
+    assert any("DEPOSIT HERE waits until" in t for t in res["toasts"]), res["toasts"]
+
+
+@pytest.mark.parametrize("modal", ["confirm", "safety"])
+def test_behind_a_gating_dialog_the_qr_moves_nothing(tmp_path, modal):
+    """Two reviewers: CMD:DEPOSIT: ran before the gating-dialog gate, so with "Clear
+    entire Buffer?" or "Nuke all?" up it moved the top spool behind the dialog (the old
+    LOC: QR was dropped there). RED before the review's fix."""
+    res = _run(tmp_path, SETUP + """
+openOn('SHELF-1');
+state.activeModal = %r;
+window.processScan('CMD:DEPOSIT:SHELF-1', 'barcode');
+await __settle(80);
+return { sent: sent(), picks: window.__picks };
+""" % modal, modules=LM)
+    assert res["sent"] == [] and res["picks"] == [], res

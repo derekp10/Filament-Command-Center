@@ -235,10 +235,16 @@ def _route_writes(page: Page, deletes: list):
     page.route("**/api/**", handle)
 
 
-def test_the_typed_step_sends_one_delete_and_a_scan_into_its_box_sends_none(page: Page, reset_dom_state_js: str):
+def test_enter_in_the_typed_box_never_deletes_and_a_refusal_is_said_on_the_question(page: Page, reset_dom_state_js: str):
     """A scanner's digits-only label for the spool, read into the typed box at scanner
-    speed, goes to the scan path (the box keeps what it held), so its Enter never presses
-    Delete forever. Then the id typed by a person, and Enter: one DELETE, answered here."""
+    speed, goes to the scan path (the box keeps what it held). Enter in the box never
+    presses Delete forever (the review of Group 62): a scanner slower than the box's digit
+    rule (a key every 40 ms), or a two-digit id, left the label's digits in the box, which
+    can't tell their Enter from a person's, and the id matched. The id typed at a person's
+    pace (as a slower scanner sends it) and Enter say to press Delete forever; its click
+    sends one DELETE, answered here as refused: the question says why on itself (its toast
+    is drawn under it), its buttons answer again, and the keyboard is on Cancel. RED before
+    the review's fix: that Enter deleted, and a refusal left both buttons dead."""
     deletes: list = []
     _route_writes(page, deletes)
     _open_first_spool_modal(page, reset_dom_state_js)
@@ -246,7 +252,8 @@ def test_the_typed_step_sends_one_delete_and_a_scan_into_its_box_sends_none(page
     assert sid.isdigit(), sid
     page.locator("#btn-spool-gear").click()
     page.locator("#btn-spool-delete").click()
-    page.locator("#fcc-spool-delete-overlay [data-fcc-delete-confirm]").click()
+    question = page.locator("#fcc-spool-delete-overlay")
+    question.locator("[data-fcc-delete-confirm]").click()
     box = page.locator("#fcc-spool-delete-overlay-input")
     expect(box).to_be_focused()
     page.keyboard.type(sid, delay=5)                    # a scanner's pace
@@ -256,7 +263,18 @@ def test_the_typed_step_sends_one_delete_and_a_scan_into_its_box_sends_none(page
     assert box.input_value() == ""
     page.wait_for_timeout(2100)                          # past the accumulator's reset
     box.focus()
-    page.keyboard.type(sid, delay=120)                   # a person
+    page.keyboard.type(sid, delay=120)                   # a person, or a slower scanner
     page.keyboard.press("Enter")
     page.wait_for_timeout(500)
+    assert deletes == [], "Enter in the typed box pressed Delete forever"
+    err = page.locator("#fcc-spool-delete-overlay-err")
+    expect(err).to_contain_text("Delete forever")
+    confirm = question.locator("[data-fcc-delete-confirm]")
+    cancel = question.locator("[data-fcc-delete-cancel]")
+    confirm.click()
+    page.wait_for_timeout(500)
     assert len(deletes) == 1 and deletes[0].rstrip("/").endswith(f"/api/spool/{sid}"), deletes
+    expect(err).to_contain_text("test: not deleted")
+    expect(confirm).to_be_enabled()
+    expect(cancel).to_be_enabled()
+    expect(cancel).to_be_focused()

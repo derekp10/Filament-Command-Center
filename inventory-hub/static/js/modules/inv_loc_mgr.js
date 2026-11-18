@@ -441,8 +441,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
 
         // The window on top: the highest z-index (the page gives each window it
-        // shows one above the open ones, inv_core.js).
-        const shown = Array.from(document.querySelectorAll('.modal.show'));
+        // shows one above the open ones, inv_core.js). The global search is a window
+        // too (a Bootstrap offcanvas, z 1090; the review of Group 62): over a place's
+        // window, an Escape with the keyboard in it closed the place's window, and the
+        // search stayed open.
+        const shown = Array.from(document.querySelectorAll('.modal.show, .offcanvas.show'));
         if (shown.length === 0) return;
         const topmost = shown.reduce((a, b) => {
             const za = parseInt(getComputedStyle(a).zIndex || '0', 10) || 0;
@@ -1146,6 +1149,10 @@ const _paintDepositCard = (card, item) => {
 // was this place's own LOC: label, which files the whole buffer, while the click placed
 // one spool, and the comment here said the two matched).
 window.depositShownSpool = (locId) => {
+    // The click waits during an audit or a bulk move, as the QR does (the review of
+    // Group 62: the QR was refused while a click still moved the spool shown).
+    if (window.auditPressRefused && window.auditPressRefused('CMD:DEPOSIT')) return;
+    if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) return;
     const top = state.heldSpools[0];
     if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); return; }
     // Group 40.5 (and D2.4): a multi-slot box, or a Printer row that isn't its own

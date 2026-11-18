@@ -90,3 +90,30 @@ def test_escape_with_only_a_place_window_still_closes_it(page: Page, base_url: s
     page.evaluate("() => document.activeElement && document.activeElement.blur()")
     page.keyboard.press("Escape")
     page.wait_for_function("() => !document.getElementById('manageModal').classList.contains('show')", timeout=5_000)
+
+
+SEARCH_UP = "() => document.getElementById('offcanvasSearch').classList.contains('show')"
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("focus", ["search-button", "page"])
+def test_escape_with_the_search_over_a_place_window_closes_only_the_search(page: Page, base_url: str, focus):
+    """The review of Group 62 (older than the group): the global search is a Bootstrap
+    offcanvas, not a modal, and the handler picked the window on top among the modals
+    only. With the search open over a place's window and the keyboard on one of its
+    buttons, Escape closed the place's window and left the search open, its own Escape
+    never heard. The search counts as a window now. RED before the review's fix."""
+    pick = _ready(page, base_url)
+    _place_window(page, pick["box"])
+    page.evaluate("() => bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('offcanvasSearch')).show()")
+    page.wait_for_function(SEARCH_UP, timeout=5_000)
+    page.wait_for_timeout(600)
+    if focus == "search-button":
+        page.evaluate("() => document.getElementById('global-search-refresh').focus()")
+        assert page.evaluate("() => document.activeElement && document.activeElement.id") == "global-search-refresh"
+    else:
+        page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.getElementById('offcanvasSearch').classList.contains('show')", timeout=5_000)
+    page.wait_for_timeout(400)
+    assert _shown(page) == ["manageModal"], "Escape closed the place's window under the search"

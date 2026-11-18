@@ -1022,7 +1022,9 @@
             if (choice) {
                 e.preventDefault();
                 const key = choice.getAttribute('data-sp-choice');
-                if (key !== 'back' && s.choiceArmedAt && Date.now() < s.choiceArmedAt) return;   // armed (62.3)
+                // Armed (62.3), but never against a click the keyboard made (a Space,
+                // `detail` 0): it is no double click's second press (the review of Group 62).
+                if (key !== 'back' && e.detail !== 0 && s.choiceArmedAt && Date.now() < s.choiceArmedAt) return;
                 _choose(s, key);
                 return;
             }

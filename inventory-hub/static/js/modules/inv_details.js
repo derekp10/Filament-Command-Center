@@ -3018,7 +3018,7 @@ const _renderDeleteOverlay = (overlayId, hostId, { title, body, requireText, con
                     </label>
                     <input id="${inputId}" type="text" autocomplete="off"
                         style="font-family:monospace; padding:6px 10px; width:min(15rem, 70vw); text-align:center; border:1px solid #555; border-radius:4px; background:#222; color:#fff;" />
-                    <div id="${errId}" style="color:#ff6b6b; font-size:var(--fcc-fs-small); min-height:1em;"></div>
+                    <div id="${errId}" role="alert" style="color:#ff6b6b; font-size:var(--fcc-fs-small); min-height:1em;"></div>
                 </div>
             ` : ''}
             <div style="display:flex; gap:10px; margin-top:6px; flex-wrap:wrap; justify-content:center;">
@@ -3053,15 +3053,32 @@ const _renderDeleteOverlay = (overlayId, hostId, { title, body, requireText, con
         cancelBtn.disabled = true;
         // onConfirm is responsible for closing the question on completion. Step 1's
         // re-renders it as step 2, on the same id, which takes step 1 down.
-        await onConfirm();
+        const out = await onConfirm();
+        // A refused delete (the review of Group 62): the question says why on itself, since
+        // its toast is drawn under it, and its buttons answer again, the keyboard on Cancel.
+        // It used to stay up with both greyed out, and only Escape got out.
+        if (out && out.error) {
+            if (errEl) errEl.textContent = out.error;
+            confirmBtn.disabled = false;
+            cancelBtn.disabled = false;
+            if (ov.isConnected) cancelBtn.focus();
+        }
     });
     if (input) {
+        // Enter in the typed box never presses Delete forever (the review of Group 62): a
+        // spool's digits-only label from a scanner slower than the capture's digit rule (a
+        // key every 40 ms), or a two-digit one, stayed in the box, keys typed into a box
+        // never reach the scan buffer, so its Enter read as a person's, and the id matched.
+        // A person presses Delete forever: a click, or Tab and then Enter on it. Their Enter
+        // here says so.
         input.addEventListener('keydown', (e) => {
             if (e.key !== 'Enter') return;
-            // A scan's Enter is the scan's (Group 62.8): it never presses Delete forever.
-            if (window.enterIsAScan && window.enterIsAScan()) return;
+            if (window.enterIsAScan && window.enterIsAScan()) return;   // the scan's
             e.preventDefault();
-            confirmBtn.click();
+            if (!errEl) return;
+            errEl.textContent = (input.value || '').trim() === requireText
+                ? 'To delete it, press Delete forever.'
+                : `Doesn't match — type ${requireText} exactly.`;
         });
     }
     return handle;
@@ -3082,21 +3099,26 @@ const _showDeleteSpoolFlow = (spoolId) => {
                 body: `Type the spool ID to confirm permanent deletion of <strong>Spool #${spoolId}</strong>.`,
                 requireText: String(spoolId),
                 confirmLabel: 'Delete forever',
+                // A refusal comes back as { error }, said on the question (and in a
+                // toast, read once the question is gone).
                 onConfirm: async () => {
                     try {
                         const r = await fetch(`/api/spool/${spoolId}`, { method: 'DELETE' });
                         const j = await r.json().catch(() => ({}));
                         if (!r.ok || !j.success) {
-                            const err = (j && j.error) || `HTTP ${r.status}`;
-                            showToast(`Delete failed: ${err}`, 'error', 7000);
-                            return;
+                            const err = `Delete failed: ${(j && j.error) || `HTTP ${r.status}`}`;
+                            showToast(err, 'error', 7000);
+                            return { error: err };
                         }
                         showToast(`Spool #${spoolId} deleted`, 'success', 4000);
                         if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
                     } catch (e) {
-                        showToast(`Delete failed: ${e.message || e}`, 'error', 7000);
+                        const err = `Delete failed: ${e.message || e}`;
+                        showToast(err, 'error', 7000);
+                        return { error: err };
                     }
+                    return null;
                 },
             });
         },
@@ -3374,14 +3396,16 @@ const _showDeleteFilamentFlow = (filamentId, childSpoolCount) => {
                     : `Type the filament ID to confirm permanent deletion of <strong>Filament #${filamentId}</strong>.`,
                 requireText,
                 confirmLabel: 'Delete forever',
+                // A refusal comes back as { error }, said on the question (and in a
+                // toast, read once the question is gone).
                 onConfirm: async () => {
                     try {
                         const r = await fetch(`/api/filament/${filamentId}`, { method: 'DELETE' });
                         const j = await r.json().catch(() => ({}));
                         if (!r.ok || !j.success) {
-                            const err = (j && j.error) || `HTTP ${r.status}`;
-                            showToast(`Delete failed: ${err}`, 'error', 7000);
-                            return;
+                            const err = `Delete failed: ${(j && j.error) || `HTTP ${r.status}`}`;
+                            showToast(err, 'error', 7000);
+                            return { error: err };
                         }
                         const cascade = (j.deleted_spool_ids || []).length;
                         const msg = cascade > 0
@@ -3391,8 +3415,11 @@ const _showDeleteFilamentFlow = (filamentId, childSpoolCount) => {
                         if (typeof modals !== 'undefined' && modals.filamentModal) modals.filamentModal.hide();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
                     } catch (e) {
-                        showToast(`Delete failed: ${e.message || e}`, 'error', 7000);
+                        const err = `Delete failed: ${e.message || e}`;
+                        showToast(err, 'error', 7000);
+                        return { error: err };
                     }
+                    return null;
                 },
             });
         },

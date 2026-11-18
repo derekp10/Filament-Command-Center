@@ -216,3 +216,46 @@ def test_a_browsers_own_chord_is_left_alone(overlay, mod):
     page.keyboard.press("Tab")
     page.keyboard.up(mod)
     assert page.evaluate("window.__prevented") is False
+
+
+# --- the review of Group 62 (2026-11-17): a radio group is one Tab stop ----------------
+
+RADIOS = """<div id="sheet" tabindex="-1">
+    <button id="first">first</button>
+    <label><input type="radio" name="why" value="a" id="r-a">A</label>
+    <label><input type="radio" name="why" value="b" id="r-b" checked>B</label>
+    <label><input type="radio" name="why" value="c" id="r-c">C</label>
+    <input id="note" type="text">
+    <button id="save">save</button>
+</div>"""
+
+
+def test_a_radio_group_is_one_tab_stop_its_checked_radio(overlay):
+    """With the trap the default (62.4), Tab walked onto each reason of the Low stock
+    reason dialog in turn, and Enter on an unchecked one saved the checked one. A browser
+    makes a radio group one stop, its checked radio, and so does the trap now. RED before
+    the review's fix: r-a, r-b, r-c each took a Tab."""
+    page, mount = overlay
+    mount(content=RADIOS)
+    page.focus("#first")
+    assert tabs(page, "Tab", 4) == ["r-b", "note", "save", "first"]
+    assert tabs(page, "Shift+Tab", 3) == ["save", "note", "r-b"]
+
+
+def test_a_group_with_none_checked_is_one_stop_at_its_first(overlay):
+    page, mount = overlay
+    mount(content=RADIOS.replace(" checked", ""))
+    page.focus("#first")
+    assert tabs(page, "Tab", 2) == ["r-a", "note"]
+
+
+def test_from_a_radio_that_is_not_its_groups_stop_tab_leaves_the_group(overlay):
+    """An unchecked radio with the focus (the page put it there) counts as its group's
+    stop: Shift+Tab goes to what is before the group, never back onto its checked radio.
+    RED before the review's fix: r-b."""
+    page, mount = overlay
+    mount(content=RADIOS)
+    page.focus("#r-c")
+    assert tabs(page, "Shift+Tab", 1) == ["first"]
+    page.focus("#r-a")
+    assert tabs(page, "Tab", 1) == ["note"]

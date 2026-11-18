@@ -10,9 +10,10 @@ RECENT_LOGS = []
 # Each Activity Log entry's `ts` (Group 62.7d): epoch milliseconds, strictly
 # increasing across entries, so the 📡 pill can count the lines newer than the
 # last one seen. Its 'HH:MM:SS' text compared as text, so after midnight a line
-# earlier than the last-seen time never raised the pill.
+# earlier than the last-seen time never raised the pill. Re-entrant: add_log_entry
+# holds it across a line's stamp and its insert (the review of Group 62).
 _LAST_LOG_TS = 0
-_LOG_TS_LOCK = threading.Lock()
+_LOG_TS_LOCK = threading.RLock()
 ACKNOWLEDGED_FILABRIDGE_ERRORS = set()
 
 # --- PERSISTENT STATE ---
@@ -156,12 +157,18 @@ def add_log_entry(msg, category="INFO", color_hex=None, meta=None):
     else:
         ui_msg = msg
 
-    entry = {"time": timestamp, "msg": ui_msg, "type": category, "ts": _next_log_ts()}
+    entry = {"time": timestamp, "msg": ui_msg, "type": category}
     if meta:
         entry["meta"] = meta
-        
-    RECENT_LOGS.insert(0, entry)
-    if len(RECENT_LOGS) > 50: RECENT_LOGS.pop()
+
+    # The stamp and the line's place in the list are taken together (the review of
+    # Group 62): stamped under the lock and put in the list after it, a line held between
+    # the two, while another thread stamped and put its own in, landed on top with the
+    # older stamp, and the page's pill then counted a line already read as new.
+    with _LOG_TS_LOCK:
+        entry["ts"] = _next_log_ts()
+        RECENT_LOGS.insert(0, entry)
+        if len(RECENT_LOGS) > 50: RECENT_LOGS.pop()
     
     # Standard Python Logging
     if category == "ERROR":

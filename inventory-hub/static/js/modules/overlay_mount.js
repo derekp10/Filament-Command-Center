@@ -109,18 +109,31 @@
         return !!root && top === root;
     }
 
-    // What Tab can land on right now: in the tab order, enabled and on screen.
+    // What Tab can land on right now: in the tab order, enabled and on screen. A radio
+    // group is one stop, as in a browser: its checked radio, else its first (the review
+    // of Group 62: with the trap the default, Tab walked onto each reason of the Low stock
+    // reason dialog, and Enter on an unchecked one saved the checked one).
     const TAB_CANDIDATES = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]';
+    const _radioName = (el) => (el && el.tagName === 'INPUT' && el.type === 'radio' && el.name) ? el.name : null;
     function _tabStops(root) {
-        return Array.from(root.querySelectorAll(TAB_CANDIDATES)).filter((el) => (
+        const all = Array.from(root.querySelectorAll(TAB_CANDIDATES)).filter((el) => (
             el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[inert]')
             && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden'));
+        return all.filter((el) => {
+            const name = _radioName(el);
+            if (!name) return true;
+            const group = all.filter((r) => _radioName(r) === name);
+            return el === (group.find((r) => r.checked) || group[0]);
+        });
     }
 
     // The stop Tab goes to next. From a focused element that is no stop itself (a list
-    // row out of the tab order, the panel), the nearest stop that way.
+    // row out of the tab order, the panel), the nearest stop that way; from a radio that
+    // isn't its group's stop, its group's stop's neighbour, so Tab leaves the group.
     function _nextTabStop(stops, from, back) {
-        const at = stops.indexOf(from);
+        const name = _radioName(from);
+        let at = stops.indexOf(from);
+        if (at === -1 && name) at = stops.findIndex((el) => _radioName(el) === name);
         if (at !== -1) return stops[(at + (back ? stops.length - 1 : 1)) % stops.length];
         const side = back ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING;
         const near = stops.filter((el) => from.compareDocumentPosition(el) & side);

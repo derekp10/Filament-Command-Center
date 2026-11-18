@@ -772,6 +772,10 @@
         no.onclick = close;
         document.addEventListener('keydown', keyHandler, true);
         _activeConfirmClose = close;
+        // A notice (`opts.notice`: Return's "nothing to return" words) asks nothing, so it
+        // holds off no scan (the review of Group 62: every scan was refused with "Answer the
+        // question on screen first" under words that asked nothing).
+        if (opts.notice) return;
         // The question on screen holds off every other scan until it is answered
         // (Group 62.2, found grounding it): a slot label scanned meanwhile started a
         // second move behind it. Its own QRs (a printing head's) are answered first
@@ -1357,6 +1361,7 @@
             toolhead: th,
             // Nothing will move, so no printer banner (and no second check).
             probed: null,
+            notice: true,
             title,
             body: `<div class="text-warning fw-bold" style="font-size:1.05rem;">${text}</div>`,
             onConfirm: () => { /* no-op: nothing the server would do */ },
@@ -1510,6 +1515,7 @@
                 // pretend there's anything to confirm.
                 showConfirmOverlay({
                     toolhead: vth,
+                    notice: true,
                     title: `Nothing to return on ${vth}`,
                     body: `<div class="text-warning fw-bold" style="font-size:1.05rem;">`
                         + `No toolhead on <b>${vth}</b> is currently loaded — nothing to return.</div>`,

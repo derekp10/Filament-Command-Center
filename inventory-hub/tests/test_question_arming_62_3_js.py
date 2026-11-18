@@ -212,3 +212,47 @@ def test_the_slot_pickers_swap_waits_and_back_does_not(apage):
     page.click("#fcc-slot-picker [data-sp-choice='swap']")
     page.wait_for_function("() => window.__picked !== undefined")
     assert page.evaluate("() => window.__picked && window.__picked.choice") == "swap"
+
+
+# --- the review of Group 62 (2026-11-17): a Space is no double click --------------------
+
+def test_a_persons_space_on_an_armed_answer_answers_at_once(apage):
+    """A Space on a button is a click the keyboard makes (detail 0), never a double
+    click's second press, as Group 58's shield already reads it; the arming dropped it for
+    700 ms. The three-way opens with the keyboard on "Just store it", the idle Quick-Swap
+    confirm on Yes. RED before the review's fix: nothing was said, nothing was posted."""
+    page = apage
+    page.evaluate(THREE_WAY)
+    page.wait_for_function(f"() => document.activeElement && document.activeElement.matches('{Q} .fcc-apc-store')")
+    page.keyboard.press("Space")
+    assert _said(page) == ["store"]
+    page.evaluate("""() => { window.checkPrinterForHead = () => Promise.resolve({ active: false, known: true, state: 'IDLE', printer_name: 'XL' });
+        const b = document.createElement('button');
+        Object.assign(b.dataset, { toolhead: 'XL-1', box: 'LR-MDB-1', slot: '1', spoolId: '57' });
+        window.quickSwapTap(b); }""")
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-quickswap-yes'")
+    page.keyboard.press("Space")
+    page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/quickswap')", timeout=3000)
+
+
+def test_a_space_on_the_slot_pickers_first_choice_chooses_it_at_once(apage):
+    """The choice opens with the keyboard on Swap. RED before the review's fix."""
+    page = apage
+    page.evaluate("(m) => { window.__models = { 'CR-MDB-1': m }; window.__picked = undefined;"
+                  " window.openSlotPicker({ location: 'CR-MDB-1', spool: 6 }).then((r) => { window.__picked = r; }); }",
+                  OCCUPIED_MODEL)
+    page.wait_for_function("() => document.querySelectorAll('#fcc-slot-picker .fcc-sp-tile').length > 0")
+    page.click("#fcc-slot-picker .fcc-sp-tile[data-sp-idx='1']")
+    page.wait_for_function("() => document.activeElement && document.activeElement.matches(\"#fcc-slot-picker [data-sp-choice='swap']\")")
+    page.keyboard.press("Space")
+    page.wait_for_function("() => window.__picked !== undefined", timeout=3000)
+    assert page.evaluate("() => window.__picked && window.__picked.choice") == "swap"
+
+
+def test_a_mouse_click_inside_700_ms_still_waits(apage):
+    """A pin on the other side: a mouse click (detail 1) inside 700 ms still does nothing."""
+    page = apage
+    page.evaluate(THREE_WAY)
+    page.wait_for_selector(f"{Q} .fcc-apc-store")
+    page.click(f"{Q} .fcc-apc-store")
+    assert _said(page) == []

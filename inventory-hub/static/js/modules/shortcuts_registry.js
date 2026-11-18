@@ -746,7 +746,18 @@
     window.registerShortcut({
         id: 'scan-cmd-done', scope: 'Scan Commands',
         keys: ['CMD:DONE'],
-        description: 'Close the open location manager, or finish an audit: it asks before moving anything.'
+        description: 'Finish an audit (it asks before moving anything) or commit a bulk move. With neither running, it closes the open location window.'
+    });
+    // The review of Group 62: the two codes 62.6 and 62.7 put on the location window.
+    window.registerShortcut({
+        id: 'scan-cmd-close', scope: 'Scan Commands',
+        keys: ['CMD:CLOSE'],
+        description: 'Close the open location window, even during an audit or a bulk move (the QR under its Done / Sync button).'
+    });
+    window.registerShortcut({
+        id: 'scan-cmd-deposit', scope: 'Scan Commands',
+        keys: ['CMD:DEPOSIT:<place>'],
+        description: 'DEPOSIT HERE: the spool at the top of the buffer goes into the place whose location window is open, as clicking the card does. Read twice, it acts once.'
     });
     window.registerShortcut({
         id: 'scan-cmd-cancel', scope: 'Scan Commands',

@@ -223,3 +223,18 @@ def test_an_entry_from_an_older_fcc_is_compared_as_before(pill):
     pill.evaluate("() => localStorage.setItem('fcc.logPill.lastSeenTime', '12:00:00')")
     pill.evaluate("(logs) => _updateLogPill(logs)", [{"time": "13:00:00", "msg": "a"}, {"time": "11:00:00", "msg": "b"}])
     assert _shown(pill) == "1"
+
+
+def test_opening_the_list_marks_seen_up_to_its_newest_line_wherever_it_sits(pill):
+    """The review of Group 62: two lines logged at once by two threads could reach the
+    list out of their stamps' order, and opening the list saved its first line's stamp,
+    not the newest, so the newer line read as new right after the list was read. The page
+    keeps the newest stamp now (and state.py stamps a line and puts it in the list under
+    one lock: test_log_entry_ts_62_7.py). RED before the review's fix: '1700000004000'."""
+    out_of_order = [{"time": "10:00:04", "ts": 1_700_000_004_000, "msg": "a", "type": "INFO"},
+                    {"time": "10:00:04", "ts": 1_700_000_004_001, "msg": "b", "type": "INFO"}]
+    pill.evaluate("(logs) => { window.__logs = logs; window.openLogPillOverlay(); }", out_of_order)
+    pill.wait_for_function("() => localStorage.getItem('fcc.logPill.lastSeenTs') !== null")
+    assert pill.evaluate("() => localStorage.getItem('fcc.logPill.lastSeenTs')") == "1700000004001"
+    pill.evaluate("(logs) => _updateLogPill(logs)", out_of_order)
+    assert _shown(pill) is None

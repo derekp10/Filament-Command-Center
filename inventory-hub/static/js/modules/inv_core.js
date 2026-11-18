@@ -286,7 +286,10 @@ const _openMoveConfirms = {};
 // second click of a double click on the button that asked it lands within this (Group
 // 58's DOUBLE_PRESS_MS). questionArmMs(explicit): a door's own figure, else the test
 // harnesses' window.fccQuestionArmMs (0), read as each question opens, else 700.
-// armedClick(fn, ms): fn, called only once `ms` have passed since now.
+// armedClick(fn, ms): fn, called only once `ms` have passed since now, except for a click
+// the keyboard made (a Space or an Enter on the button, `detail` 0): that is no double
+// click's second press, as Group 58's shield reads it (the review of Group 62: a person's
+// Space on the answer the question opened on did nothing for 700 ms).
 const QUESTION_ARM_MS = 700;
 window.QUESTION_ARM_MS = QUESTION_ARM_MS;
 const questionArmMs = (explicit) => (typeof explicit === 'number' ? explicit
@@ -295,7 +298,12 @@ window.questionArmMs = questionArmMs;
 const armedClick = (fn, ms) => {
     if (!(ms > 0)) return fn;
     const armedAt = Date.now() + ms;
-    return (...args) => { if (Date.now() >= armedAt) return fn(...args); return undefined; };
+    return (...args) => {
+        const e = args[0];
+        const byKeyboard = !!e && typeof e === 'object' && e.type === 'click' && e.detail === 0;
+        if (byKeyboard || Date.now() >= armedAt) return fn(...args);
+        return undefined;
+    };
 };
 window.armedClick = armedClick;
 
@@ -1132,9 +1140,17 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
         const fast = keys.length - j + (now - keys[keys.length - 1].t <= DIGITS_BURST_MS ? 1 : 0);
         return fast >= 3 ? j : -1;
     };
+    // A scan sent on from the box is a scan's Enter, as the accumulator marks its own
+    // (the review of Group 62): it skips keys typed into a box, so a scanner set to end
+    // with CR LF had its second Enter read as a person's (enterIsAScan's 100 ms rule).
+    const stampScanEnter = (now) => {
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        if (st) st.lastScanEnterAt = now;
+    };
     const sendFrom = (e, el, keys, k, now) => {
         e.preventDefault();
         e.stopImmediatePropagation();
+        stampScanEnter(now);
         const first = keys[k];
         el.value = first.before;
         try { if (first.s0 != null) el.setSelectionRange(first.s0, first.s1); } catch (_) { /* no caret */ }
@@ -1170,6 +1186,7 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
             if (!looksScanned) return;   // a real entry — let the field's own handler run
             e.preventDefault();
             e.stopImmediatePropagation();
+            stampScanEnter(now);
             // RESTORE what the user had typed, don't blank the field. The
             // scanner's characters were appended to their in-progress value
             // (this handler doesn't preventDefault on character keys), so
@@ -2989,7 +3006,11 @@ window.openLogPillOverlay = () => {
         const logs = (d && d.logs) || [];
         if (logs.length) {
             _writeLastSeenTime(logs[0].time || '');
-            if (typeof logs[0].ts === 'number') _writeLastSeenTs(logs[0].ts);
+            // The newest stamp, wherever its line sits (the review of Group 62: two lines
+            // logged at once could reach the list out of order, and the newer one then
+            // read as new right after the list was read).
+            const stamps = logs.map((l) => l.ts).filter((t) => typeof t === 'number');
+            if (stamps.length) _writeLastSeenTs(Math.max(...stamps));
         }
         // Contrast note: avoid Bootstrap's `text-muted` (#6c757d) — it
         // hits ~1.4:1 against the dark overlay bg and reads as gray-on-gray.
