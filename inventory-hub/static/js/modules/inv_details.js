@@ -1798,7 +1798,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
                 filament so every future spool of it inherits the value.
             </p>
             <label class="form-label text-warning small mb-1">Empty spool weight (g)</label>
-            <input type="number" step="0.1" min="0" id="fcc-archive-empty-wt"
+            <input type="text" inputmode="decimal" id="fcc-archive-empty-wt"
                 class="form-control bg-dark text-white border-warning fcc-weight-box" autocomplete="off"
                 placeholder="e.g. 167"${prefillAttr}>
             <div id="fcc-archive-empty-err" class="text-danger small" style="margin-top:4px;"></div>
@@ -1876,9 +1876,16 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
             showToast('A scan is still being read: press Enter again in a moment', 'info', 4000);
             return;
         }
-        const raw = wtEl ? wtEl.value : '';
-        const n = Number(raw);
-        if (raw === '' || raw == null || !Number.isFinite(n) || n <= 0) {
+        const raw = wtEl ? String(wtEl.value).trim() : '';
+        // Group 63.9(b): a text box read strictly as grams (window.parseGramsReading):
+        // a number box kept only the digits of "0.167kg" and saved them.
+        const n = typeof window.parseGramsReading === 'function' ? window.parseGramsReading(raw) : Number(raw);
+        if (raw !== '' && Number.isNaN(n)) {
+            if (errEl) errEl.textContent = `"${raw}" is not a weight in grams: type grams only, like 167 or 167.5`;
+            if (wtEl) wtEl.focus();
+            return;
+        }
+        if (raw === '' || !Number.isFinite(n) || n <= 0) {
             if (errEl) errEl.textContent = 'Enter a positive weight, or tap Later.';
             if (wtEl) wtEl.focus();
             return;

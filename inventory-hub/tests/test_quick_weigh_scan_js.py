@@ -130,6 +130,7 @@ def later(page, ms):
 
 def _seen(page):
     return page.evaluate("""([s, p]) => ({ saved: window.__saved.map((x) => x.raw_value),
+        values: window.__saved.map((x) => x.value),
         tares: window.__saved.map((x) => x.empty_spool_weight), scans: window.__scans.slice(),
         value: (document.querySelector(s) || {}).value, open: !!document.querySelector(s),
         cancelled: window.__cancelled, prompts: document.querySelectorAll(p).length,
@@ -216,24 +217,29 @@ def test_a_reading_typed_before_a_scan_is_kept(weigh, mode, reading, scanner):
     assert _seen(page)["saved"] == [reading]
 
 
-@pytest.mark.parametrize("mode, typed, ms, saved", [
-    ("gross", "645g", 100, "645"),           # a quick typist's unit
-    ("gross", "645 g", 100, "645"),
-    ("additive", "+25 ", 60, "+25 "),         # a stray Space
-    ("gross", "645.5 g", 5, "645.5"),         # a scale that types its reading with the unit
-    ("net", "645.5g", 5, "645.5"),
-    ("gross", " 645.5", 5, "645.5"),          # and with a padding Space
+@pytest.mark.parametrize("mode, typed, ms, grams", [
+    ("gross", "645g", 100, 645),             # a quick typist's unit
+    ("gross", "645 g", 100, 645),
+    ("additive", "+25 ", 60, 25),             # a stray Space
+    ("gross", "645.5 g", 5, 645.5),           # a scale that types its reading with the unit
+    ("net", "645.5g", 5, 645.5),
+    ("gross", " 645.5", 5, 645.5),            # and with a padding Space
 ])
-def test_a_reading_with_its_unit_or_a_space_is_a_weight(weigh, mode, typed, ms, saved):
+def test_a_reading_with_its_unit_or_a_space_is_a_weight(weigh, mode, typed, ms, grams):
     """A reading typed quickly with its unit or a Space, or one a scale types,
     and Enter right after: it is saved, as before round 5. RED on 5b5a18e:
-    round 5's speed rule took each for a scan and emptied the field."""
+    round 5's speed rule took each for a scan and emptied the field.
+
+    PIN UPDATED DELIBERATELY (Group 63.9(b)): the Gross, Net and Set Used boxes are
+    text boxes read strictly as grams, so the box keeps what was typed (a number box
+    dropped the unit: "645g" read back as "645"), and the weight saved is the
+    reading's grams."""
     page, open_ = weigh
     open_(mode)
     press(page, typed, ms)
     page.wait_for_function("() => window.__saved.length === 1")
     s = _seen(page)
-    assert s["saved"] == [saved] and s["scans"] == [], (typed, s)
+    assert s["saved"] == [typed] and s["values"] == [grams] and s["scans"] == [], (typed, s)
 
 
 @pytest.mark.parametrize("mode", ["gross", "additive", "set_used"])

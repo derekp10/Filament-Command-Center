@@ -1005,14 +1005,27 @@ window.saveWeighOutRow = async (idStr) => {
                 showToast(`#${id} wasn't saved: it needs its empty spool weight. Press Enter in its box again to give it`, 'warning', 7000);
                 return;
             }
+            // Group 63.9(a): a new spool (nothing used) with a known net weighs its
+            // net plus its own empty spool: the reading less the net is offered,
+            // with the sum shown, never saved unasked.
+            const reading = window.parseGramsReading(raw);
+            const offer = (mode === 'gross' && Number(details.used) === 0 && Number(details.initial) > 0
+                           && reading > Number(details.initial))
+                ? Math.round((reading - Number(details.initial)) * 10) / 10 : null;
+            const fmt = (g) => (window.fmtGramsPrecise ? window.fmtGramsPrecise(g) : g);
             const tare = await window.promptMissingEmptyWeight(Object.assign({}, details.context || {},
-                { onScanDismiss: unsaved, scanPending: () => !!pendingScan }));
+                { onScanDismiss: unsaved, scanPending: () => !!pendingScan, prefill: offer,
+                  offer: offer === null ? ''
+                      : `A new spool: ${fmt(reading)} g on the scale − ${fmt(Number(details.initial))} g of filament = ${fmt(offer)} g. Check it, then Save & Continue.` }));
             // Cancelled: back to the target's box (round 7: the focus fell to
             // the page), where the person is: this spool's, unless the save
             // moved them on (round 10: it went back to this one, and the next
             // reading typed joined this spool's).
             if (tare === null) { window.weighOutRefocus(); return; }
             details.empty = Number(tare);
+            // Group 63.7: the spool's own now (the question says so), saved with
+            // the reading below, so its next weigh doesn't ask again.
+            details.tareTyped = Number(tare);
             weighOutDetailsCache.set(id, details);
             r = computeRowResult(id, raw, mode);
             if (!r || r.error || r.requires_empty) {
@@ -1033,7 +1046,12 @@ window.saveWeighOutRow = async (idStr) => {
         // the gross missing-tare prompt fired above, otherwise the spool/filament/
         // vendor cascade value) so the post-archive record prompt is pre-filled.
         handed = true;
-        window.saveSpoolWeight(id, null, { used_weight: r.used_weight }, autoArchive, details.empty,
+        const rowUpdates = { used_weight: r.used_weight };
+        if (Number(details.tareTyped) > 0) {
+            rowUpdates.spool_weight = Number(details.tareTyped);
+            delete details.tareTyped;
+        }
+        window.saveSpoolWeight(id, null, rowUpdates, autoArchive, details.empty,
             { archiveSwitch: switchOn, empties: remainingAfter <= 0, wasArchived: details.archived === true,
               // Group 63.6: the figures this reading was worked out from.
               basedOn: { mode, capacity: details.initial, used: details.used }, fromList: true });
@@ -1163,8 +1181,15 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 // toast's 4 s (the plain one keeps showToast's default).
                 const keptInStock = archiveSwitch === false && empties && !wasArchived
                     && !(res && res.auto_archived);
+                // Group 63.7: an empty weight typed into the missing-tare question
+                // was saved with the reading, as the spool's own.
+                const tareSaved = Number.isFinite(Number(updates.spool_weight)) && Number(updates.spool_weight) > 0
+                    ? `: its empty spool weight (${window.fmtGramsPrecise ? window.fmtGramsPrecise(Number(updates.spool_weight)) : updates.spool_weight} g) is saved too`
+                    : '';
                 if (keptInStock) {
                     showToast(`Updated Spool #${id}: 0 g left, kept in stock (Auto-Archive is off)`, 'success', 4000);
+                } else if (tareSaved) {
+                    showToast(`Updated Spool #${id}${tareSaved}`, 'success', 4000);
                 } else {
                     showToast(`Updated Spool #${id}`, 'success');
                 }
@@ -1414,6 +1439,10 @@ window.openQuickWeigh = (spoolId) => {
                 helpKey: 'quick-weigh',   // its ? (Group 55.3)
                 onSubmit: (payload) => {
                     const updates = { used_weight: payload.used_weight };
+                    // Group 63.7: an empty weight typed into the missing-tare question
+                    // is this spool's own, saved with the reading (the question says
+                    // so); it used to be kept for this window only.
+                    if (Number(payload.typed_tare) > 0) updates.spool_weight = Number(payload.typed_tare);
                     // Used == initial means remaining hits zero; auto-archive
                     // gate matches the legacy behavior (auto-archive only when
                     // the toggle is on AND the spool emptied).

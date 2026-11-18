@@ -237,6 +237,18 @@ window.computeUsedWeight = computeUsedWeight;
 // Resolution sentinel returned when the user clicks Skip. Callers that pass
 // `allowSkip: true` must check for this value to distinguish "no tare, treat
 // input as Net for this submission" from a real numeric tare.
+//
+// Group 63.7: the words say what the question does. It asks for what the spool
+// weighs empty (an empty spool of the same kind on the scale, or the maker's
+// figure: the spool being weighed still has filament on it), and says the weight
+// is kept as this spool's own: its callers save it as the spool's spool_weight
+// with the reading (the Quick-Weigh, the weigh-out list) or put it in the spool's
+// box (the wizard). Skip says it saves the number as the filament left (Net),
+// which is what it does. The box is a text box read strictly as grams (63.9(b),
+// window.parseGramsReading): "0.2 kg", "7 oz" or "167,5" is refused in words, with
+// no unit conversion. `prefill` / `offer` (63.9(a)): a figure worked out for a new
+// spool (gross less its net), filled in and explained under the box, never saved
+// unasked.
 const PROMPT_SKIP_TARE = 'skip';
 
 function promptMissingEmptyWeight({
@@ -245,7 +257,7 @@ function promptMissingEmptyWeight({
     color = '',
     color_hex = null,
     title = 'Empty spool weight is missing',
-    helper = 'Place the empty spool on the scale and enter the reading. We’ll use it as the tare for this and future weigh-ins.',
+    helper = 'Enter what this spool weighs empty: weigh an empty spool of the same kind, or use the maker’s figure. FCC keeps it as this spool’s own empty weight, so it isn’t asked again.',
     overlayId = 'fcc-missing-empty-weight-overlay',
     allowSkip = false,
     // The weigh-out list's: a spool scanned over the prompt cancels it (Group
@@ -256,6 +268,10 @@ function promptMissingEmptyWeight({
     // waits until it has (round 9: the scanned spool's reading and Enter,
     // typed before the answer, were saved as this spool's tare).
     scanPending = null,
+    // Group 63.9(a): a figure to fill in (grams), and the words that say where it
+    // came from ("1245 g on the scale − 1000 g of filament = 245 g").
+    prefill = null,
+    offer = '',
 } = {}) {
     return new Promise((resolve) => {
         const swatch = color_hex
@@ -263,12 +279,20 @@ function promptMissingEmptyWeight({
             : '';
         const ctxBits = [vendor, material, color].filter(Boolean).join(' • ');
         const ctxRow = ctxBits
-            ? `<div style="margin:4px 0 14px 0; color:#bbb; font-size:0.9rem;">${swatch}${ctxBits}</div>`
+            ? `<div style="margin:4px 0 14px 0; color:#bbb; font-size:var(--fcc-fs-row);">${swatch}${ctxBits}</div>`
             : '';
 
         // Nested-prompt support: if WeightEntry is open, mount this prompt on
         // the CONFIRM tier so it sits above the WeightEntry overlay.
         const tier = document.getElementById('fcc-weight-entry-overlay') ? 'confirm' : 'standard';
+
+        const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const pre = Number(prefill);
+        const prefillAttr = (prefill !== null && Number.isFinite(pre) && pre > 0) ? ` value="${esc(pre)}"` : '';
+        const offerRow = (prefillAttr && offer)
+            ? `<div id="${overlayId}-offer" style="color:#9fe7ff;font-size:var(--fcc-fs-small);margin-top:6px;">${esc(offer)}</div>`
+            : '';
 
         // data-fcc-weight-keys: a weight key typed on its buttons goes into its
         // box (inv_core.js's weight capture; Group 57 review, round 7).
@@ -279,18 +303,20 @@ function promptMissingEmptyWeight({
                         max-width:480px;box-shadow:0 8px 32px rgba(0,0,0,0.6);">
                 <div id="${overlayId}-title" style="font-weight:bold;font-size:1.05rem;margin-bottom:6px;">⚖️ ${title}</div>
                 ${ctxRow}
-                <div style="color:#bbb;font-size:0.88rem;line-height:1.4;margin-bottom:12px;">${helper}</div>
+                <div style="color:#bbb;font-size:var(--fcc-fs-small);line-height:1.4;margin-bottom:12px;">${helper}</div>
                 <div class="input-group input-group-sm">
-                    <input type="number" min="0" step="0.1" inputmode="decimal"
+                    <input type="text" inputmode="decimal" autocomplete="off"
                            id="${overlayId}-input"
                            class="form-control bg-secondary text-light border-dark fcc-weight-box"
-                           placeholder="Empty spool weight">
+                           placeholder="Empty spool weight"${prefillAttr}>
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
                 </div>
+                ${offerRow}
+                <div id="${overlayId}-err" role="alert" style="color:#ff8a8a;font-size:var(--fcc-fs-small);margin-top:4px;"></div>
                 <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
                     <button type="button" id="${overlayId}-cancel" class="btn btn-sm btn-secondary">Cancel</button>
                     ${allowSkip ? `<button type="button" id="${overlayId}-skip" class="btn btn-sm btn-warning"
-                        title="Treat your input as the filament remaining (Net), without persisting a tare for this spool.">Skip &mdash; save as Used Weight</button>` : ''}
+                        title="No empty weight is kept: the number you typed is saved as the filament left on the spool, as Net does.">Skip: save my number as the filament left (Net)</button>` : ''}
                     <button type="button" id="${overlayId}-save" class="btn btn-sm btn-primary">Save &amp; Continue</button>
                 </div>
             </div>
@@ -309,7 +335,13 @@ function promptMissingEmptyWeight({
                 showToast('A scan is still being read: press Enter again in a moment', 'info', 4000);
                 return;
             }
-            const v = Number(input.value);
+            const raw = String(input.value == null ? '' : input.value).trim();
+            const v = typeof window.parseGramsReading === 'function' ? window.parseGramsReading(raw) : Number(raw);
+            if (raw !== '' && Number.isNaN(v)) {
+                if (errEl) errEl.textContent = `"${raw}" is not a weight in grams: type grams only, like 167 or 167.5`;
+                input.focus();
+                return;
+            }
             if (!(v > 0)) { input.focus(); return; }
             finish(v);
         };
@@ -351,6 +383,8 @@ function promptMissingEmptyWeight({
         const saveBtn = overlay.querySelector(`#${overlayId}-save`);
         const cancelBtn = overlay.querySelector(`#${overlayId}-cancel`);
         const skipBtn = overlay.querySelector(`#${overlayId}-skip`);
+        const errEl = overlay.querySelector(`#${overlayId}-err`);
+        if (input && errEl) input.addEventListener('input', () => { errEl.textContent = ''; });
 
         saveBtn.addEventListener('click', submit);
         cancelBtn.addEventListener('click', cancel);

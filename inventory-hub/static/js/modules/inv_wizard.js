@@ -1478,13 +1478,24 @@ window.wizardValidateSubmit = () => {
 };
 
 window.wizardCalcUsedWeight = () => {
+    const note = document.getElementById('wiz-spool-scale-note');
+    const say = (words) => { if (note) { note.textContent = words; note.style.display = words ? '' : 'none'; } };
     const scaleWt = parseFloat(document.getElementById('wiz-spool-scale').value);
-    if (isNaN(scaleWt)) return;
+    if (isNaN(scaleWt)) { say(''); return; }
 
     let emptyWt = parseFloat(document.getElementById('wiz-spool-empty_weight').value);
     if (isNaN(emptyWt)) {
-        emptyWt = parseFloat(document.getElementById('wiz-fil-empty_weight').value) || 0;
+        emptyWt = parseFloat(document.getElementById('wiz-fil-empty_weight').value);
     }
+    // Group 63.9(c): with no empty weight known at any level (the spool's box
+    // shows its filament's or its brand's when it inherits one), a gross reading
+    // can't be told from the spool's own weight: it used to count a missing tare
+    // as 0 g, so the empty spool read as filament. Compute nothing, and say why.
+    if (isNaN(emptyWt)) {
+        say("Enter the spool's empty weight first: FCC needs it to tell the filament from the spool.");
+        return;
+    }
+    say('');
 
     let netWt = parseFloat(document.getElementById('wiz-spool-initial_weight').value);
     if (isNaN(netWt)) {

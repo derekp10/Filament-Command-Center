@@ -136,7 +136,8 @@
         match: { modal: 'weighOutModal' },
         lines: [
             'Weigh the spools in your scan buffer one after another: each has a box for its weight and a preview of what will be saved.',
-            'The buttons at the top say how a number is read. Gross: the scale reading with the spool on it; FCC takes off the empty spool\'s weight, and asks for it when it doesn\'t know it.',
+            "The buttons at the top say how a number is read. Gross: the scale reading with the spool on it; FCC takes off the empty spool's weight, and asks for it when it doesn't know it.",
+            "The empty weight you give is kept as that spool's own, so it isn't asked again. For a new spool FCC offers one: the reading less its filament.",
             'Net: the filament alone. Additive: grams added to what was used, like +25, or -10 to take some back. Set Used: the used weight itself.',
             'Type the weight and press Enter, or click 💾: the line goes away and the next box is ready. A weighed spool stays in your scan buffer.',
             'Auto-Archive 0g is on each time this opens: a spool weighed down to 0 g is archived and taken off its place. Turn it off to keep such a spool where it is.',
@@ -155,7 +156,8 @@
             'Pick a mode: Gross (the scale reading with the spool on it), Net (the filament alone), Additive (grams added to what was used, like +25 or -10) or Set Used (the used weight itself). The preview shows what is left before you save.',
             'Save Update, or Enter, saves it; Cancel, × or Esc closes without saving. Set as default makes the mode you are on the one it opens in next time.',
             'Auto Archive & Eject if Empty (0g) is on each time it opens: a spool saved at 0 g is archived and taken off its place.',
-            'In Gross, when the empty spool\'s weight isn\'t known, Save asks for it first. Skip there saves your number as the filament left (as Net does).',
+            "In Gross, when the empty spool's weight isn't known, Save asks for it first, and keeps the weight you give as this spool's own. For a new spool it offers one: the reading less its filament.",
+            'Skip there saves your number as the filament left (as Net does), and keeps no empty weight.',
         ],
         scopes: ['Weigh window'],
     });

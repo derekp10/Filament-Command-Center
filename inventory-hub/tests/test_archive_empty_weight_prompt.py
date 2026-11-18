@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
 from playwright.sync_api import Page, expect
 
 # Unit import for the backend-side shape check
@@ -279,6 +280,26 @@ def test_archive_empty_weight_prompt_validates_weight(page: Page):
     expect(err).to_be_visible()
     expect(err).to_contain_text("positive")
     assert page.evaluate("() => window.__updateFilamentPayload") is None
+
+
+@pytest.mark.parametrize("typed", ["0.2kg", "7 oz", "16,7"])
+def test_archive_empty_weight_prompt_refuses_a_weight_in_another_unit(page: Page, typed):
+    """Group 63.9(b): the box is a text box read strictly as grams
+    (window.parseGramsReading): a weight in another unit, or with a decimal comma,
+    is refused in words and nothing is saved, with no unit conversion. RED on
+    e1b22f4: a number box, which kept only the digits (or took nothing)."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.showArchiveEmptyWeightPrompt === 'function'")
+    _stub_filament_and_writes(page, {})
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 7); }")
+    page.wait_for_selector("#fcc-archive-empty-wt", state="visible", timeout=3_000)
+    page.locator("#fcc-archive-empty-wt").fill(typed)
+    page.locator("#fcc-archive-save").click()
+    err = page.locator("#fcc-archive-empty-err")
+    expect(err).to_have_text(f'"{typed}" is not a weight in grams: type grams only, like 167 or 167.5')
+    assert page.evaluate("() => window.__updateFilamentPayload") is None
+    page.locator("#fcc-archive-later").click()
 
 
 def test_archive_empty_weight_prompt_enter_key_submits(page: Page):
