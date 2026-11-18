@@ -353,3 +353,26 @@ def test_control_with_the_switch_off_an_archived_spool_weighed_to_nothing_stays_
                        "id": 57, "updates": {"used_weight": 1000}, "auto_archive": False})).get_json()
     assert res["status"] == "success" and "still_at" not in res, res
     assert sm.spools[57]["location"] == "CR-SHELF" and archive_takeoff.pending() == []
+
+class _Unread(WeighedWireSpoolman):
+    """FCC's reads of the spool fail (get_spool answers nothing); writes land."""
+
+    def get_spool(self, sid):
+        return None
+
+
+def test_control_a_spool_archived_by_hand_weighed_with_grams_left_stays_where_it_is(client):
+    """Control: the take-off runs only when the page asked to archive. A spool
+    archived by hand on CR-SHELF and weighed with 300 g left while FCC couldn't read
+    it first is no refill FCC can see and no archive the page asked for: it stays
+    archived on CR-SHELF (Derek's 43.2 rule), with nothing written down."""
+    sm = _Unread({57: {"location": "CR-SHELF", "initial_weight": 1000, "used_weight": 1000, "archived": True,
+                       "extra": {}}})
+    res = run_move(sm, probe=IDLE, store=LocationsStore(ROWS), printer_map=PRINTER_MAP,
+                   call=lambda: client.post("/api/spool/update", json={
+                       "id": 57, "updates": {"used_weight": 700}, "auto_archive": True})).get_json()
+    assert res["status"] == "success" and "still_at" not in res, res
+    assert sm.spools[57]["location"] == "CR-SHELF" and sm.spools[57]["archived"] is True, sm.spools[57]
+    assert [b for _sid, b in sm.patch_bodies if b.get("location") == ""] == [], sm.patch_bodies
+    assert archive_takeoff.pending() == []
+

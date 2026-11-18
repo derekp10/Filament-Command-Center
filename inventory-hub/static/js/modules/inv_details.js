@@ -1727,8 +1727,36 @@ window.refreshFilamentSpools = () => {
 // the weigh-out list's scan being answered, round 9: it opened over the scan,
 // and the scanned spool's reading went in its box). `opts.scanPending()`: true
 // while that list is answering a scan, and Save waits until it has.
-window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight = null, opts = {}) => {
+// Group 63.8: one prompt at a time, in the order its archives came (each waits for
+// the one before to close), and none while a reading is being typed: the weigh-out
+// list's `opts.waitWhile` is true while its focused box holds a reading (or the
+// missing-tare question is up over it), and the prompt opens once that is false,
+// checked every 250 ms (the box emptied by its own save, the list closed), at once
+// when nothing is being typed. It took the focus about half a second after a save,
+// and a reading typed meanwhile went into its box, Enter saving it as the
+// filament's empty weight, which every later spool of it inherits. Still one
+// pre-filled confirm per archived spool (Derek, 2026-07-06): only its moment moves.
+// Its filament is read once it is its turn, so one a prompt before it recorded is
+// not asked about again.
+// It answers as it always did, once its prompt is up (or has decided not to open):
+// the queue waits for the close on its own (`run`), and a caller that awaits the
+// answer is never held until a person closes the prompt.
+let _archivePromptTail = Promise.resolve();
+window.showArchiveEmptyWeightPrompt = (spoolId, filamentId, prefillWeight = null, opts = {}) => {
+    let shown = () => {};
+    const up = new Promise((r) => { shown = r; });
+    const run = _archivePromptTail.then(() => _askArchiveEmptyWeight(spoolId, filamentId, prefillWeight, opts, shown));
+    _archivePromptTail = run.then(() => undefined, () => undefined);
+    run.then(() => shown(), () => shown());
+    return up;
+};
+
+const _askArchiveEmptyWeight = async (spoolId, filamentId, prefillWeight = null, opts = {}, shown = () => {}) => {
     if (!filamentId) return;
+    if (opts && typeof opts.settle === 'function') await opts.settle();
+    if (opts && typeof opts.waitWhile === 'function') {
+        while (opts.waitWhile()) await new Promise((r) => setTimeout(r, 250));
+    }
     let fil;
     try {
         const r = await fetch(`/api/filament_details?id=${filamentId}`);
@@ -1810,11 +1838,17 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         </div>
     `;
 
-    if (opts && typeof opts.settle === 'function') await opts.settle();
     if (opts && typeof opts.skipIf === 'function' && opts.skipIf()) {
         showToast(`Didn't ask for #${spoolId}'s empty spool weight: the next spool was already scanned`, 'info', 5000);
         return;
     }
+    // A prompt before this one (the same filament) recorded it meanwhile.
+    if (Number(fil.spool_weight) > 0) return;
+
+    // Resolved when it closes, however (the queue's next prompt waits for it); a
+    // dialog that left the page without its own close counts as closed too.
+    let closedNow = () => {};
+    const whenClosed = new Promise((r) => { closedNow = r; });
 
     let handle = null;
     let saving = false;
@@ -1827,6 +1861,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         if (!handle) return;
         try { handle.cleanup(); } catch (_) { /* noop */ }
         handle = null;
+        closedNow();
         if (returnTo && returnTo !== document.body && returnTo.isConnected && !returnTo.disabled
             && typeof returnTo.focus === 'function') returnTo.focus();
         else if (window.weighOutRefocus) window.weighOutRefocus();
@@ -1948,6 +1983,12 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     if (wtEl) wtEl.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); doSave(); }
     });
+    shown();
+    const gone = setInterval(() => {
+        if (!handle || (ov && ov.isConnected === false)) { clearInterval(gone); closedNow(); }
+    }, 1000);
+    await whenClosed;
+    clearInterval(gone);
 };
 
 // --- Edit Filament / Add Filament (Bootstrap modal) ---

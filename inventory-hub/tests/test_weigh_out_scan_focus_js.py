@@ -1086,12 +1086,12 @@ def test_a_prompt_doesnt_open_while_a_scan_is_answered(wo, prompt):
         _release(page, "details")                 # #8's details are in: its prompt is due
         page.wait_for_timeout(300)
     else:
-        # The empty-weight prompt's first read, held: it is due once let go
-        # (round 11: a 1.3 s wait raced its read on a busy machine).
-        _held(page, "filament")
-        page.evaluate("() => { window.__holdFilament = false; }")
-        _release(page, "filament")
+        # PIN UPDATED DELIBERATELY (Group 63.8): the empty-weight prompt reads its
+        # filament only once it is its turn to open (after the scan's answer and any
+        # typing), so while the scan is held it has read nothing. It used to read
+        # first, and this test held that read (round 11: a 1.3 s wait raced it).
         page.wait_for_timeout(300)
+        assert page.evaluate("() => window.__held.filament.length") == 0
     assert page.locator("[data-overlay-mount='1']").count() == 0, prompt
     later(page, 700)
     press(page, "425", 150)                       # and Enter: held off until the answer
@@ -1106,6 +1106,9 @@ def test_a_prompt_doesnt_open_while_a_scan_is_answered(wo, prompt):
     ups = _updates(page)
     used = 475 if prompt == "tare" else 325
     assert ups[saved_before:] == [{"id": 57, "updates": {"used_weight": used}, "auto_archive": True}] and _filament_writes(page) == 0, ups
+    if prompt == "empty":
+        # Skipped (#57 was scanned since the save) without ever reading its filament.
+        assert page.evaluate("() => window.__held.filament.length") == 0
 
 
 def test_a_save_that_reads_its_details_first_moves_the_focus_on_at_once(wo):

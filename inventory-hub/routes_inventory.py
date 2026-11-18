@@ -1685,10 +1685,15 @@ def api_spool_update():
         # request (63.4). Not with the Auto-Archive switch off (Group 54.7: an
         # archived spool weighed to 0 g then stays where it is). A take-off that
         # fails is written down for the retry and named in `still_at`.
+        # Only when the page asked to archive (`archived: true`, its own reading of
+        # empty with the switch on): a spool archived by hand on a cart and weighed
+        # with grams left while FCC couldn't read it first stays where it is
+        # (Derek's 43.2 rule).
         still_at = None
         weighed = any(k in updates for k in ("used_weight", "initial_weight", "remaining_weight"))
         place_now = str(res.get('location') or '').strip()
-        if archive_on_empty and weighed and res.get('archived') and place_now:
+        if (archive_on_empty and weighed and updates.get('archived') is True
+                and res.get('archived') and place_now):
             landed, why = archive_takeoff.take_off(spool_id, res)
             if landed:
                 state.add_log_entry(f"📦 Took archived Spool #{spool_id} off "

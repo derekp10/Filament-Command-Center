@@ -409,6 +409,20 @@ const weighOutShown = () => {
 };
 // Open, with no overlay over it (the prompts, a question): the person is here.
 const weighOutIsUp = () => weighOutShown() && !document.querySelector('[data-overlay-mount="1"]');
+// Group 63.8: a reading is being typed in the list (its focused box holds one, or
+// the missing-tare question is up over it), so a prompt that would take the focus
+// waits: the post-archive empty-weight prompt and the refill question.
+const weighReadingBeingTyped = () => {
+    if (!weighOutShown()) return false;
+    if (document.getElementById('fcc-missing-empty-weight-overlay')) return true;
+    const ae = document.activeElement;
+    return !!(ae && ae.classList && ae.classList.contains('weigh-input') && String(ae.value || '').trim() !== '');
+};
+// `fn` once no reading is being typed, checked every 250 ms.
+const whenWeighPaused = (fn) => {
+    const tick = () => { if (weighReadingBeingTyped()) setTimeout(tick, 250); else fn(); };
+    tick();
+};
 
 // The focus back in the target's box after something over the window took
 // it. True when a box has it.
@@ -1046,11 +1060,10 @@ window.saveWeighOutRow = async (idStr) => {
         // the gross missing-tare prompt fired above, otherwise the spool/filament/
         // vendor cascade value) so the post-archive record prompt is pre-filled.
         handed = true;
+        // Kept with its details for the session, so a save that fails and is made
+        // again still carries it (sending the same weight again changes nothing).
         const rowUpdates = { used_weight: r.used_weight };
-        if (Number(details.tareTyped) > 0) {
-            rowUpdates.spool_weight = Number(details.tareTyped);
-            delete details.tareTyped;
-        }
+        if (Number(details.tareTyped) > 0) rowUpdates.spool_weight = Number(details.tareTyped);
         window.saveSpoolWeight(id, null, rowUpdates, autoArchive, details.empty,
             { archiveSwitch: switchOn, empties: remainingAfter <= 0, wasArchived: details.archived === true,
               // Group 63.6: the figures this reading was worked out from.
@@ -1204,15 +1217,16 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 // the one being weighed now): then a note says where it came off.
                 if (res && res.refill_ask && typeof res.refill_ask === 'object') {
                     const askRefill = res.refill_ask;
-                    setTimeout(() => {
+                    // Group 63.8: not while the next reading is being typed.
+                    setTimeout(() => whenWeighPaused(() => {
                         if (scansTaken !== takenAtSave || typeof window.askRefillPlace !== 'function') {
                             showToast(`#${id} is back in stock, Unassigned: it came off ${askRefill.place}. `
                                 + 'Scan it to where you put it.', 'info', 7000);
                             return;
                         }
                         window.askRefillPlace(id, askRefill, {
-                            host: weighOutIsUp() ? document.getElementById('weighOutModal') : null });
-                    }, 400);
+                            host: weighOutShown() ? document.getElementById('weighOutModal') : null });
+                    }), 400);
                 }
                 // Spool just auto-archived (weight hit 0) AND its filament
                 // has no empty_spool_weight yet — prompt the user to record
@@ -1234,6 +1248,8 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                     setTimeout(() => window.showArchiveEmptyWeightPrompt(id, res.filament_id, emptyPrefill,
                         { settle: scanSettled, skipIf: () => scansTaken !== takenAtSave,
                           scanPending: () => !!pendingScan,
+                          // Group 63.8: not while the next reading is being typed.
+                          waitWhile: weighReadingBeingTyped,
                           notice: stillAt ? stillPlacedWords(id, stillAt.place) : null }), 400);
                 }
 
