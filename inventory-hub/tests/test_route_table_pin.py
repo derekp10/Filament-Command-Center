@@ -92,6 +92,7 @@ EXPECTED_ROUTES = [
     ("/api/search", "GET", "api_search_inventory"),
     ("/api/smart_move", "POST", "api_smart_move"),
     ("/api/spool/<int:sid>", "DELETE", "api_delete_spool"),
+    ("/api/spool/archive_takeoff", "POST", "api_spool_archive_takeoff"),
     ("/api/spool/prusament_apply_weights", "POST", "api_prusament_apply_weights"),
     ("/api/spool/update", "POST", "api_spool_update"),
     ("/api/spool_details", "GET", "api_spool_details"),

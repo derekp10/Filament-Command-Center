@@ -34,6 +34,7 @@ import print_deduct_ledger  # type: ignore
 import cancel_review_store  # type: ignore
 import cancel_fetch_store  # type: ignore
 import print_tracker_store  # type: ignore
+import archive_takeoff  # type: ignore  # Group 63.2: retried on this loop
 
 import print_deduct  # type: ignore
 
@@ -1703,6 +1704,10 @@ def _cancel_monitor_loop():
                 state.logger.warning(f"cancel-monitor tick error: {e}")
             except Exception:
                 pass
+        # Group 63.2: a spool a weigh archived in place that FCC couldn't take off
+        # is tried again here, FCC's only always-on loop, whatever the printers
+        # (the tick returns early with none). retry_due never raises.
+        archive_takeoff.retry_due()
         # Adaptive cadence: fast while the fleet is busy, slow when idle.
         time.sleep(_CANCEL_MONITOR_FAST_S if busy else _CANCEL_MONITOR_IDLE_S)
 

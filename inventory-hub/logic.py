@@ -12,6 +12,7 @@ import config_loader
 import spoolman_api
 import locations_db
 import stock_report
+import archive_takeoff  # Group 63.2: a stuck spool's take-off, tried before a move onto its place
 
 
 def _active_print_info_for_location(location_str, printer_map=None):
@@ -1888,6 +1889,12 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             _pa.begin_probe_cache()
         except Exception:
             _pa = None
+        # Group 63.2 (Derek, 2026-11-18: "if by the time that a new spool is being
+        # assigned to the location with a unupdated archiveds spool, we try again to
+        # perform the update"): a spool a weigh archived at this place that FCC
+        # couldn't take off is tried again first, so the move doesn't land beside it
+        # unseen. Never raises; a Spoolman that refuses it would refuse the move too.
+        archive_takeoff.retry_at(target)
     try:
         return _perform_smart_move_impl(
             target, raw_spools, target_slot=target_slot, origin=origin,

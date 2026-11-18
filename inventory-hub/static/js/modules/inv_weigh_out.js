@@ -1057,20 +1057,17 @@ const logWeighFailure = (id, said) => {
     window.logClientEvent(`❌ Spool #${id}: ${escWeighLog(said)}`, 'ERROR');
 };
 
-// Group 54 review R4-1: a spool a weigh save archived that the archive's own
-// unassign couldn't take off its place (`place`, from the save's answer; null when
-// the answer named none). It is archived there, which no in-stock reader shows, so
-// it is said for a warning's 7 s, and one WARNING Activity Log line keeps the
-// reason, escaped (the log is HTML, and a Spoolman location is free text).
+// Group 54 review R4-1: a spool a weigh save archived that FCC couldn't take off
+// its place (`place`, the save's `still_at`). It is archived there, which no
+// in-stock reader shows, so it is said for a warning's 7 s. Since Group 63.2 the
+// take-off is the save's own (/api/spool/update), FCC writes the spool down and
+// keeps trying, and the one WARNING Activity Log line is the server's: the page
+// writes none of its own.
 const stillPlacedWords = (id, place) => (place
-    ? `Spool #${id} is archived but still at ${place}: FCC couldn't take it off there.`
-    : `Spool #${id} is archived, but FCC couldn't take it off its place.`);
-const warnStillPlaced = (id, place, why) => {
-    const said = stillPlacedWords(id, place);
-    showToast(said, 'warning', 7000);
-    if (window.logClientEvent) {
-        window.logClientEvent(`⚠️ ${escWeighLog(`${said.slice(0, -1)} (${why})`)}`, 'WARNING');
-    }
+    ? `Spool #${id} is archived but still at ${place}: FCC couldn't take it off there, and keeps trying.`
+    : `Spool #${id} is archived, but FCC couldn't take it off its place, and keeps trying.`);
+const warnStillPlaced = (id, place) => {
+    showToast(stillPlacedWords(id, place), 'warning', 7000);
 };
 
 // `how` (Group 54.7; Derek, 2026-11-07, (a): "Auto-Archive 0g" off means off) is
@@ -1145,8 +1142,8 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     .then(r => r.json())
     .then(res => {
         if (res.status === 'success') {
-            // `stillAt` ({place, why}): the archive's own unassign below failed
-            // while the spool still had a place (Group 54 review R4-1).
+            // `stillAt` ({place}): the save's own take-off failed, and the spool
+            // is archived on its place (Group 54 review R4-1; Group 63.2).
             const finalize = (stillAt = null) => {
                 setProcessing(false);
                 // Saved: a redraw from now on draws its row as any other (its
@@ -1162,7 +1159,7 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 } else {
                     showToast(`Updated Spool #${id}`, 'success');
                 }
-                if (stillAt) warnStillPlaced(id, stillAt.place, stillAt.why);
+                if (stillAt) warnStillPlaced(id, stillAt.place);
                 // Group 42.3c: a used-up spool weighed back above 0 g whose old
                 // toolhead holds another spool now went to Unassigned instead.
                 if (res && res.warning) showToast(res.warning, 'warning', 7000);
@@ -1235,33 +1232,18 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 }));
             };
 
-            if (updates.archived) {
-                // The archive takes the spool off its place ("Auto Archive & Eject
-                // if Empty"). When FCC read the spool, update_spool's archive edge
-                // already did, and this request finds it Unassigned; when it
-                // couldn't (review R1-1: no edge on an unread spool), the write
-                // archived it where it is, and this request is what takes it off.
-                // It answers the print question itself, as the edge never asks one
-                // (a spool weighed empty is in the person's hand, not feeding the
-                // head), and its answer is read (Group 54 review R4-1: a printing
-                // head refused it, nothing read that, and an archived spool stayed
-                // on the head behind "Updated"). A failure while the save's answer
-                // had the spool on a place is said; one after the edge took it off
-                // already changes nothing a person needs to know.
-                const placeNow = typeof res.location_now === 'string' ? res.location_now.trim() : null;
-                fetch('/api/manage_contents', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'force_unassign', spool_id: id, location: '',
-                                           confirm_active_print: true })
-                })
-                    .then((r) => r.json())
-                    .then((ans) => (ans && ans.success === true ? null : String((ans && ans.msg) || 'no answer')),
-                          (e) => String((e && e.message) || 'no answer'))
-                    .then((why) => finalize(why === null || placeNow === '' ? null : { place: placeNow, why }));
-            } else {
-                finalize();
-            }
+            // The archive takes the spool off its place ("Auto Archive & Eject if
+            // Empty") inside the save itself (Groups 63.2 / 63.4): update_spool's
+            // archive edge when FCC read the spool, else the route's own take-off,
+            // from the record Spoolman just answered, asking nothing about a print
+            // (a spool weighed empty is in the person's hand). The page used to post
+            // a second request, force_unassign, which logged a redundant "🗑️ Force
+            // Unassigned" line on every weigh to empty and which a closed tab never
+            // sent. A take-off that failed comes back as `still_at`: FCC wrote the
+            // spool down and keeps trying, and the page says so.
+            const stillAt = (typeof res.still_at === 'string' && res.still_at.trim())
+                ? { place: res.still_at.trim() } : null;
+            finalize(stillAt);
             
         } else {
             setProcessing(false);
@@ -1412,3 +1394,47 @@ if (typeof window.registerShortcut === 'function') {
         description: 'In a spool\'s box: save its weight and go to the next spool. In an empty box: skip to the next one.',
     });
 }
+
+// Group 63.2: the "Take it off" button on the Activity Log line that lists a spool
+// a weigh archived at its place and FCC couldn't take off there (archive_takeoff.py,
+// after 5 failed retries, and again after every restart while it waits). The line
+// holds the button itself (the audit report's 📝 pattern), so it is in #live-logs
+// and in the 📡 pill's list alike: one delegated click posts
+// /api/spool/archive_takeoff {id} and toasts its answer's words, which the pill's
+// list also shows on its own line (its overlay covers the toast layer). A press
+// while one is out for that spool asks nothing, and so does the second click of a
+// double click (`detail` 2). A real <button>: a person's Enter or Space presses it
+// through the scan accumulator's rules (personMayPress). The click is
+// window.fccArchiveTakeoffClick, so a hermetic harness can press it
+// (tests/test_archive_takeoff_page_63_2_js.py).
+(() => {
+    const out = new Set();
+    const say = (msg, ok, fromPill) => {
+        showToast(msg, ok ? 'success' : 'warning', ok ? 4000 : 7000);
+        if (fromPill && typeof window.logPillNotice === 'function') window.logPillNotice(msg);
+    };
+    window.fccArchiveTakeoffClick = (e) => {
+        const t = e.target && e.target.closest ? e.target : null;
+        const btn = t ? t.closest('.fcc-takeoff-btn') : null;
+        if (!btn || !btn.closest('#live-logs, #fcc-log-pill-overlay')) return;
+        e.preventDefault();
+        if (e.detail > 1) return;
+        const sid = parseInt(btn.getAttribute('data-takeoff-spool'), 10);
+        if (!Number.isFinite(sid) || out.has(sid)) return;
+        out.add(sid);
+        const fromPill = !!btn.closest('#fcc-log-pill-overlay');
+        if (fromPill && typeof window.logPillNotice === 'function') window.logPillNotice('');
+        (window.fetchT || fetch)('/api/spool/archive_takeoff', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: sid }),
+        })
+            .then((r) => r.json())
+            .then((res) => say(String((res && res.msg) || `FCC couldn't take #${sid} off its place.`),
+                               !!(res && res.success), fromPill),
+                  () => say(`FCC didn't answer, so #${sid} wasn't taken off. Try again in a moment.`, false, fromPill))
+            .catch((err) => console.error(err))
+            .finally(() => out.delete(sid));
+    };
+    document.addEventListener('click', (e) => window.fccArchiveTakeoffClick(e));
+})();

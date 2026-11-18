@@ -234,6 +234,8 @@ WRAPPER_WRITERS = {
         "only in failures",
     "routes_config_attrs._strip_choice_from_carriers":
         "returns (stripped, errors); each refused write is only in errors",
+    "archive_takeoff.take_off":
+        "returns (landed, why); a write that didn't land is only in its why (Group 63.2)",
 }
 # Their bare names, for a call inside their own module: {"_move_write": "logic._move_write"}.
 _WRAPPER_BY_NAME = {q.split(".", 1)[1]: q for q in WRAPPER_WRITERS}
@@ -313,6 +315,10 @@ HOW_IT_FAILS = {
         f"{WRAPPER_WRITERS['routes_config_attrs._strip_choice_from_carriers']}, with no log "
         "line: count them and log them (\"ERROR\" when none landed, \"WARNING\" when some "
         "did), as api_filament_attributes_remove_choice does"),
+    "archive_takeoff.take_off": (
+        f"{WRAPPER_WRITERS['archive_takeoff.take_off']}, with no log line: when it didn't "
+        "land, write the spool down for the retry (archive_takeoff.note_stuck) and say where "
+        "it still is (\"WARNING\"), as api_spool_update does"),
 }
 
 # Check 2's deliberate exceptions: each site, keyed like WRITE_SITES, whose calls
@@ -429,6 +435,11 @@ WRITE_SITES = {
     ("routes_config_attrs.py", "api_filament_attributes_remove_choice",
      "routes_config_attrs._strip_choice_from_carriers"): (1, "/api/filament_attributes/remove_choice"),
 
+    # --- archive_takeoff.py: a spool a weigh archived at its place, taken off (Group
+    #     63.2): the write, and its retry / the listed line's button through _try ---
+    ("archive_takeoff.py", "take_off", "update_spool"): (1, "archive_takeoff.take_off"),
+    ("archive_takeoff.py", "_try", "archive_takeoff.take_off"): (1, None),
+
     # --- routes_inventory.py: the wizard, vendors, creates, /api/spool/update ---
     ("routes_inventory.py", "_take_archived_off", "update_spool"): (1, "_take_archived_off"),
     ("routes_inventory.py", "api_create_filament", "create_filament"): (1, None),
@@ -442,6 +453,8 @@ WRITE_SITES = {
     ("routes_inventory.py", "api_external_fields_add_choice", "update_extra_field_choices"): (1, None),
     # With and without the archive edge (the weigh screens' Auto-Archive switch).
     ("routes_inventory.py", "api_spool_update", "update_spool"): (2, "/api/spool/update"),
+    # Group 63.2: the take-off of a spool its write archived in place.
+    ("routes_inventory.py", "api_spool_update", "archive_takeoff.take_off"): (1, "/api/spool/update"),
     # Re-orders the field definitions, echoing every other property back.
     ("routes_inventory.py", "api_spoolman_restore_field_order", "HTTP POST field"): (1, None),
     ("routes_inventory.py", "api_update_vendor", "update_vendor_or_raise"): (1, "PATCH /api/vendors/<id>"),

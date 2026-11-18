@@ -22,6 +22,7 @@ Preserved quirks (do not 'fix' in a move — see the carve plan):
 
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
+import html
 import re
 
 from flask import request, jsonify  # type: ignore
@@ -36,6 +37,7 @@ import logic  # type: ignore
 import locations_db  # type: ignore  # Group 40.7: Printer-row / one-spool checks before a create
 import attr_migration  # type: ignore  # Group 36: hidden filament-attribute choices
 import stock_report  # type: ignore  # Group 49.2: the Low-stock list + the low-stock warning
+import archive_takeoff  # type: ignore  # Group 63.2: a spool a weigh archived in place, taken off
 
 from app_core import app
 
@@ -1425,6 +1427,13 @@ def api_edit_spool_wizard():
             warnings.append(_archived_off_note(spool_id, archived_off, spool_res))
         if warnings:
             out["warning"] = " ".join(warnings)
+        # Group 63.1: a Save that weighed the spool back into stock (or unticked
+        # Archived) after it left a toolhead moved it nowhere; the wizard asks where
+        # it goes ({place, room, held_by}). A Save that names a Location writes the
+        # spool's own place first, so its refill asks nothing and the move decides.
+        if (spool_data and new_location is None and isinstance(spool_res, dict)
+                and isinstance(spool_res.get('fcc_refill_ask'), dict)):
+            out["refill_ask"] = spool_res['fcc_refill_ask']
         return jsonify(out)
 
     except Exception as e:
@@ -1639,6 +1648,33 @@ def api_spool_update():
         # single-slot box, as a move would (the engine never ran).
         logic.release_box_after_direct_write(spool_id, pre, res)
 
+        # Group 63.2: a weigh to empty that left the spool archived at its place
+        # (FCC couldn't read it just before the save, so the archive edge couldn't
+        # run, and the page's own `archived: true` archived it where it stands) is
+        # taken off here, in the same request, from the record Spoolman just
+        # answered: a closed tab can't leave it there, and the page posts no second
+        # request (63.4). Not with the Auto-Archive switch off (Group 54.7: an
+        # archived spool weighed to 0 g then stays where it is). A take-off that
+        # fails is written down for the retry and named in `still_at`.
+        still_at = None
+        weighed = any(k in updates for k in ("used_weight", "initial_weight", "remaining_weight"))
+        place_now = str(res.get('location') or '').strip()
+        if archive_on_empty and weighed and res.get('archived') and place_now:
+            landed, why = archive_takeoff.take_off(spool_id, res)
+            if landed:
+                state.add_log_entry(f"📦 Took archived Spool #{spool_id} off "
+                                    f"{html.escape(place_now, quote=False)}: it is Unassigned now",
+                                    "INFO", "00ccff")
+                res = dict(res, location='')
+            else:
+                archive_takeoff.note_stuck(spool_id, place_now, why)
+                still_at = place_now
+                words = spoolman_api.refusal_words(why or '')
+                state.add_log_entry(
+                    f"⚠️ Spool #{spool_id} is archived but still at {html.escape(place_now, quote=False)}: "
+                    f"FCC couldn't take it off there ({html.escape(words.rstrip('.'), quote=False)}). "
+                    f"FCC will keep trying, and lists it here if that doesn't work.", "WARNING", "ffaa00")
+
         # 24.F — Manual weight adjustments leave a before➔after breakdown in the
         # Activity Log. Fire ONLY when a weight field was actually requested so
         # location/extra-only edits don't spam the log. `pre` is the pre-update
@@ -1676,6 +1712,9 @@ def api_spool_update():
             # force-unassign is what takes it off, and a failure of that is said.
             "location_now": str(res.get('location') or '').strip(),
         }
+        if still_at:
+            # Group 63.2: the take-off above failed; FCC tries again (archive_takeoff).
+            out["still_at"] = still_at
         # Group 42.3c: an auto-unarchived spool whose old one-spool place holds
         # another spool now went to Unassigned; the weigh screen toasts this at 7 s.
         if res.get('fcc_warning'):
@@ -1688,6 +1727,26 @@ def api_spool_update():
     except Exception as e:
         state.logger.error(f"Spool Update Error: {e}")
         return jsonify({"status": "error", "msg": str(e)})
+
+
+@app.route('/api/spool/archive_takeoff', methods=['POST'])
+def api_spool_archive_takeoff():
+    """Group 63.2: the "Take it off" button on the Activity Log line that lists a
+    spool a weigh archived at its place and FCC couldn't take off there
+    (archive_takeoff). One try now, by the retry's own rules: a strict re-read
+    first, and a spool weighed back into stock, moved, already taken off or deleted
+    since is left alone. Body {id}. Answers {success, msg}: success when nothing is
+    left to take off; `msg` is in words for the page's toast."""
+    data = request.get_json(silent=True)
+    sid = data.get('id') if isinstance(data, dict) else None
+    if isinstance(sid, bool):
+        sid = None
+    try:
+        sid = int(sid)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "msg": "No spool was named."}), 400
+    ok, msg = archive_takeoff.take_off_now(sid)
+    return jsonify({"success": bool(ok), "msg": msg})
 
 
 import external_parsers # Added for plugin architecture
