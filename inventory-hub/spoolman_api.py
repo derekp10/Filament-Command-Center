@@ -494,8 +494,43 @@ def effective_initial_weight(spool):
         return None
 
 
+UNKNOWN_PLACE = 'UNKNOWN'   # the audit's lost list (Group 58): never a home, never noted
+
+
+def _has_text(value):
+    """True when an extra holds something ('' / '""' / None are nothing)."""
+    return bool(str(value if value is not None else '').strip().strip('"').strip())
+
+
+def _archive_note_extras(existing_extra, place):
+    """The notes an archive writes as it takes a spool off `place` (Group 63.1,
+    one rule for every path that archives: the archive edge, the wizard's take-off,
+    63.2's take-off of a spool left archived on its place):
+      - `fcc_pre_archive_location`: the place it left, a toolhead included (a
+        refill after a toolhead asks where the spool goes and offers it, Derek
+        2026-11-18), never Unknown (Group 58's rule: the lost list is no home).
+        With no place to note, an older note is written '' so it can't outlive
+        this archive (#108's "PJ-CT-1" on dev); a spool with no note gets no key.
+      - `fcc_pre_box_location` (63.4): used up. The archive is a move to Unassigned,
+        and 42.6's rule uses that note up on any move elsewhere (the weigh page's
+        force-unassign used to, with a redundant WARNING line).
+    `existing_extra` is the record's extras as get_spool parses them."""
+    ex = existing_extra if isinstance(existing_extra, dict) else {}
+    out = {}
+    note = str(place if place is not None else '').strip().strip('"').strip()
+    if note.upper() == UNKNOWN_PLACE:
+        note = ''
+    if note:
+        out['fcc_pre_archive_location'] = note
+    elif _has_text(ex.get('fcc_pre_archive_location')):
+        out['fcc_pre_archive_location'] = ''
+    if _has_text(ex.get('fcc_pre_box_location')):
+        out['fcc_pre_box_location'] = ''
+    return out
+
+
 def _auto_archive_on_empty(data, existing_initial, existing_used, existing_location=None,
-                           existing_filament_weight=None):
+                           existing_filament_weight=None, existing_extra=None, pre_archived=False):
     """Mutates `data` in-place to add {archived: True, location: ''} when the
     post-update state would leave remaining_weight at 0 (or below).
 
@@ -533,6 +568,12 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
     Returns True when it read the spool as empty (whatever the caller had set
     itself), else False: update_spool words its Activity Log line from it
     (Group 54 review R1-2).
+
+    Group 63.1: the notes go through `_archive_note_extras` (`existing_extra`, the
+    record's extras): the place it left, never Unknown, an older note cleared when
+    there is none, and the before-the-box note used up. A spool archived already
+    and Unassigned (`pre_archived`: weighed to nothing again) keeps its note: it
+    left no place now.
     """
     if not any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight')):
         return False  # nothing weight-related in this update
@@ -562,14 +603,18 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
         data['archived'] = True
     if 'location' not in data:
         # Plant a breadcrumb of the pre-archive location so a later refill
-        # can restore it. Skip when there's nothing meaningful to remember
-        # (already at UNASSIGNED) or the caller is bypassing our archive.
-        if existing_location:
-            extra = data.get('extra')
-            if not isinstance(extra, dict):
-                extra = {}
-                data['extra'] = extra
-            extra['fcc_pre_archive_location'] = existing_location
+        # can restore it, or ask where it goes after a toolhead (Group 63.1).
+        # The caller's own note wins; a spool archived already and Unassigned
+        # left no place now, so its note stays as it is.
+        if _has_text(existing_location) or not pre_archived:
+            notes = _archive_note_extras(existing_extra, existing_location)
+            if notes:
+                extra = data.get('extra')
+                if not isinstance(extra, dict):
+                    extra = {}
+                    data['extra'] = extra
+                for key, value in notes.items():
+                    extra.setdefault(key, value)
         data['location'] = ''
         # 13.6 Part B — symmetrically clear the slot binding so the box's
         # slot view drops this spool when FilaBridge unmaps it. Previously
@@ -588,23 +633,179 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
     return True
 
 
-def _auto_unarchive_on_refill(data, existing):
-    """Mutates `data` in-place to set archived=False (and optionally restore
-    the pre-archive location) when:
+def _refill_remaining(data, existing):
+    """The weight a write leaves, as the refill edge reads it, or None when it
+    can't be read: a `remaining_weight` without `used_weight` beside it is the
+    weight left (Spoolman refuses the pair; the used weight decides; Group 51
+    review, engine-5); otherwise the new (or kept) initial weight, else the
+    filament's net weight (31.2), less the new (or kept) used weight. A NaN is no
+    reading (Group 63: it used to read as weight left, as the archive edge's
+    twin never did)."""
+    if 'remaining_weight' in data and 'used_weight' not in data:
+        try:
+            left = float(data['remaining_weight'])
+        except (TypeError, ValueError):
+            return None
+        return None if left != left else left
+    new_used = data.get('used_weight', existing.get('used_weight'))
+    new_initial = data.get('initial_weight', existing.get('initial_weight'))
+    if new_initial is None:
+        new_initial = (existing.get('filament') or {}).get('weight')
+    if new_used is None or new_initial is None:
+        return None
+    try:
+        left = float(new_initial) - float(new_used)
+    except (TypeError, ValueError):
+        return None
+    return None if left != left else left
+
+
+def _note_of(existing):
+    """The spool's pre-archive note as text, '' for none. An old "UNKNOWN" note
+    reads as none (Group 63.1, Claude's call 2: Unknown is never a home)."""
+    raw = ((existing or {}).get('extra') or {}).get('fcc_pre_archive_location')
+    note = str(raw if raw is not None else '').strip().strip('"').strip()
+    return '' if note.upper() == UNKNOWN_PLACE else note
+
+
+def _extra_of(data):
+    """`data`'s extras as a dict it holds (made when it has none)."""
+    extra = data.get('extra')
+    if not isinstance(extra, dict):
+        extra = {}
+        data['extra'] = extra
+    return extra
+
+
+def _use_note_up(data, existing):
+    """Group 63.1 (Claude's call 3): a spool that leaves the archive uses its note
+    up, wherever it goes, so no stale note sends it anywhere later. Written ''
+    (the extras merge keeps a key left out) only when the record holds one, and
+    never over a note the caller sent itself."""
+    if _has_text(((existing or {}).get('extra') or {}).get('fcc_pre_archive_location')):
+        _extra_of(data).setdefault('fcc_pre_archive_location', '')
+
+
+def _take_off_on_refill(data, existing):
+    """A refilled spool taken off the place it was archived at: Unassigned, its
+    slot and trail blank, its before-the-box note used up, as an archive takes a
+    spool off (`_archive_note_extras`). A key the caller sent is kept."""
+    data['location'] = ''
+    extra = _extra_of(data)
+    for key in ('container_slot', 'physical_source', 'physical_source_slot'):
+        extra.setdefault(key, '')
+    if _has_text(((existing or {}).get('extra') or {}).get('fcc_pre_box_location')):
+        extra.setdefault('fcc_pre_box_location', '')
+
+
+def _places():
+    """(the active printer map, locations.json's rows by upper-cased LocationID),
+    or (None, None) when locations.json can't be read."""
+    try:
+        printer_map = locations_db.get_active_printer_map() or {}
+        rows = {str(r.get('LocationID', '')).strip().upper(): r
+                for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+        return printer_map, rows
+    except Exception as e:
+        state.logger.warning(f"63.1: couldn't read the locations: {e}")
+        return None, None
+
+
+def _held_by(lid, sid):
+    """The spools other than `sid` filed exactly at `lid` now, from one strict read
+    (an archived spool isn't listed), or None when Spoolman can't be read."""
+    try:
+        return [r.get('id') for r in (get_spools_at_location_detailed_strict(lid) or [])
+                if not r.get('is_ghost') and str(r.get('id')) != str(sid)
+                and _place_text(r.get('location')).upper() == lid]
+    except Exception as e:
+        state.logger.warning(f"63.1: couldn't read {lid} for #{sid}: {e}")
+        return None
+
+
+def _refill_ask(sid, place, rows):
+    """What the page asks with after a refill that left a toolhead (Group 63.1;
+    Derek, 2026-11-18: "ask on a spool correction that adds weight back, to either
+    place it back where it was (Possibly a toolhead) or just assign to the room for
+    now, or possibly scann/select a new location"): the head it left, as its note
+    or record names it; the room that head stands in by the location tree ('' for
+    none); and the spools on it now ([] when it is free, None when unread)."""
+    lid = str(place).strip().upper()
+    return {'place': str(place).strip(),
+            'room': locations_db.known_room_of(lid, list((rows or {}).values())),
+            'held_by': _held_by(lid, sid)}
+
+
+def _back_in_stock_warning(sid, remaining, why):
+    """Group 42.3c's words for a refilled spool that couldn't go where it was."""
+    return (f"#{sid} is back in stock ({remaining:.0f} g), but {why}, so it is Unassigned — "
+            f"scan it to where you put it.")
+
+
+def _refill_place_taken(existing, lid, rows):
+    """Why a refilled spool can't stay at `lid`, the place it is archived at (Group
+    63.2's protection), or None when it can stay: a place that holds one spool (a
+    single-slot dryer box, a Max Spools 1 row) that another spool is in or claims
+    now, or a multi-slot box whose slot it held another spool claims now (the one
+    slot rule, locations_db.box_slot_claims). A place FCC can't read counts as
+    taken. Anywhere else (a shelf, a cart, a room, a box it holds no slot of) it
+    stays. A toolhead is asked about before this (`_refill_outcome`)."""
+    row = rows.get(lid)
+    sid = existing.get('id')
+    one = locations_db.holds_one_spool_place(row)
+    slot = locations_db.norm_slot((existing.get('extra') or {}).get('container_slot'))
+    multi = (bool(slot) and isinstance(row, dict)
+             and str(row.get('Type', '')).strip() == locations_db.DRYER_BOX_TYPE)
+    if not (one or multi):
+        return None
+    try:
+        # Filed there, or deployed from there: either holds the place (42.2).
+        items = [it for it in (get_spools_at_location_detailed_strict(lid) or [])
+                 if _place_text(it.get('location')).upper() == lid]
+    except Exception as e:
+        state.logger.warning(f"63.2: couldn't read {lid} for #{sid}: {e}")
+        return f"FCC couldn't read {lid} from Spoolman"
+    if one:
+        others = [it.get('id') for it in items if str(it.get('id')) != str(sid)]
+        return (f"{lid} now holds " + ", ".join(f"#{h}" for h in others)) if others else None
+    claims, _own, _ghost = locations_db.box_slot_claims(row, lid, items, [sid])
+    holders = claims.get(slot) or []
+    return (f"{lid} slot {slot} now holds " + ", ".join(f"#{h}" for h in holders)) if holders else None
+
+
+def _refill_outcome(data, existing):
+    """Mutates `data` in place to set archived=False when:
       - the existing spool is currently archived, AND
-      - the post-update remaining_weight is > 0.
+      - the post-update remaining_weight is > 0,
+    and decides where it goes. Returns (warning or None, ask or None).
 
     Symmetric counterpart to `_auto_archive_on_empty`. If the user mistakenly
     weighs a spool down to 0 (auto-archiving it) and then corrects the weight
-    via Quick-Weigh / weigh-out / wizard / FilaBridge recovery, we restore the
-    spool to active inventory automatically — the user shouldn't have to bounce
-    into Spoolman to recover from a typo.
+    via Quick-Weigh / weigh-out / wizard, the spool comes back into stock
+    automatically: the user shouldn't have to bounce into Spoolman to recover
+    from a typo.
 
-    Restores `location` from `existing.extra.fcc_pre_archive_location` when
-    that breadcrumb is present and the caller hasn't already specified a
-    location. When no breadcrumb is available the spool stays at UNASSIGNED
-    (which is where the auto-archive parked it) and the user re-locates
-    manually via the normal scan/move flow.
+    Where it goes (Group 63.1; Derek, 2026-11-18: "I think if we ask on a spool
+    correction that adds weight back ... would probably be the best option
+    instead of just auto assigning", then "only after a tool head"):
+      - The caller names a place (`location` in data: the move engine loading it
+        onto a head): there, as always.
+      - It is archived AT a place (moved there while archived, or archived in
+        place: 63.2's spool FCC couldn't take off, or a tick in the wizard): on a
+        toolhead (the engine's one-spool rule, locations_db.head_holds_one_spool)
+        it is taken off the head and the page asks where it goes (`ask`), since a
+        spool being weighed is in the person's hand; at a one-spool place or a
+        box slot another spool holds now (63.2's protection) it is taken off with
+        42.3c's warning; anywhere else it stays where it is (Claude's call 1:
+        a spool moved while archived is not dragged back to an older place).
+      - It is Unassigned, where an archive leaves it: a note naming a toolhead
+        moves it nowhere and the page asks (`ask`: the head, its room, who is on
+        it now); a note naming any other place sends it back there, unless that
+        place holds one spool and another spool is there now, or is gone
+        (`_unarchive_destination`, 42.3c's warning); no note, or an old "UNKNOWN"
+        one (Claude's call 2), leaves it Unassigned.
+    Whatever the outcome, the note is used up (Claude's call 3), an untick of a
+    spool still at 0 g included; it moves nowhere.
 
     The caller's explicit intent always wins: if the payload already sets
     `archived` or `location`, we leave those keys alone. A payload that sets
@@ -617,53 +818,58 @@ def _auto_unarchive_on_refill(data, existing):
     weight, so it un-archived a spool archived by hand with weight left, and an
     extra-only write also sent it back to its pre-archive place. Now such a spool
     stays archived wherever the write put it (Derek's 43.2 rule: an archived spool
-    stays archived). An explicit `archived: False` is the caller un-archiving it,
-    and still gets its place back. A `remaining_weight` write is a weight write
-    too (Group 51 review, engine-5): the weigh-out row's fallback sends the
-    weight left, and Spoolman works out `used_weight` from it.
+    stays archived). An explicit `archived: False` is the caller un-archiving it.
+    A `remaining_weight` write is a weight write too (Group 51 review, engine-5):
+    the weigh-out row's fallback sends the weight left, and Spoolman works out
+    `used_weight` from it.
     """
     if not existing or not existing.get('archived') or data.get('archived') is True:
-        return
+        return None, None
     weighed = any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight'))
-    if not weighed and data.get('archived') is not False:
-        return None
-    if 'remaining_weight' in data and 'used_weight' not in data:
-        try:
-            remaining = float(data['remaining_weight'])
-        except (TypeError, ValueError):
-            return
-    else:
-        new_used = data.get('used_weight', existing.get('used_weight'))
-        new_initial = data.get('initial_weight', existing.get('initial_weight'))
-        # 31.2 — same inherit-weight fallback as _auto_archive_on_empty. Without it,
-        # a refill on an inherit-weight spool wouldn't auto-unarchive, stranding a
-        # mis-typed spool locked in archived status (the exact failure Derek flagged).
-        if new_initial is None:
-            new_initial = (existing.get('filament') or {}).get('weight')
-        if new_used is None or new_initial is None:
-            return
-        try:
-            remaining = float(new_initial) - float(new_used)
-        except (TypeError, ValueError):
-            return
-    if remaining <= 0:
-        return  # still empty, leave the auto-archive in place
+    untick = data.get('archived') is False
+    if not weighed and not untick:
+        return None, None
+    remaining = _refill_remaining(data, existing)
+    if remaining is None or remaining <= 0:
+        # Still empty, or no reading: the archive stays, unless the caller
+        # unticks it, which takes it out of the archive where it is.
+        if untick:
+            _use_note_up(data, existing)
+        return None, None
     if 'archived' not in data:
         data['archived'] = False
-    if 'location' not in data:
-        prev_loc = (existing.get('extra') or {}).get('fcc_pre_archive_location')
-        if prev_loc:
-            dest, warning = _unarchive_destination(existing, prev_loc, remaining)
-            data['location'] = dest
-            # Claude's call 22: the note is used up once the spool is back in
-            # stock. "" because the extras merge won't pop a system-managed key.
-            extra = data.get('extra')
-            if not isinstance(extra, dict):
-                extra = {}
-                data['extra'] = extra
-            extra['fcc_pre_archive_location'] = ''
-            return warning
-    return None
+    _use_note_up(data, existing)
+    if 'location' in data:
+        return None, None
+    sid = existing.get('id')
+    where = _place_text(existing.get('location'))
+    note = _note_of(existing)
+    if not where and not note:
+        return None, None
+    printer_map, rows = _places()
+    if where:
+        if rows is None:
+            return None, None   # can't tell what the place is: it stays, as before
+        lid = where.upper()
+        if locations_db.head_holds_one_spool(lid, printer_map, rows):
+            _take_off_on_refill(data, existing)
+            return None, _refill_ask(sid, where, rows)
+        why = _refill_place_taken(existing, lid, rows)
+        if why is None:
+            return None, None
+        _take_off_on_refill(data, existing)
+        return _back_in_stock_warning(sid, remaining, why), None
+    if rows is not None and locations_db.head_holds_one_spool(note.upper(), printer_map, rows):
+        return None, _refill_ask(sid, note, rows)
+    dest, warning = _unarchive_destination(existing, note, remaining)
+    data['location'] = dest
+    return warning, None
+
+
+def _auto_unarchive_on_refill(data, existing):
+    """`_refill_outcome`, answering its warning alone (what its callers before
+    Group 63 read)."""
+    return _refill_outcome(data, existing)[0]
 
 
 def _unarchive_destination(existing, prev_loc, remaining):
@@ -677,10 +883,17 @@ def _unarchive_destination(existing, prev_loc, remaining):
     warning naming the spool on the head, as an ejected spool with no saved home
     does. Claude's call 22: a place FCC can't read, or that no longer exists,
     counts as taken; a remembered Printer label counts only spools filed on the
-    printer itself. A shelf, box or cart is restored with no read. A place with
-    no locations.json row is gone only if no live spool is filed there either
-    (Group 42 review): a Spoolman-native location FCC shows from its spools was
-    restored before 42.3c and still is.
+    printer itself. A place with no locations.json row is gone only if no live
+    spool is filed there either (Group 42 review): a Spoolman-native location FCC
+    shows from its spools was restored before 42.3c and still is.
+
+    Group 63.2: a place that isn't a head and holds one spool (a single-slot
+    dryer box such as a PolyDryer, a row whose Max Spools is 1) is checked too: a
+    spool filed there, or deployed from there (it is in the box all the same),
+    sends the refilled spool to Unassigned with the warning. A shelf, cart, room
+    or multi-slot box is restored with no read. Since Group 63.1 the refill edge
+    asks after a toolhead before it gets here; the head branch serves a Printer
+    row's note and a direct caller.
     Returns (location, warning or None)."""
     loc = str(prev_loc).strip().strip('"')
     lid = loc.upper()
@@ -715,10 +928,21 @@ def _unarchive_destination(existing, prev_loc, remaining):
             return loc, None
         why = (f"FCC couldn't read {lid} from Spoolman" if holders is None
                else f"{lid} now holds " + ", ".join(f"#{h}" for h in holders))
+    elif locations_db.holds_one_spool_place(rows[lid]):
+        try:
+            holders = [r.get('id') for r in (get_spools_at_location_detailed_strict(lid) or [])
+                       if str(r.get('id')) != str(sid)
+                       and str(r.get('location') or '').strip().strip('"').upper() == lid]
+        except Exception as e:
+            state.logger.warning(f"63.2: couldn't read {lid} for #{sid}: {e}")
+            holders = None
+        if holders == []:
+            return loc, None
+        why = (f"FCC couldn't read {lid} from Spoolman" if holders is None
+               else f"{lid} now holds " + ", ".join(f"#{h}" for h in holders))
     else:
         return loc, None
-    return '', (f"#{sid} is back in stock ({remaining:.0f} g), but {why}, so it is Unassigned — "
-                f"scan it to where you put it.")
+    return '', _back_in_stock_warning(sid, remaining, why)
 
 
 def _release_box_on_archive(sid, data, existing, pre_archived):
@@ -728,19 +952,25 @@ def _release_box_on_archive(sid, data, existing, pre_archived):
     releases the spool's own box (the trail it carried on the head). A later
     force_unassign (the weigh-out's second call) then finds nothing to release.
 
-    Only on the archive edge, only when THIS update cleared the location (so a
-    box is never released while its spool is still on the head), and
-    best-effort: it never changes the write's result or LAST_SPOOLMAN_ERROR."""
+    Only on the archive edge, or on the refill edge when it takes a spool off the
+    head it was archived on (Group 63.1: a spool being weighed is in the person's
+    hand), only when THIS update cleared the location (so a box is never released
+    while its spool is still on the head), and best-effort: it never changes the
+    write's result or LAST_SPOOLMAN_ERROR."""
     try:
-        if not (data.get('archived') and not pre_archived and data.get('location') == ''):
+        if data.get('location') != '':
+            return
+        archive_edge = bool(data.get('archived')) and not pre_archived
+        refill_off = bool(pre_archived) and data.get('archived') is False
+        if not (archive_edge or refill_off):
             return
         head = str((existing or {}).get('location') or '').strip().strip('"').upper()
         if not head or head not in locations_db.get_active_printer_map():
             return
         box = str(((existing or {}).get('extra') or {}).get('physical_source') or '').strip().strip('"').upper()
         if box and box != head and locations_db.detach_single_slot_box(box, head):
-            state.add_log_entry(
-                f"🔓 {box} detached from {head} — its spool #{sid} was archived empty", "INFO")
+            why = "was archived empty" if archive_edge else "was weighed back into stock off it"
+            state.add_log_entry(f"🔓 {box} detached from {head} — its spool #{sid} {why}", "INFO")
     except Exception as e:
         state.logger.warning(f"42.1b archive-edge box release skipped for #{sid}: {e}")
 
@@ -795,32 +1025,44 @@ def _archive_line(sid, data, existing, after, emptied):
     return f"{head} — still at {html.escape(now, quote=False)}" if now else f"{head} — still Unassigned"
 
 
-def _unarchive_line(sid, data, existing):
+def _unarchive_line(sid, data, existing, ask=None):
     """The Activity Log line for a landed write that took spool `sid` out of the
-    archive (Group 54 review R1-2: written once the write lands, never before)."""
+    archive (Group 54 review R1-2: written once the write lands, never before).
+    Group 63.1: a refill after a toolhead (`ask`) says it is Unassigned for now and
+    that FCC asks where it goes; one the refill took off the place it was archived
+    at says so. Places are escaped (the log is HTML)."""
+    # A weight write refilled it; otherwise the caller un-archived it
+    # itself (the move engine loading it onto a head, an untick).
+    weighed = any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight'))
+    head = (f"📤 {'Auto-unarchived' if weighed else 'Un-archived'} Spool #{sid} "
+            f"({'weight refilled' if weighed else 'back in stock'}) — ")
+    was = _place_text((existing or {}).get('location'))
+    if isinstance(ask, dict) and ask.get('place'):
+        return (f"{head}Unassigned for now: it came off {html.escape(str(ask['place']), quote=False)}, "
+                f"and FCC asks where it goes")
+    if data.get('location') == '' and was:
+        return f"{head}taken off {html.escape(was, quote=False)}, now Unassigned"
     # Where it is now: the place this write names, else where it already
     # was (an untick names none; 2026-10-20 review, engine-4).
     restored_to = (data['location'] if 'location' in data
                    else (existing.get('location') or '')) or 'UNASSIGNED'
-    # A weight write refilled it; otherwise the caller un-archived it
-    # itself (the move engine loading it onto a head, an untick).
-    weighed = any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight'))
-    return (f"📤 {'Auto-unarchived' if weighed else 'Un-archived'} Spool #{sid} "
-            f"({'weight refilled' if weighed else 'back in stock'}) — "
-            f"{'restored to' if weighed else 'now at'} {html.escape(str(restored_to), quote=False)}")
+    return (f"{head}{'restored to' if weighed else 'now at'} "
+            f"{html.escape(str(restored_to), quote=False)}")
 
 
-def _log_archive_change(sid, data, existing, after, pre_archived, emptied, unarchive_warning):
+def _log_archive_change(sid, data, existing, after, pre_archived, emptied, unarchive_warning,
+                        refill_ask=None):
     """Write the Activity Log line(s) of a LANDED write that archived spool `sid`,
     or took it out of the archive (with the 42.3c warning when it couldn't go back
-    where it was). Group 54 review R1-2: these used to be written before the PATCH,
-    so a write Spoolman refused, or FCC refused itself, read as done. Best-effort:
-    a log failure never changes the write's result."""
+    where it was, and Group 63.1's words when FCC asks where it goes). Group 54
+    review R1-2: these used to be written before the PATCH, so a write Spoolman
+    refused, or FCC refused itself, read as done. Best-effort: a log failure never
+    changes the write's result."""
     try:
         if data.get('archived') and not pre_archived:
             state.add_log_entry(_archive_line(sid, data, existing, after, emptied), "INFO", "00ccff")
         if pre_archived and data.get('archived') is False:
-            state.add_log_entry(_unarchive_line(sid, data, existing), "INFO", "00ccff")
+            state.add_log_entry(_unarchive_line(sid, data, existing, refill_ask), "INFO", "00ccff")
     except Exception as e:
         state.logger.warning(f"Archive log line for #{sid} skipped: {e}")
     if unarchive_warning:
@@ -873,6 +1115,7 @@ def update_spool(sid, data, archive_on_empty=True):
     sm_url, _ = config_loader.get_api_urls()
     existing, pre_archived = {}, False   # read by the except branch's archive-edge check
     emptied, unarchive_warning, patch_sent = False, None, False   # likewise (review R1-2)
+    refill_ask = None   # Group 63.1: after a toolhead, the page asks where it goes
     clears = {}   # how the extras this write clears are written (_plan_extra_clears)
     try:
         # [ALEX FIX] Intercept "UNASSIGNED" and coerce into empty string for Spoolman API
@@ -903,14 +1146,28 @@ def update_spool(sid, data, archive_on_empty=True):
                 existing.get('used_weight'),
                 existing_location=existing.get('location'),
                 existing_filament_weight=(existing.get('filament') or {}).get('weight'),
+                existing_extra=existing.get('extra'),
+                pre_archived=bool(pre_archived),
             )
+
+        # Group 63.1 (Claude's call 4): every archive writes its note. The edge
+        # wrote it when it took the spool off its place; an archive that leaves the
+        # spool where it is, or names its place (a tick in the wizard, a page's own
+        # `archived: true`), notes nowhere, so an older note can't outlive it: a
+        # later refill would have sent the spool to that older place.
+        if read_ok and data.get('archived') is True and not pre_archived:
+            extra = data.get('extra') if isinstance(data.get('extra'), dict) else {}
+            if ('fcc_pre_archive_location' not in extra
+                    and _has_text((existing.get('extra') or {}).get('fcc_pre_archive_location'))):
+                _extra_of(data)['fcc_pre_archive_location'] = ''
 
         # Symmetric auto-unarchive: weight went from 0 back to >0 on an archived
         # spool. Restores the pre-archive location when the breadcrumb is present
-        # (Group 42.3c: unless a one-spool head there holds another spool now;
-        # the warning then says so). Its line, like the archive's, is written once
-        # the write lands (review R1-2).
-        unarchive_warning = _auto_unarchive_on_refill(data, existing)
+        # (Group 42.3c: unless a one-spool place there holds another spool now;
+        # the warning then says so), or, after a toolhead, asks (Group 63.1:
+        # `refill_ask`, for the page). Its line, like the archive's, is written
+        # once the write lands (review R1-2).
+        unarchive_warning, refill_ask = _refill_outcome(data, existing)
 
         # Merge extras with the existing record so a PATCH that replaces `extra`
         # (a Spoolman that does) can't wipe siblings. Use the RAW (still-wrapped)
@@ -964,13 +1221,18 @@ def update_spool(sid, data, archive_on_empty=True):
             LAST_SPOOLMAN_ERROR = None
             out = r.json()
             # The write landed: now its archive / un-archive line (review R1-2).
-            _log_archive_change(sid, data, existing, out, pre_archived, emptied, unarchive_warning)
+            _log_archive_change(sid, data, existing, out, pre_archived, emptied, unarchive_warning,
+                                refill_ask)
             _release_box_on_archive(sid, data, existing, pre_archived)
             _note_uncleared_extras('spool', sid, clears, out)
             if unarchive_warning and isinstance(out, dict):
                 # Logged above; the weight screens also toast it at 7 s
                 # (/api/spool/update and the wizard pass `fcc_warning` on).
                 out['fcc_warning'] = unarchive_warning
+            if refill_ask and isinstance(out, dict):
+                # Group 63.1: the page that made the write asks where it goes
+                # (/api/spool/update and the wizard pass `refill_ask` on).
+                out['fcc_refill_ask'] = refill_ask
             return out
         err_body = r.text
         state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {err_body}")
@@ -979,11 +1241,13 @@ def update_spool(sid, data, archive_on_empty=True):
         state.logger.error(f"API Error updating spool {sid}: {e}")
         LAST_SPOOLMAN_ERROR = str(e)[:400]
         if patch_sent:   # an error before the PATCH wrote nothing
-            _after_unanswered_write(sid, data, existing, pre_archived, emptied, unarchive_warning)
+            _after_unanswered_write(sid, data, existing, pre_archived, emptied, unarchive_warning,
+                                    refill_ask)
     return None
 
 
-def _after_unanswered_write(sid, data, existing, pre_archived, emptied=False, unarchive_warning=None):
+def _after_unanswered_write(sid, data, existing, pre_archived, emptied=False, unarchive_warning=None,
+                            refill_ask=None):
     """A PATCH whose answer never came may still have landed: update_spool's
     `timeout` is a READ timeout (a print deduct that empties a spool, a weigh-out
     to 0). When the write would archive the spool, or take it out of the archive,
@@ -1013,7 +1277,9 @@ def _after_unanswered_write(sid, data, existing, pre_archived, emptied=False, un
             _log_archive_change(sid, data, existing, rec, pre_archived, emptied, None)
             _release_box_on_archive(sid, data, existing, pre_archived)
         elif unarchiving and not rec.get('archived'):
-            _log_archive_change(sid, data, existing, rec, pre_archived, emptied, unarchive_warning)
+            _log_archive_change(sid, data, existing, rec, pre_archived, emptied, unarchive_warning,
+                                refill_ask)
+            _release_box_on_archive(sid, data, existing, pre_archived)
     except Exception as e:
         state.logger.warning(f"Re-read of #{sid} after an unanswered write skipped: {e}")
 

@@ -1081,6 +1081,10 @@ def _take_archived_off(sid, original, written, dirty, moving=True):
             return None
     pre_extra = original.get('extra') if isinstance(original.get('extra'), dict) else {}
     extra = {k: '' for k in _TRAIL_KEYS if str(pre_extra.get(k) or '').strip().strip('"')}
+    # Group 63.1: an archive's notes, by the one rule (spoolman_api._archive_note_extras).
+    # No place is noted (the user asked for the spool somewhere else), so an older note
+    # is cleared, and the before-the-box note is used up (63.4).
+    extra.update(spoolman_api._archive_note_extras(pre_extra, ''))
     payload = dict({'location': '', 'archived': True}, **({'extra': extra} if extra else {}))
     res = spoolman_api.update_spool(sid, payload)
     if not res:
@@ -1672,10 +1676,14 @@ def api_spool_update():
             # force-unassign is what takes it off, and a failure of that is said.
             "location_now": str(res.get('location') or '').strip(),
         }
-        # Group 42.3c: an auto-unarchived spool whose old toolhead holds another
-        # spool now went to Unassigned; the weigh screen toasts this at 7 s.
+        # Group 42.3c: an auto-unarchived spool whose old one-spool place holds
+        # another spool now went to Unassigned; the weigh screen toasts this at 7 s.
         if res.get('fcc_warning'):
             out["warning"] = res['fcc_warning']
+        # Group 63.1: a refill after a toolhead moved the spool nowhere; the weigh
+        # screen asks where it goes ({place, room, held_by}).
+        if isinstance(res.get('fcc_refill_ask'), dict):
+            out["refill_ask"] = res['fcc_refill_ask']
         return jsonify(out)
     except Exception as e:
         state.logger.error(f"Spool Update Error: {e}")

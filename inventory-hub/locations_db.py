@@ -1968,6 +1968,116 @@ def effective_slot(box_row, slot, occupants=1):
     return '1'
 
 
+# --- How many spools a place holds, and who holds a slot (Group 63) ----------
+# The move engine's one-spool and slot rules, moved here from logic.py so
+# spoolman_api's refill edge (which can't import logic) reads them too; logic's
+# old names delegate, so every caller keeps one rule. Pure: rows and reads in,
+# answers out, no Spoolman.
+
+def norm_slot(slot):
+    """A slot as one comparable string: quotes and blanks stripped, 'None' /
+    'null' read as no slot, and a number without leading zeros ('01' -> '1').
+    Slots arrive as JSON ints, quoted Spoolman extras and scan text."""
+    s = str(slot if slot is not None else '').strip().strip('"').strip()
+    if s in ('None', 'null'):
+        return ''
+    return str(int(s)) if s.isdigit() else s
+
+
+def box_slot_claims(box_row, box_id, in_box, moving_ids):
+    """Group 40.0e / 40.1 — who holds which slot of a multi-slot box, from one
+    read of it (get_spools_at_location_detailed(_strict) items, or a bucket of
+    them): the ONE reading the engine's auto-slot (step 3) and the slot
+    picker's ⭐ share, so the two can't drift. Returns (claims, own_slot,
+    ghost_slot):
+      - `claims` {slot: [ids]}: the slots OTHER spools hold, directly or as the
+        slot a deployed spool came from (the one slot rule, 42.2);
+      - `own_slot`: the slot a moving spool sits in directly, else `ghost_slot`;
+      - `ghost_slot`: the slot a moving spool was deployed from, which it still
+        holds physically (putting it back there from its head is an unload)."""
+    box = str(box_id or '').strip().strip('"').upper()
+    moving = {str(s) for s in (moving_ids or ())}
+    items = list(in_box or [])
+    others = [item for item in items if str(item.get('id')) not in moving]
+    claims = {}
+    for item in others:
+        s = norm_slot(effective_slot(box_row, item.get('slot', ''), occupants=len(others)))
+        if s:
+            claims.setdefault(s, []).append(item.get('id'))
+    own_slot = next((norm_slot(item.get('slot', '')) for item in items
+                     if str(item.get('id')) in moving and not item.get('is_ghost')
+                     and str(item.get('location') or '').strip().strip('"').upper() == box), None)
+    ghost_slot = next((norm_slot(item.get('slot', '')) for item in items
+                       if str(item.get('id')) in moving and item.get('is_ghost')), None)
+    return claims, (own_slot or ghost_slot), ghost_slot
+
+
+def place_capacity(row):
+    """How many spools a place holds by its Max Spools: Bulk Move's capacity rule
+    (D3), whose 0 for a blank or unreadable value is no cap (a Room, a shelf, a cart)."""
+    try:
+        return int(str((row or {}).get('Max Spools', '0')).strip() or '0')
+    except (TypeError, ValueError):
+        return 0
+
+
+def holds_one_spool_place(row):
+    """A place that isn't a head and holds one spool: a single-slot dryer box (the
+    20.2 rule, whose "0" counts too) or a row whose Max Spools is 1 (Bulk Move's
+    capacity rule). An audit's Done (logic._audit_holds_one) and the refill edge's
+    check of a one-spool place (Group 63.2) read it."""
+    return _is_single_slot_dryer_box(row) or place_capacity(row) == 1
+
+
+def head_holds_one_spool(loc_id, printer_map, rows_by_id):
+    """The move engine's one-spool rule (step 2 and Smart Load; logic._holds_one_spool):
+    a printer_map head, a toolhead-type row, or a Printer row that owns no head but
+    itself (the dual-role Core One, or a one-slot printer not yet set up; hotfix
+    2026-09-29). A multi-head Printer row (XL, RCOI) is not a deploy slot and holds
+    any number of spools: a LOC:XL scan files them on XL itself. `rows_by_id` maps
+    an upper-cased LocationID to its row."""
+    lid = str(loc_id or '').strip().strip('"').upper()
+    if not lid:
+        return False
+    if lid in (printer_map or {}):
+        return True
+    row = (rows_by_id or {}).get(lid)
+    if not isinstance(row, dict):
+        return False
+    if row.get('Type') in TOOLHEAD_TYPES:
+        return True
+    if str(row.get('Type', '')).strip() != 'Printer':
+        return False
+    own_heads = [str(t.get('location_id', '')).strip().upper()
+                 for t in (row.get('toolheads') or []) if isinstance(t, dict)]
+    try:
+        one_slot = int(str(row.get('Max Spools', '0')).strip() or '0') <= 1
+    except (TypeError, ValueError):
+        one_slot = True
+    return one_slot and not any(h and h != lid for h in own_heads)
+
+
+def known_room_of(loc_id, loc_list):
+    """The Room `loc_id` really sits in according to the location tree, or ''.
+
+    Where Smart Load sends a resident that has no saved home (Derek,
+    2026-09-12: "if we have no history and the current location is accurate
+    then ... the room it's located in. Otherwise unassigned is fine"), and the
+    room a refilled spool that left a toolhead can be put in for now (Group
+    63.1). resolve_room returns the TOP-LEVEL ancestor, which for a printer that
+    is not nested in a room is the printer itself (XL-1 -> XL), and for an id
+    with no row is a prefix guess, so only an actual Type "Room" row counts."""
+    lid = str(loc_id or '').strip().upper()
+    if not lid:
+        return ""
+    room = resolve_room(lid, loc_list=loc_list) or ""
+    if not room or room == lid or room in PSEUDO_ROOM_PREFIXES:
+        return ""
+    row = next((r for r in (loc_list or [])
+                if isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == room), None)
+    return room if row and row.get('Type') == 'Room' else ""
+
+
 def attach_single_slot_box_to_toolhead(box_id, toolhead_id, steal=True):
     """Group 20.2 — bind a SINGLE-SLOT (`Max Spools <= 1`) dryer box's slot '1'
     to `toolhead_id` so the box follows its deployed spool onto the toolhead

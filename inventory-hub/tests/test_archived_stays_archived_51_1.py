@@ -163,8 +163,11 @@ _ARCHIVED_WITH_WEIGHT = {"archived": True, "initial_weight": 1000, "used_weight"
 def _no_destination_reads(monkeypatch):
     """Every test in this file (autouse fixtures are module-wide): where an
     un-archived spool goes (Group 42.3c) is its note's place, as for an empty
-    head, with no read of locations.json or Spoolman. 42.3c has its own tests."""
+    head, with no read of locations.json or Spoolman. 42.3c has its own tests.
+    Group 63.1: the refill edge reads the places itself first, to ask after a
+    toolhead (test_one_spool_per_toolhead_42_3); here no place is a head."""
     monkeypatch.setattr(sm_api, "_unarchive_destination", lambda existing, prev, remaining: (str(prev), None))
+    monkeypatch.setattr(sm_api, "_places", lambda: ({}, {}))
 
 
 @pytest.mark.parametrize("write", [
