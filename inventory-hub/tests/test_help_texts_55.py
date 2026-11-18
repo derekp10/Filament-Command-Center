@@ -281,6 +281,8 @@ SCRIPT_DRAWN = {
     "move-question": ("inv_core.js", "window.fccHelpKeyForOverlayId(overlayId)"),
     # The Quick-Swap question's ? is its overlay's help, through window.fccCornerHelpHtml.
     "swap-question": ("inv_quickswap.js", "fccCornerHelpHtml('fcc-quickswap-confirm-overlay')"),
+    # Group 63.1: the refill question's ? is its overlay's help, the same way.
+    "refill-place": ("inv_details.js", "fccCornerHelpHtml('fcc-refill-place')"),
 }
 
 

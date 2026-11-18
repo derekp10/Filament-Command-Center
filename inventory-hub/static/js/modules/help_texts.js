@@ -160,6 +160,20 @@
         scopes: ['Weigh window'],
     });
 
+    // Group 63.1: a spool weighed back into stock after it left a toolhead.
+    help({
+        key: 'refill-place',
+        title: 'Where a refilled spool goes',
+        match: { overlay: 'fcc-refill-place' },
+        lines: [
+            "FCC asks this when you weigh a spool back above 0 g, or untick Archived, after it was archived off a toolhead: a spool on the scale is in your hand, so FCC doesn't put it back on the toolhead by itself.",
+            'Back on HEAD-1 puts it back on the toolhead it came off. It is greyed out when another spool is on HEAD-1 now.',
+            "In ROOM-1 for now puts it loose in the room that toolhead stands in. Pick a place… opens Force Location's list of places.",
+            "Leave it Unassigned, or Esc, moves nothing: scan it to where you put it later. Scanning a place's label while this is open puts the spool there.",
+            'A spool that came off a box, cart or shelf goes back there by itself, with no question.',
+        ],
+    });
+
     help({
         key: 'move-question',
         title: 'Load or store question',

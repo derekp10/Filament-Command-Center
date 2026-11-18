@@ -1284,211 +1284,410 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
                     return sel ? sel.value : "";
                 }
             }).then((result) => {
-                if (result.isConfirmed) {
-                    const newLoc = result.value;
-                    const unassign = newLoc === "";
-
-                    // Group 39.5 — a yes-path. An active-print answer used to land in
-                    // the error branch as a 7 s toast with no way to proceed. `confirm`
-                    // is the heads for an add (39.1), or true for force_unassign,
-                    // whose route keeps the boolean.
-                    // `pickedSlot` (Group 40.0e): the slot the engine picked for this
-                    // slotless move before it asked (the answer's `target_slot`), sent
-                    // back as `picked_slot` so the Yes lands where the question said;
-                    // the server keeps it only while it is still free. The first
-                    // request sends no slot.
-                    // The questions' host: the spool window, or none from a card (48.3).
-                    const spoolModalEl = fromCard ? null : document.getElementById('spoolModal');
-                    // What the move did, once the server stopped asking. A rejected
-                    // write still answers status 'success' and names the spool in
-                    // res.failures (2026-09-12).
-                    // `placement` (Group 40.4 / 40.5): what the picker chose, for the toast.
-                    // Returns whether the move landed.
-                    const done = (res, prior, placement = null) => {
-                        const failedWhy = res.status === 'success' ? (res.failures || {})[String(spoolId)] : null;
-                        if (!failedWhy && (res.status === 'success' || res.success)) {
-                            const where = placement ? placement.location : newLoc;
-                            if (prior && prior.store) {
-                                // Group 40.3: "Just store it" put it in the slot and left the head alone.
-                                showToast(`📦 #${spoolId} stored in ${where}`
-                                    + `${prior.pickedSlot != null ? ` slot ${prior.pickedSlot}` : ''}`
-                                    + `${window.storeToastTail(prior)}`, 'success', 4000);
-                            } else if (placement) {
-                                // The picker's choice, in short arrows (as the box-label door says it).
-                                const rec = res.recorded_source ? String(res.recorded_source).split(':') : null;
-                                const tail = (rec && rec.length === 2) ? ` (recorded as from ${rec[0]} slot ${rec[1]})`
-                                    // Group 40 review (BD-3): its own trail won over the answer.
-                                    : res.record_source_ignored ? ` (its home stays ${res.record_source_kept || 'its box'})`
-                                    : (placement.record_source === '' ? ' (no box slot recorded)' : '');
-                                showToast(`✅ #${spoolId} → ${placement.label}`
-                                    + `${res.auto_deployed_to ? ` → ${res.auto_deployed_to}` : ''}${tail}`, 'success', 4000);
-                            } else {
-                                showToast('Location updated via override', 'success');
-                            }
-                            const notDeployed = (res.auto_deploy_skipped || {})[String(spoolId)];
-                            if (notDeployed) showToast(`⚠️ #${spoolId} was placed, but NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
-                            // Group 40, the same-slot swap: the slot's old spool came
-                            // off its head into the scan buffer.
-                            window.takeIntoBuffer(res);
-                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-                            if (!fromCard) openSpoolDetails(spoolId, true);
-                            if (opts && typeof opts.onDone === 'function') {
-                                try { opts.onDone(res); } catch (e) { console.error(e); }
-                            }
-                            return true;
-                        }
-                        showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
-                        // A spool the move had already handed to the buffer (a
-                        // Swap's old spool) is in the user's hand all the same.
-                        window.takeIntoBuffer(res);
-                        return false;
-                    };
-                    const post = (payload, onAnswer) => {
-                        if (typeof setProcessing === 'function') setProcessing(true);
-                        window.fetchT('/api/manage_contents', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
-                        })
-                        // Only a request that got no answer says "failed": an
-                        // exception after a move landed only reaches the console.
-                        .then(r => r.json())
-                        .then(x => x, (e) => {
-                            if (typeof setProcessing === 'function') setProcessing(false);
-                            showToast(`Override failed: ${(e && e.message) || 'network error'}`, 'error', 7000);
-                            return null;
-                        })
-                        .then(res => {
-                            if (res === null) return;
-                            if (typeof setProcessing === 'function') setProcessing(false);
-                            onAnswer(res || {});
-                        })
-                        .catch(e => {
-                            if (typeof setProcessing === 'function') setProcessing(false);
-                            console.error(e);
-                        });
-                    };
-                    // The Swal has closed by now, so a question sits over the details
-                    // modal, and Cancel leaves the details open.
-                    if (unassign) {
-                        // force_unassign keeps its boolean confirm (39.1).
-                        const sendUnassign = (confirm) => post({
-                            action: 'force_unassign', location: newLoc, spool_id: spoolId,
-                            origin: 'manual_override', confirm_active_print: confirm === true,
-                        }, (res) => {
-                            const asks = res.confirm_type === 'active_print'
-                                && (res.status === 'requires_confirm' || res.require_confirm);
-                            if (asks) {
-                                if (window.logClientEvent) window.logClientEvent(
-                                    `⚠️ Force Location of #${spoolId} needs an active-print confirm: ${res.msg || 'a printer is printing'}`,
-                                    'WARNING');
-                                window.confirmActivePrint({
-                                    activePrint: res.active_print,
-                                    activePrints: res.active_prints,
-                                    msg: res.msg,
-                                    host: spoolModalEl,
-                                    onConfirm: () => sendUnassign(true),
-                                });
-                                return;
-                            }
-                            done(res, null);
-                        });
-                        sendUnassign(false);
-                    } else {
-                        // The `add` as first sent; a server question's replay is
-                        // rebuilt from it (Group 40.3, window.buildMoveReplay): the
-                        // slot the engine picked for this slotless move (Group 40.0e:
-                        // `picked_slot`, kept only while still free), every head and
-                        // confirm key confirmed so far, and the feed it named.
-                        // `ctx` (Group 40.4 / 40.5): the picker's placement (for the
-                        // toast), `noStore` (a slot whose record a store refuses) and
-                        // `outcome({outcome})` for the picker's flow (a cancelled
-                        // question steps back to the picker).
-                        const runAdd = (original, first, prior0, ctx = {}) => {
-                            const sendAdd = (payload, prior) => post(payload, (res) => {
-                                if (res.status === 'requires_confirm' && window.askMoveConfirm) {
-                                    if (window.logClientEvent) window.logClientEvent(
-                                        `⚠️ Force Location of #${spoolId} needs a confirm: ${res.msg || 'a printer is printing'}`,
-                                        'WARNING');
-                                    window.askMoveConfirm(res, {
-                                        door: 'manage_add', original, prior, host: spoolModalEl, box: original.location,
-                                        noStore: !!ctx.noStore,
-                                        send: (body, next) => sendAdd(body, next),
-                                        onCancel: (info) => {
-                                            if (ctx.outcome) ctx.outcome({
-                                                outcome: info && (info.superseded || info.unknown) ? 'failed' : 'cancelled' });
-                                        },
-                                    });
-                                    return;
-                                }
-                                if (ctx.outcome && (res.blocked_reason === 'residents_changed'
-                                                    || res.blocked_reason === 'occupant_changed')) {
-                                    // Group 51.6 / 51.7: the head or slot holds a spool the
-                                    // picker never showed. Nothing moved; the picker opens
-                                    // again, drawn from fresh data.
-                                    showToast(`⚠️ ${res.msg || 'That place changed since you picked it: pick again'}`,
-                                        'warning', 7000);
-                                    ctx.outcome({ outcome: 'cancelled', res });
-                                    return;
-                                }
-                                const moved = done(res, prior, ctx.placement || null);
-                                if (ctx.outcome) ctx.outcome({ outcome: moved ? 'moved' : 'failed', res });
-                            });
-                            sendAdd(first, prior0);
-                        };
-                        // Group 40.4 (Derek's D2.4: "Force Location into a box behaves
-                        // exactly like a box-label scan") and 40.5 (D3): a multi-slot
-                        // Dryer Box opens the box picker, a Printer row that isn't its
-                        // own toolhead (XL, RCOI) the Printer picker (a head, or a
-                        // Printer Pool slot), instead of a slot or row chosen unseen.
-                        // Cancel on a question steps back to the picker; Escape there
-                        // moves nothing. Everything else keeps the direct path.
-                        const row = Array.isArray(locs) ? locs.find(l => String(l.LocationID) === String(newLoc)) : null;
-                        const usePicker = !!(row && window.placeOneWithPicker && window.openSlotPicker
-                            && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
-                                || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row, locs))));
-                        if (usePicker) {
-                            window.placeOneWithPicker({
-                                loc: newLoc, sid: spoolId, host: spoolModalEl,
-                                send: (pl, outcome) => {
-                                    const original = {
-                                        action: 'add', location: pl.location, spool_id: spoolId,
-                                        origin: 'manual_override', confirmed_toolheads: [], confirmed_fed_heads: [],
-                                    };
-                                    if (pl.slot != null) original.slot = pl.slot;
-                                    if (pl.auto_deploy === false) original.auto_deploy = false;
-                                    if (pl.swap) original.swap = true;
-                                    if (pl.record_source !== undefined) original.record_source = pl.record_source;
-                                    // Group 51.6 / 51.7: what the picker showed on the head,
-                                    // and in the slot chosen for Swap / Overwrite.
-                                    if (Array.isArray(pl.expected_residents)) original.expected_residents = pl.expected_residents.slice();
-                                    if (pl.expected_occupant != null) original.expected_occupant = pl.expected_occupant;
-                                    const first = Object.assign({}, original);
-                                    if (pl.picked_slot != null) first.picked_slot = pl.picked_slot;
-                                    const feed = pl.expected_feed != null ? String(pl.expected_feed).toUpperCase() : null;
-                                    if (feed != null) first.expected_feed = feed;
-                                    runAdd(original, first,
-                                        { pickedSlot: pl.picked_slot != null ? String(pl.picked_slot) : null, expectedFeed: feed },
-                                        { placement: pl, noStore: !!pl.noStore, outcome });
-                                },
-                            }).then((out) => {
-                                if (out && out.outcome === 'stopped') {
-                                    showToast(`Force Location cancelled — #${spoolId} wasn't moved`, 'info', 4000);
-                                    if (window.logClientEvent) window.logClientEvent(
-                                        `ℹ️ Force Location of #${spoolId} into ${newLoc}: the picker was closed, nothing moved`, 'INFO');
-                                }
-                            });
-                            return;
-                        }
-                        const original = {
-                            action: 'add', location: newLoc, spool_id: spoolId,
-                            origin: 'manual_override', confirmed_toolheads: [], confirmed_fed_heads: [],
-                        };
-                        runAdd(original, original, {});
-                    }
-                }
+                // The pick moves the spool through Force Location's own doors (Group 63.1:
+                // window.fccForceMove, which the refill question shares).
+                if (result.isConfirmed) window.fccForceMove(spoolId, result.value, locs, opts);
             });
         });
+};
+
+// --- FORCE LOCATION'S MOVE (Group 63.1) ---
+// One spool to a place a person picked, through Force Location's own doors:
+// force_unassign for Unassigned (its boolean print confirm), else manage_contents
+// add with origin manual_override, the engine's questions asked through
+// window.askMoveConfirm and replayed, and a multi-slot Dryer Box or a Printer row
+// that isn't its own head through the box or Printer picker
+// (window.placeOneWithPicker). Lifted out of promptEditLocation unchanged, so the
+// refill question (window.askRefillPlace) moves a spool exactly as Force Location
+// does. `locs` is /api/locations' list (read here when not given: the pickers
+// need it). `opts`: {fromCard, onDone(res)} as promptEditLocation's, plus
+// `expectedResidents` (the spools the asking screen showed on a head, [] for one
+// shown empty: the engine refuses a move onto a head that holds a spool nobody
+// was shown, Group 51.6) and `doneToast` (the words of a direct move's success
+// toast).
+window.fccForceMove = (spoolId, newLoc, locs, opts = {}) => {
+    if (!Array.isArray(locs) && newLoc !== '') {
+        (window.fetchT || fetch)('/api/locations')
+            .then((r) => r.json())
+            .then((l) => window.fccForceMove(spoolId, newLoc, Array.isArray(l) ? l : [], opts),
+                  () => window.fccForceMove(spoolId, newLoc, [], opts));
+        return;
+    }
+    const fromCard = !!(opts && opts.fromCard);
+    const unassign = newLoc === "";
+
+    // Group 39.5 — a yes-path. An active-print answer used to land in
+    // the error branch as a 7 s toast with no way to proceed. `confirm`
+    // is the heads for an add (39.1), or true for force_unassign,
+    // whose route keeps the boolean.
+    // `pickedSlot` (Group 40.0e): the slot the engine picked for this
+    // slotless move before it asked (the answer's `target_slot`), sent
+    // back as `picked_slot` so the Yes lands where the question said;
+    // the server keeps it only while it is still free. The first
+    // request sends no slot.
+    // The questions' host: the spool window, or none from a card (48.3).
+    const spoolModalEl = fromCard ? null : document.getElementById('spoolModal');
+    // What the move did, once the server stopped asking. A rejected
+    // write still answers status 'success' and names the spool in
+    // res.failures (2026-09-12).
+    // `placement` (Group 40.4 / 40.5): what the picker chose, for the toast.
+    // Returns whether the move landed.
+    const done = (res, prior, placement = null) => {
+        const failedWhy = res.status === 'success' ? (res.failures || {})[String(spoolId)] : null;
+        if (!failedWhy && (res.status === 'success' || res.success)) {
+            const where = placement ? placement.location : newLoc;
+            if (prior && prior.store) {
+                // Group 40.3: "Just store it" put it in the slot and left the head alone.
+                showToast(`📦 #${spoolId} stored in ${where}`
+                    + `${prior.pickedSlot != null ? ` slot ${prior.pickedSlot}` : ''}`
+                    + `${window.storeToastTail(prior)}`, 'success', 4000);
+            } else if (placement) {
+                // The picker's choice, in short arrows (as the box-label door says it).
+                const rec = res.recorded_source ? String(res.recorded_source).split(':') : null;
+                const tail = (rec && rec.length === 2) ? ` (recorded as from ${rec[0]} slot ${rec[1]})`
+                    // Group 40 review (BD-3): its own trail won over the answer.
+                    : res.record_source_ignored ? ` (its home stays ${res.record_source_kept || 'its box'})`
+                    : (placement.record_source === '' ? ' (no box slot recorded)' : '');
+                showToast(`✅ #${spoolId} → ${placement.label}`
+                    + `${res.auto_deployed_to ? ` → ${res.auto_deployed_to}` : ''}${tail}`, 'success', 4000);
+            } else {
+                showToast((opts && opts.doneToast) || 'Location updated via override', 'success');
+            }
+            const notDeployed = (res.auto_deploy_skipped || {})[String(spoolId)];
+            if (notDeployed) showToast(`⚠️ #${spoolId} was placed, but NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
+            // Group 40, the same-slot swap: the slot's old spool came
+            // off its head into the scan buffer.
+            window.takeIntoBuffer(res);
+            document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+            if (!fromCard) openSpoolDetails(spoolId, true);
+            if (opts && typeof opts.onDone === 'function') {
+                try { opts.onDone(res); } catch (e) { console.error(e); }
+            }
+            return true;
+        }
+        showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
+        // A spool the move had already handed to the buffer (a
+        // Swap's old spool) is in the user's hand all the same.
+        window.takeIntoBuffer(res);
+        return false;
+    };
+    const post = (payload, onAnswer) => {
+        if (typeof setProcessing === 'function') setProcessing(true);
+        window.fetchT('/api/manage_contents', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        // Only a request that got no answer says "failed": an
+        // exception after a move landed only reaches the console.
+        .then(r => r.json())
+        .then(x => x, (e) => {
+            if (typeof setProcessing === 'function') setProcessing(false);
+            showToast(`Override failed: ${(e && e.message) || 'network error'}`, 'error', 7000);
+            return null;
+        })
+        .then(res => {
+            if (res === null) return;
+            if (typeof setProcessing === 'function') setProcessing(false);
+            onAnswer(res || {});
+        })
+        .catch(e => {
+            if (typeof setProcessing === 'function') setProcessing(false);
+            console.error(e);
+        });
+    };
+    // The Swal has closed by now, so a question sits over the details
+    // modal, and Cancel leaves the details open.
+    if (unassign) {
+        // force_unassign keeps its boolean confirm (39.1).
+        const sendUnassign = (confirm) => post({
+            action: 'force_unassign', location: newLoc, spool_id: spoolId,
+            origin: 'manual_override', confirm_active_print: confirm === true,
+        }, (res) => {
+            const asks = res.confirm_type === 'active_print'
+                && (res.status === 'requires_confirm' || res.require_confirm);
+            if (asks) {
+                if (window.logClientEvent) window.logClientEvent(
+                    `⚠️ Force Location of #${spoolId} needs an active-print confirm: ${res.msg || 'a printer is printing'}`,
+                    'WARNING');
+                window.confirmActivePrint({
+                    activePrint: res.active_print,
+                    activePrints: res.active_prints,
+                    msg: res.msg,
+                    host: spoolModalEl,
+                    onConfirm: () => sendUnassign(true),
+                });
+                return;
+            }
+            done(res, null);
+        });
+        sendUnassign(false);
+    } else {
+        // The `add` as first sent; a server question's replay is
+        // rebuilt from it (Group 40.3, window.buildMoveReplay): the
+        // slot the engine picked for this slotless move (Group 40.0e:
+        // `picked_slot`, kept only while still free), every head and
+        // confirm key confirmed so far, and the feed it named.
+        // `ctx` (Group 40.4 / 40.5): the picker's placement (for the
+        // toast), `noStore` (a slot whose record a store refuses) and
+        // `outcome({outcome})` for the picker's flow (a cancelled
+        // question steps back to the picker).
+        const runAdd = (original, first, prior0, ctx = {}) => {
+            const sendAdd = (payload, prior) => post(payload, (res) => {
+                if (res.status === 'requires_confirm' && window.askMoveConfirm) {
+                    if (window.logClientEvent) window.logClientEvent(
+                        `⚠️ Force Location of #${spoolId} needs a confirm: ${res.msg || 'a printer is printing'}`,
+                        'WARNING');
+                    window.askMoveConfirm(res, {
+                        door: 'manage_add', original, prior, host: spoolModalEl, box: original.location,
+                        noStore: !!ctx.noStore,
+                        send: (body, next) => sendAdd(body, next),
+                        onCancel: (info) => {
+                            if (ctx.outcome) ctx.outcome({
+                                outcome: info && (info.superseded || info.unknown) ? 'failed' : 'cancelled' });
+                        },
+                    });
+                    return;
+                }
+                if (ctx.outcome && (res.blocked_reason === 'residents_changed'
+                                    || res.blocked_reason === 'occupant_changed')) {
+                    // Group 51.6 / 51.7: the head or slot holds a spool the
+                    // picker never showed. Nothing moved; the picker opens
+                    // again, drawn from fresh data.
+                    showToast(`⚠️ ${res.msg || 'That place changed since you picked it: pick again'}`,
+                        'warning', 7000);
+                    ctx.outcome({ outcome: 'cancelled', res });
+                    return;
+                }
+                const moved = done(res, prior, ctx.placement || null);
+                if (ctx.outcome) ctx.outcome({ outcome: moved ? 'moved' : 'failed', res });
+            });
+            sendAdd(first, prior0);
+        };
+        // Group 40.4 (Derek's D2.4: "Force Location into a box behaves
+        // exactly like a box-label scan") and 40.5 (D3): a multi-slot
+        // Dryer Box opens the box picker, a Printer row that isn't its
+        // own toolhead (XL, RCOI) the Printer picker (a head, or a
+        // Printer Pool slot), instead of a slot or row chosen unseen.
+        // Cancel on a question steps back to the picker; Escape there
+        // moves nothing. Everything else keeps the direct path.
+        const row = Array.isArray(locs) ? locs.find(l => String(l.LocationID) === String(newLoc)) : null;
+        const usePicker = !!(row && window.placeOneWithPicker && window.openSlotPicker
+            && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
+                || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row, locs))));
+        if (usePicker) {
+            window.placeOneWithPicker({
+                loc: newLoc, sid: spoolId, host: spoolModalEl,
+                send: (pl, outcome) => {
+                    const original = {
+                        action: 'add', location: pl.location, spool_id: spoolId,
+                        origin: 'manual_override', confirmed_toolheads: [], confirmed_fed_heads: [],
+                    };
+                    if (pl.slot != null) original.slot = pl.slot;
+                    if (pl.auto_deploy === false) original.auto_deploy = false;
+                    if (pl.swap) original.swap = true;
+                    if (pl.record_source !== undefined) original.record_source = pl.record_source;
+                    // Group 51.6 / 51.7: what the picker showed on the head,
+                    // and in the slot chosen for Swap / Overwrite.
+                    if (Array.isArray(pl.expected_residents)) original.expected_residents = pl.expected_residents.slice();
+                    if (pl.expected_occupant != null) original.expected_occupant = pl.expected_occupant;
+                    const first = Object.assign({}, original);
+                    if (pl.picked_slot != null) first.picked_slot = pl.picked_slot;
+                    const feed = pl.expected_feed != null ? String(pl.expected_feed).toUpperCase() : null;
+                    if (feed != null) first.expected_feed = feed;
+                    runAdd(original, first,
+                        { pickedSlot: pl.picked_slot != null ? String(pl.picked_slot) : null, expectedFeed: feed },
+                        { placement: pl, noStore: !!pl.noStore, outcome });
+                },
+            }).then((out) => {
+                if (out && out.outcome === 'stopped') {
+                    showToast(`Force Location cancelled — #${spoolId} wasn't moved`, 'info', 4000);
+                    if (window.logClientEvent) window.logClientEvent(
+                        `ℹ️ Force Location of #${spoolId} into ${newLoc}: the picker was closed, nothing moved`, 'INFO');
+                }
+            });
+            return;
+        }
+        const original = {
+            action: 'add', location: newLoc, spool_id: spoolId,
+            origin: 'manual_override', confirmed_toolheads: [], confirmed_fed_heads: [],
+        };
+        // Group 63.1: the spools the asking screen showed on a head ([] for one shown
+        // empty), so a spool loaded there meanwhile is refused, never unloaded unseen.
+        if (opts && Array.isArray(opts.expectedResidents)) original.expected_residents = opts.expectedResidents.slice();
+        runAdd(original, original, {});
+    }
+};
+
+// --- WHERE A REFILLED SPOOL GOES (Group 63.1) ---
+// Derek, 2026-11-18: "I think if we ask on a spool correction that adds weight back,
+// to either place it back where it was (Possibly a toolhead) or just assign to the
+// room for now, or possibly scann/select a new location from a list. would probably
+// be the best option instead of just auto assigning", then "only after a tool head".
+// A weigh (or an edit) that brings an archived spool back above 0 g after it left a
+// toolhead moves it nowhere (spoolman_api._refill_outcome): it is back in stock,
+// Unassigned, and the save's answer carries `refill_ask` {place, room, held_by}.
+// window.askRefillPlace(spoolId, ask, opts) asks where it goes:
+//   - "Back on <head>": Force Location's move onto the head (window.fccForceMove),
+//     sending `expected_residents: []`, so a spool loaded there meanwhile is refused,
+//     never unloaded unseen (Group 51.6); greyed out, with the reason under the
+//     buttons, when another spool is there now (`held_by`);
+//   - "In <room> for now", when the head stands in a room;
+//   - "Pick a place…": Force Location's own list (window.promptEditLocation);
+//   - "Leave it Unassigned", Escape, and a bare CMD:CANCEL scan: nothing moves.
+// It opens on Leave it Unassigned, the answer that moves nothing; the arrows walk the
+// answers. A location label scanned while it is open puts the spool there
+// (fccForceMove: a multi-slot box or a Printer row opens its picker); any other scan
+// is held off with a note, as every open question does (window._fccOpenMoveQuestions).
+// The answers that move take no click for 700 ms after it opens (window.armedClick:
+// the second press of the double click that saved); Leave it Unassigned takes one at
+// once. `opts`: {host} (it closes with that window), {onClosed(how)} ('back', 'room',
+// 'pick', 'scan', 'leave' or 'host'), {onMoved(target, res)} (a move it made landed:
+// the wizard shows the new place in its Location field).
+window.askRefillPlace = (spoolId, ask, opts = {}) => {
+    if (!ask || typeof ask !== 'object' || !String(ask.place || '').trim()) return null;
+    const sid = String(spoolId);
+    const place = String(ask.place).trim();
+    const room = String(ask.room || '').trim();
+    const held = Array.isArray(ask.held_by) ? ask.held_by.filter((h) => String(h) !== sid) : null;
+    const backBlocked = !!(held && held.length);
+    if (typeof window.mountOverlay !== 'function') {
+        showToast(`#${sid} is back in stock, Unassigned: it came off ${place}. Scan it to where you put it.`, 'info', 7000);
+        return null;
+    }
+    const esc = typeof window.escHtml === 'function' ? window.escHtml
+        : (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const keepWhole = (h) => (typeof window.fccKeepWhole === 'function' ? window.fccKeepWhole(h) : h);
+    const note = backBlocked
+        ? `${place} holds ${held.map((h) => `#${h}`).join(', ')} now, so it can't go back on it.`
+        : (held === null ? `FCC couldn't check ${place} just now: it checks again if you pick it.` : '');
+    const help = typeof window.fccCornerHelpHtml === 'function' ? window.fccCornerHelpHtml('fcc-refill-place') : '';
+    const content = `
+        <div class="fcc-refill-panel" role="dialog" aria-labelledby="fcc-refill-title"
+             style="position:relative; background:#1e1e1e; color:#fff; border:2px solid #00d4ff; border-radius:8px;
+                    padding:20px 24px; max-width:32rem; text-align:left;">
+            ${help}
+            <div id="fcc-refill-title" style="font-size:1.2em; font-weight:bold; margin-bottom:10px; padding-right:2rem;">
+                📤 #${esc(sid)} is back in stock: where does it go?</div>
+            <p style="color:#ddd; margin-bottom:12px;">It came off <strong>${keepWhole(esc(place))}</strong>
+                when it was archived, and is Unassigned now.</p>
+            <div class="fcc-refill-buttons" style="display:flex; flex-wrap:wrap; gap:8px;">
+                <button type="button" id="fcc-refill-back" class="btn btn-success btn-sm fcc-refill-answer"${backBlocked ? ' disabled aria-disabled="true"' : ''}>Back on ${keepWhole(esc(place))}</button>
+                ${room ? `<button type="button" id="fcc-refill-room" class="btn btn-info btn-sm fcc-refill-answer">In ${keepWhole(esc(room))} for now</button>` : ''}
+                <button type="button" id="fcc-refill-pick" class="btn btn-outline-light btn-sm fcc-refill-answer">Pick a place…</button>
+                <button type="button" id="fcc-refill-leave" class="btn btn-secondary btn-sm fcc-refill-answer">Leave it Unassigned</button>
+            </div>
+            <div id="fcc-refill-note" role="status" style="color:#ffc107; margin-top:10px; font-size:var(--fcc-fs-small);${note ? '' : ' display:none;'}">${esc(note)}</div>
+            <div style="color:#ccc; margin-top:8px; font-size:var(--fcc-fs-small);">Or scan the label of the place where it goes.</div>
+        </div>`;
+
+    let handle = null;
+    let question = null;
+    let closed = false;
+    const unregister = () => {
+        if (!question) return;
+        const open = (window._fccOpenMoveQuestions || []).filter((q) => q !== question);
+        window._fccOpenMoveQuestions = open;
+        window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+        question = null;
+    };
+    const close = (how) => {
+        if (closed) return;
+        closed = true;
+        unregister();
+        if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } }
+        handle = null;
+        if (opts && typeof opts.onClosed === 'function') {
+            try { opts.onClosed(how); } catch (e) { console.error(e); }
+        }
+    };
+    const move = (target, how, extra) => {
+        close(how);
+        window.fccForceMove(sid, target, null, Object.assign({
+            fromCard: true, doneToast: `✅ #${sid} → ${target}`,
+            onDone: (res) => {
+                if (opts && typeof opts.onMoved === 'function') {
+                    try { opts.onMoved(target, res); } catch (e) { console.error(e); }
+                }
+            },
+        }, extra || {}));
+    };
+    const leave = (how = 'leave') => {
+        close(how);
+        if (how === 'leave') showToast(`#${sid} stays Unassigned: scan it to where you put it.`, 'info', 4000);
+    };
+
+    handle = window.mountOverlay({
+        id: 'fcc-refill-place',
+        content,
+        tier: 'standard',
+        host: (opts && opts.host) || null,
+        initialFocus: '#fcc-refill-leave',
+        onEscape: () => leave('leave'),
+    });
+    const ov = handle.element;
+    // mountOverlay cleans the overlay up when its host closes; the question goes too.
+    if (opts && opts.host && typeof opts.host.addEventListener === 'function') {
+        opts.host.addEventListener('hidden.bs.modal', () => close('host'), { once: true });
+    }
+    const armMs = typeof window.questionArmMs === 'function' ? window.questionArmMs() : 700;
+    const armed = (fn) => (typeof window.armedClick === 'function' ? window.armedClick(fn, armMs) : fn);
+    const backBtn = ov.querySelector('#fcc-refill-back');
+    const roomBtn = ov.querySelector('#fcc-refill-room');
+    const pickBtn = ov.querySelector('#fcc-refill-pick');
+    const leaveBtn = ov.querySelector('#fcc-refill-leave');
+    if (backBtn && !backBlocked) backBtn.onclick = armed(() => move(place, 'back', { expectedResidents: [] }));
+    if (roomBtn) roomBtn.onclick = armed(() => move(room, 'room'));
+    if (pickBtn) pickBtn.onclick = armed(() => {
+        close('pick');
+        window.promptEditLocation(sid, '', { fromCard: true });
+    });
+    if (leaveBtn) leaveBtn.onclick = () => leave('leave');
+
+    // The arrows walk the answers that can be pressed (wrapping), only while this is
+    // the overlay on top and the ⌨️ list is down (Group 62.4's rule).
+    ov.addEventListener('keydown', (e) => {
+        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+        if (typeof window.isTopOverlay === 'function' && !window.isTopOverlay(ov)) return;
+        if (typeof window.fccShortcutsUp === 'function' && window.fccShortcutsUp()) return;
+        const answers = Array.from(ov.querySelectorAll('.fcc-refill-answer')).filter((b) => !b.disabled);
+        if (!answers.length) return;
+        e.preventDefault();
+        const at = answers.indexOf(document.activeElement);
+        const step = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 1;
+        const next = answers[(at + step + answers.length) % answers.length];
+        answers.forEach((b) => b.classList.remove('kb-active'));
+        next.classList.add('kb-active');
+        next.focus();
+    });
+
+    const flash = (msg) => {
+        const n = ov.querySelector('#fcc-refill-note');
+        if (!n) return;
+        n.textContent = msg;
+        n.style.display = msg ? '' : 'none';
+    };
+    question = {
+        title: `Where does #${sid} go?`,
+        element: ov,
+        hint: `Answer the question on screen first: where #${sid} goes, or Leave it Unassigned`,
+        cancel: () => leave('leave'),
+        flash,
+        route: (text) => {
+            const last = window.lastScanLabel ? window.lastScanLabel(text) : String(text).trim().toUpperCase();
+            const m = /^LOC:(.+)$/.exec(last);
+            if (!m) return false;
+            // A slot's label names its box: the box's picker asks for the slot.
+            const target = m[1].replace(/:SLOT:\d+$/, '').trim();
+            if (!target) return false;
+            move(target, 'scan', target.toUpperCase() === place.toUpperCase() ? { expectedResidents: [] } : null);
+            return true;
+        },
+    };
+    window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
+    window._fccOpenMoveQuestion = question;
+    return handle;
 };
 
 window.refreshFilamentSpools = () => {

@@ -1161,8 +1161,25 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 }
                 if (stillAt) warnStillPlaced(id, stillAt.place);
                 // Group 42.3c: a used-up spool weighed back above 0 g whose old
-                // toolhead holds another spool now went to Unassigned instead.
+                // one-spool place holds another spool now went to Unassigned instead.
                 if (res && res.warning) showToast(res.warning, 'warning', 7000);
+                // Group 63.1: weighed back into stock after it left a toolhead, the
+                // spool moved nowhere: FCC asks where it goes (window.askRefillPlace,
+                // inv_details.js), over the weigh-out list when it is up. Not once
+                // a spool has been scanned in the list since the save (that spool is
+                // the one being weighed now): then a note says where it came off.
+                if (res && res.refill_ask && typeof res.refill_ask === 'object') {
+                    const askRefill = res.refill_ask;
+                    setTimeout(() => {
+                        if (scansTaken !== takenAtSave || typeof window.askRefillPlace !== 'function') {
+                            showToast(`#${id} is back in stock, Unassigned: it came off ${askRefill.place}. `
+                                + 'Scan it to where you put it.', 'info', 7000);
+                            return;
+                        }
+                        window.askRefillPlace(id, askRefill, {
+                            host: weighOutIsUp() ? document.getElementById('weighOutModal') : null });
+                    }, 400);
+                }
                 // Spool just auto-archived (weight hit 0) AND its filament
                 // has no empty_spool_weight yet — prompt the user to record
                 // the now-empty spool's weight. Fires after the toast so it

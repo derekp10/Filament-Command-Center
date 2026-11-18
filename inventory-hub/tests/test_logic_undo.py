@@ -69,6 +69,15 @@ def mock_locations():
         # Group 40.0a's step-2 refusal asks this classifier first; none of these
         # targets is a Printer row (a real answer, not a stub of the behaviour).
         mock_db.is_printer_row_not_head.return_value = False
+        # Group 63: the engine's one-spool, slot-claim and room rules moved into
+        # locations_db (logic's old names delegate, so spoolman_api's refill edge
+        # reads them too). They are pure, so the real ones answer here, as they did
+        # when they lived in logic: a MagicMock's truthy answer made NEW_SHELF a
+        # one-spool head.
+        import locations_db as _real_locations_db
+        for _name in ("norm_slot", "box_slot_claims", "place_capacity", "holds_one_spool_place",
+                      "head_holds_one_spool", "known_room_of"):
+            setattr(mock_db, _name, getattr(_real_locations_db, _name))
         yield mock_db
 
 @pytest.fixture

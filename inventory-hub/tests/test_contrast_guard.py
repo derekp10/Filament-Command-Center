@@ -1482,6 +1482,28 @@ def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
     page.locator("#fcc-archive-later").click()
 
 
+def test_the_refill_question_is_readable(page: Page, base_url: str):
+    """Group 63.1: the question a refill after a toolhead asks (window.askRefillPlace):
+    its title, words, answers (Back on the head greyed out, its reason line in yellow)
+    and the scan line, on its dark ground. Made-up names; every write is answered in
+    the browser, and Leave it Unassigned closes it, so nothing is moved. Scored from
+    the panel (the guard scores descendants only), and the reason line is proved
+    scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.askRefillPlace === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.askRefillPlace(42, { place: 'HEAD-1', room: 'ROOM-1', held_by: [99] }); }")
+    panel = page.locator("#fcc-refill-place .fcc-refill-panel")
+    expect(panel).to_be_visible()
+    assert conftest.contrast_offenders(panel) == [], conftest.contrast_offenders(panel)
+    scored = [o.get("text") for o in conftest.contrast_offenders(panel, min_ratio=100)]
+    assert any("HEAD-1 holds #99 now" in (t or "") for t in scored), scored
+    page.locator("#fcc-refill-leave").click()
+
+
 @pytest.mark.usefixtures("require_server")
 def test_the_in_app_help_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 55.3: a dialog's ? button (white on FCC's dark header) and the help it opens

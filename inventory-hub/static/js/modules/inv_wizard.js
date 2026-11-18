@@ -4475,6 +4475,21 @@ window.wizardSubmit = async () => {
             // (`warning` sums them up for a page from before 40.7).
             const placementsReported = !isWizardEdit && data.location_results;
             if (data.warning && !placementsReported && typeof showToast === 'function') showToast(data.warning, 'warning', 7000);
+            // Group 63.1: the Save weighed the spool back into stock (or unticked Archived)
+            // after it left a toolhead, and the server moved it nowhere: ask where it goes,
+            // over the wizard, and show where a move put it in the Location field, so the
+            // next Save moves nothing.
+            if (isWizardEdit && data.refill_ask && typeof data.refill_ask === 'object'
+                    && typeof window.askRefillPlace === 'function') {
+                window.askRefillPlace(editSid, data.refill_ask, {
+                    host: wizModal,
+                    onMoved: (target) => {
+                        if (String(wizardState.editSpoolId) !== String(editSid)) return;
+                        window.wizardShowLocation(target);
+                        wizardState.editSpoolLocation = _wizLocKey(target);
+                    },
+                });
+            }
             if (isWizardEdit && data.location_moved) {
                 // Group 40.7: where the Location move put it, in short arrows.
                 const lr = data.location_result;
