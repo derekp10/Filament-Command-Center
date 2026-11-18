@@ -3489,7 +3489,12 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // label, which files the whole buffer (that printed label still does). Read only
     // here: anywhere else, during a bulk move or (above) an audit, it moves nothing.
     // Read twice, it acts once (_isLocRepeat); a read refused here is no read, so the
-    // QR scanned again once its window is open acts.
+    // QR scanned again once its window is open acts. It is in flight until it is answered,
+    // as a LOC: label's read is until the server's answer (the second review of Group 62: a
+    // second read held by the scan queue while the first move was out, on a head whose
+    // printer was slow to answer, went out once it landed, past the 1.5 s, and put the NEXT
+    // spool there): its move's answer, or the question or picker it opened. A deposit
+    // refused there (nothing in the buffer, a picker that didn't open) is no read either.
     if (upper.startsWith('CMD:DEPOSIT:')) {
         const place = upper.slice('CMD:DEPOSIT:'.length).trim();
         if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) { unread(); return; }
@@ -3503,7 +3508,21 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             unread();
             return;
         }
-        if (typeof window.depositShownSpool === 'function') window.depositShownSpool(open);
+        if (typeof window.depositShownSpool === 'function') {
+            locInFlight();
+            let settledYet = false;
+            const settled = (how) => {
+                if (settledYet) return;
+                settledYet = true;
+                clearTimeout(guard);
+                if (how === 'refused') unread(); else locDone();
+            };
+            // Every path answers well inside this (fetchT's 15 s, the printer check's 3 s);
+            // it only keeps a missed answer from dropping this QR's every later read.
+            const guard = setTimeout(() => settled('answered'), 30000);
+            try { window.depositShownSpool(open, { settled }); }
+            catch (e) { settled('refused'); console.error(e); }
+        }
         return;
     }
 

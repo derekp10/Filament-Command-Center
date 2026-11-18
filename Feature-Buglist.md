@@ -728,6 +728,28 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   profile names contains it (Blend, Carbon Fiber, High Speed, "+"), so a PLA Blend would learn only from his PLA
   Blends. Not now: there is no concrete list of Prusa's profiles, and it varies by printer (the XL has custom profiles
   for more brands than the INDX).
+* 🟠 **Deleting a filament with archived spools fails partway, and the delete questions' refusals aren't in plain
+  words.** _(Found by the second review of Group 62, 2026-11-17; older than the group, 28.B2/B3. Group 62's review
+  put a refused delete's words on the question itself, which is where these now show.)_
+  (a) **The filament cascade leaves out archived spools.** `spoolman_api.get_spools_for_filament` lists
+  `/api/v1/spool` without `allow_archived=true`, so `api_delete_filament` (routes_locations.py) deletes the in-stock
+  spools, then Spoolman refuses the filament, whose archived spools still name it. The question counts the archived
+  ones ("This filament has N spools. Deleting it will also permanently delete all of them", read with
+  `allow_archived=true`), and FCC archives every spool weighed to 0 g, so a filament with any history can't be deleted
+  from FCC, and a second try deletes nothing more. The 502's `deleted_spool_ids` is ignored by the page, so the
+  question never says which spools went. Fix direction: list strictly with `allow_archived=true` for the cascade only
+  (the label-flag and sibling callers want in-stock spools), refuse before any delete when the list can't be read,
+  and name what was deleted on a partial failure. It deletes more than today does, but only what the question
+  already says it will.
+  (b) **"Spool not found" when Spoolman didn't answer.** `api_delete_spool` reads the spool with `get_spool`, which
+  returns None only for no answer; a spool really gone returns Spoolman's 404 body (truthy), and the delete then
+  answers "HTTP 404: {…}". Read it with `get_spool_answer`: no answer is "couldn't reach Spoolman, so nothing was
+  deleted", a 404 "there is no Spool #N".
+  (c) **A lost answer is called a failure, in raw words.** `delete_spool` waits 10 s: a read timeout after Spoolman
+  committed reads as failed, and the question shows requests' text with the Spoolman address
+  ("HTTPConnectionPool(host=…, port=7913): Read timed out."). Put it through `spoolman_api.refusal_words` (the log
+  line keeps the full text), and read the spool back before calling a lost answer a failure, as `/api/spool/update`
+  does (Group 54 review R5-2).
 
 ## 🔍 Search, Display & Filtering
 *(No open items — resolved entries archived in `completed-archive.md`.)*

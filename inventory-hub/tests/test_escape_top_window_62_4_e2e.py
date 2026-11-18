@@ -117,3 +117,41 @@ def test_escape_with_the_search_over_a_place_window_closes_only_the_search(page:
     page.wait_for_function("() => !document.getElementById('offcanvasSearch').classList.contains('show')", timeout=5_000)
     page.wait_for_timeout(400)
     assert _shown(page) == ["manageModal"], "Escape closed the place's window under the search"
+
+
+# Bootstrap 5.3's offcanvas slides 0.3 s each way: `showing` until it is in, `show hiding`
+# until it is out. The Escape is dispatched in the same tick as show() / hide(), on the page
+# (the focus nowhere), so it lands inside the slide whatever the machine's load.
+ESCAPE_ON_PAGE = "document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_escape_while_the_search_slides_in_closes_nothing_under_it(page: Page, base_url: str):
+    """The second review of Group 62: the search counted as a window only once Bootstrap
+    gave it `show`, at the end of its slide-in, so an Escape in the slide closed the place's
+    window under it. The search is on top from its first frame now, and the Escape waits
+    (its hide() in the slide would leave it half shown). RED before the fix."""
+    pick = _ready(page, base_url)
+    _place_window(page, pick["box"])
+    page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    page.evaluate("() => { bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('offcanvasSearch')).show(); "
+                  + ESCAPE_ON_PAGE + " }")
+    page.wait_for_function(SEARCH_UP, timeout=5_000)
+    page.wait_for_timeout(400)
+    assert _shown(page) == ["manageModal"], "an Escape in the search's slide-in closed the place's window"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_escape_while_the_search_slides_out_reaches_the_place_window(page: Page, base_url: str):
+    """The search closing (`show hiding`) is no window on top any more: an Escape in its
+    slide-out is the place's window's, as before the first round. RED before the fix: it
+    was handed to the closing search, whose hide() did nothing."""
+    pick = _ready(page, base_url)
+    _place_window(page, pick["box"])
+    page.evaluate("() => bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('offcanvasSearch')).show()")
+    page.wait_for_function(SEARCH_UP, timeout=5_000)
+    page.wait_for_timeout(600)
+    page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    page.evaluate("() => { bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('offcanvasSearch')).hide(); "
+                  + ESCAPE_ON_PAGE + " }")
+    page.wait_for_function("() => !document.getElementById('manageModal').classList.contains('show')", timeout=5_000)

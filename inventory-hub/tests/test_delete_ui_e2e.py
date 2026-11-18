@@ -278,3 +278,133 @@ def test_enter_in_the_typed_box_never_deletes_and_a_refusal_is_said_on_the_quest
     expect(confirm).to_be_enabled()
     expect(cancel).to_be_enabled()
     expect(cancel).to_be_focused()
+
+
+# ---------------------------------------------------------------------------
+# The second review of Group 62 (2026-11-17): after a refusal Delete forever takes no
+# pointer press for 700 ms, a retry clears the last refusal's words, and the keyboard
+# goes to Cancel only while the question is on top. The Merge question, the same file's
+# other permanent question, says why on itself too.
+# ---------------------------------------------------------------------------
+
+# The DELETE answered in the page itself, refused, or held until window.__release():
+# nothing reaches dev. A plain object, not a Response, so the refusal is read in the
+# press's own task and a double click's second press comes after it.
+REFUSE_DELETES = r"""() => {
+    window.__deletes = 0; window.__release = null; window.__holdDeletes = false;
+    const real = window.fetch;
+    window.fetch = (u, o) => {
+        if (!(o && String(o.method || '').toUpperCase() === 'DELETE')) return real(u, o);
+        window.__deletes += 1;
+        const n = window.__deletes;
+        const answer = { ok: true, status: 200, json: () => Promise.resolve({ success: false, error: 'test: refused ' + n }) };
+        if (!window.__holdDeletes) return Promise.resolve(answer);
+        return new Promise((r) => { window.__release = () => r(answer); });
+    };
+    delete window.fccQuestionArmMs;          // these tests are about the 700 ms
+}"""
+
+
+def _typed_step(page: Page, reset_js: str):
+    _open_first_spool_modal(page, reset_js)
+    page.evaluate(REFUSE_DELETES)
+    sid = (page.locator("#detail-id").inner_text() or "").strip()
+    assert sid.isdigit(), sid
+    page.locator("#btn-spool-gear").click()
+    page.locator("#btn-spool-delete").click()
+    question = page.locator("#fcc-spool-delete-overlay")
+    question.locator("[data-fcc-delete-confirm]").click()
+    box = page.locator("#fcc-spool-delete-overlay-input")
+    expect(box).to_be_focused()
+    box.fill(sid)                                        # no keys: nothing reads as a scan
+    return question
+
+
+def test_a_double_click_across_a_fast_refusal_sends_one_delete(page: Page, reset_dom_state_js: str):
+    """A refusal re-enabled Delete forever at once, so the second press of a double click,
+    landing after a fast refusal, sent a second DELETE nobody asked for, its reason
+    unread. A later click still tries again. RED before the fix: two DELETEs."""
+    question = _typed_step(page, reset_dom_state_js)
+    confirm = question.locator("[data-fcc-delete-confirm]")
+    confirm.dblclick()
+    page.wait_for_timeout(300)
+    assert page.evaluate("() => window.__deletes") == 1
+    expect(page.locator("#fcc-spool-delete-overlay-err")).to_have_text("Delete failed: test: refused 1")
+    page.wait_for_timeout(700)
+    confirm.click()
+    page.wait_for_timeout(300)
+    assert page.evaluate("() => window.__deletes") == 2
+
+
+def test_a_retry_clears_the_last_refusal_and_cancel_takes_the_keyboard_only_on_top(page: Page, reset_dom_state_js: str):
+    """While Delete forever tried again, the last refusal's words stayed up; and a refusal
+    moved the keyboard to Cancel even with another window over the question (a scan can
+    open one there), where its keys reached nothing on screen. RED before the fix."""
+    question = _typed_step(page, reset_dom_state_js)
+    confirm = question.locator("[data-fcc-delete-confirm]")
+    err = page.locator("#fcc-spool-delete-overlay-err")
+    confirm.click()
+    expect(err).to_have_text("Delete failed: test: refused 1")
+    page.wait_for_timeout(800)
+    page.evaluate("() => { window.__holdDeletes = true; }")
+    confirm.click()
+    page.wait_for_function("() => typeof window.__release === 'function'")
+    expect(err).to_have_text("")
+    page.evaluate("""() => { window.__top = window.mountOverlay({ id: 'fcc-test-top', tier: 'confirm',
+        content: '<div><button id="t-top">top</button></div>', initialFocus: '#t-top' }); }""")
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 't-top'")
+    page.evaluate("() => window.__release()")
+    expect(err).to_have_text("Delete failed: test: refused 2")
+    page.wait_for_timeout(200)
+    assert page.evaluate("() => document.activeElement && document.activeElement.id") == "t-top"
+    page.evaluate("() => window.__top.cleanup()")
+
+
+# The merge's POST answered in the page itself, refused: nothing reaches dev.
+REFUSE_MERGES = r"""() => {
+    window.__merges = 0;
+    const real = window.fetch;
+    window.fetch = (u, o) => {
+        if (!(String(u).includes('/merge_into/') && o && String(o.method || '').toUpperCase() === 'POST')) return real(u, o);
+        window.__merges += 1;
+        const n = window.__merges;
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ success: false, error: 'test: not merged ' + n }) });
+    };
+    delete window.fccQuestionArmMs;
+}"""
+
+
+def test_a_refused_merge_says_why_on_its_question_and_a_double_click_sends_one(page: Page):
+    """Older than Group 62: the Merge question's refusal was only a toast, drawn under the
+    question (a confirm-tier overlay), and Merge forever answered again at once, so a
+    double click across a fast refusal sent a second merge. It says why on itself now, as
+    the delete question does, the keyboard on Cancel, and takes no pointer press for
+    700 ms after a refusal. RED before the fix."""
+    page.goto("http://localhost:8000")
+    page.wait_for_function("() => typeof openFilamentDetails === 'function' && typeof state !== 'undefined'",
+                           timeout=45_000)
+    ids = page.evaluate("""async () => { const j = await fetch('/api/filaments').then((r) => r.json());
+        return ((j && j.filaments) || []).slice(0, 2).map((f) => f.id); }""")
+    if len(ids) < 2:
+        pytest.skip("dev holds fewer than two filaments")
+    src, dst = ids
+    page.evaluate("(id) => openFilamentDetails(id)", src)
+    page.wait_for_function("""(id) => document.getElementById('filamentModal').classList.contains('show')
+        && (document.getElementById('fil-detail-id').innerText || '').trim() === String(id)""", arg=src, timeout=15_000)
+    page.evaluate(REFUSE_MERGES)
+    page.evaluate("() => document.getElementById('btn-fil-merge').click()")
+    page.wait_for_selector("#fcc-merge-target-input")
+    page.locator("#fcc-merge-target-input").fill(f"#{dst}")
+    page.locator("#fcc-merge-continue").click()
+    page.wait_for_selector("#fcc-merge-confirm-input")
+    page.locator("#fcc-merge-confirm-input").fill("MERGE")
+    go = page.locator("#fcc-merge-confirm-go")
+    go.click()
+    err = page.locator("#fcc-merge-confirm-err")
+    expect(err).to_have_text("Merge failed: test: not merged 1")
+    assert err.get_attribute("role") == "alert"
+    expect(page.locator("#fcc-merge-confirm-cancel")).to_be_focused()
+    page.wait_for_timeout(800)
+    go.dblclick()
+    page.wait_for_timeout(300)
+    assert page.evaluate("() => window.__merges") == 2

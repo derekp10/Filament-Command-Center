@@ -3040,7 +3040,14 @@ const _renderDeleteOverlay = (overlayId, hostId, { title, body, requireText, con
     const input = requireText ? ov.querySelector(`#${inputId}`) : null;
     const errEl = requireText ? ov.querySelector(`#${errId}`) : null;
     cancelBtn.addEventListener('click', close);
-    confirmBtn.addEventListener('click', async () => {
+    let refusedAt = 0;
+    confirmBtn.addEventListener('click', async (e) => {
+        // A pointer's press under 700 ms after a refusal is the second press of a double
+        // click, no retry (the second review of Group 62: a fast refusal re-enabled the
+        // button before it, and it sent a second DELETE, the reason unread). A keyboard's
+        // press (detail 0) goes at once.
+        if (refusedAt && e && e.detail !== 0
+            && Date.now() - refusedAt < (window.questionArmMs ? window.questionArmMs() : 700)) return;
         if (requireText) {
             if ((input.value || '').trim() !== requireText) {
                 if (errEl) errEl.textContent = `Doesn't match — type ${requireText} exactly.`;
@@ -3049,19 +3056,24 @@ const _renderDeleteOverlay = (overlayId, hostId, { title, body, requireText, con
                 return;
             }
         }
+        // The last refusal's words go while it tries again.
+        if (errEl) errEl.textContent = '';
         confirmBtn.disabled = true;
         cancelBtn.disabled = true;
         // onConfirm is responsible for closing the question on completion. Step 1's
         // re-renders it as step 2, on the same id, which takes step 1 down.
         const out = await onConfirm();
         // A refused delete (the review of Group 62): the question says why on itself, since
-        // its toast is drawn under it, and its buttons answer again, the keyboard on Cancel.
+        // its toast is drawn under it, and its buttons answer again, the keyboard on Cancel
+        // while the question is on top (a window over it keeps it: the second review).
         // It used to stay up with both greyed out, and only Escape got out.
         if (out && out.error) {
             if (errEl) errEl.textContent = out.error;
             confirmBtn.disabled = false;
             cancelBtn.disabled = false;
-            if (ov.isConnected) cancelBtn.focus();
+            refusedAt = Date.now();
+            if (ov.isConnected && (!window.isTopOverlay || window.isTopOverlay(ov))
+                && !(window.fccShortcutsUp && window.fccShortcutsUp())) cancelBtn.focus();
         }
     });
     if (input) {
@@ -3312,7 +3324,7 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
                 style="width:100%; padding:8px 10px; background:#111; color:#fff;
                        border:1px solid #555; border-radius:4px;
                        font-family:monospace; text-align:center;" />
-            <div id="${errId}" style="color:#ff5555; font-size:0.85em; min-height:1.1em; margin-top:6px;"></div>
+            <div id="${errId}" role="alert" style="color:#ff5555; font-size:0.85em; min-height:1.1em; margin-top:6px;"></div>
             <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
                 <button id="${cancelBtnId}" class="btn btn-secondary" style="min-width:110px;">Cancel</button>
                 <button id="${goBtnId}" class="btn btn-danger fw-bold" style="min-width:160px;">Merge forever</button>
@@ -3334,13 +3346,30 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
     const cancelBtn = handle.panel.querySelector(`#${cancelBtnId}`);
 
     cancelBtn.addEventListener('click', () => handle.cleanup());
-    goBtn.addEventListener('click', async () => {
+    // A refused merge says why on the question (the second review of Group 62, as the delete
+    // question's: its toast is drawn under this confirm-tier window), its buttons answer
+    // again, the keyboard on Cancel while it is on top, and Merge forever takes no pointer
+    // press for 700 ms (a double click's second press sent a second merge).
+    let refusedAt = 0;
+    const refused = (err) => {
+        errEl.textContent = `Merge failed: ${err}`;
+        goBtn.disabled = false;
+        cancelBtn.disabled = false;
+        refusedAt = Date.now();
+        const ov = handle.element;
+        if (ov && ov.isConnected && (!window.isTopOverlay || window.isTopOverlay(ov))
+            && !(window.fccShortcutsUp && window.fccShortcutsUp())) cancelBtn.focus();
+    };
+    goBtn.addEventListener('click', async (e) => {
+        if (refusedAt && e && e.detail !== 0
+            && Date.now() - refusedAt < (window.questionArmMs ? window.questionArmMs() : 700)) return;
         if ((input.value || '').trim() !== 'MERGE') {
             errEl.textContent = "Type MERGE exactly to confirm.";
             input.focus();
             input.select();
             return;
         }
+        errEl.textContent = '';
         goBtn.disabled = true;
         cancelBtn.disabled = true;
         try {
@@ -3351,8 +3380,7 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
             if (!r.ok || !j.success) {
                 const err = (j && j.error) || `HTTP ${r.status}`;
                 showToast(`Merge failed: ${err}`, 'error', 7000);
-                goBtn.disabled = false;
-                cancelBtn.disabled = false;
+                refused(err);
                 return;
             }
             const n = (j.reparented_spool_ids || []).length;
@@ -3363,10 +3391,9 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
             handle.cleanup();
             if (typeof modals !== 'undefined' && modals.filamentModal) modals.filamentModal.hide();
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-        } catch (e) {
-            showToast(`Merge failed: ${e.message || e}`, 'error', 7000);
-            goBtn.disabled = false;
-            cancelBtn.disabled = false;
+        } catch (err) {
+            showToast(`Merge failed: ${err.message || err}`, 'error', 7000);
+            refused(err.message || err);
         }
     });
     input.addEventListener('keydown', (e) => {

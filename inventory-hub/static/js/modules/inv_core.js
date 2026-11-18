@@ -1143,7 +1143,13 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
     // A scan sent on from the box is a scan's Enter, as the accumulator marks its own
     // (the review of Group 62): it skips keys typed into a box, so a scanner set to end
     // with CR LF had its second Enter read as a person's (enterIsAScan's 100 ms rule).
+    // That second Enter, right behind a scan this capture sent on, is the scan's, and the
+    // capture takes it (the second review: it reached the box's own Enter handler, which
+    // saved, searched or pressed there unless it asked enterIsAScan).
+    const SECOND_ENTER_MS = 100;
+    let sentAt = 0;
     const stampScanEnter = (now) => {
+        sentAt = now;
         const st = (typeof state !== 'undefined') ? state : window.state;
         if (st) st.lastScanEnterAt = now;
     };
@@ -1166,6 +1172,11 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
         const now = Date.now();
 
         if (e.key === 'Enter') {
+            if (sentAt && now - sentAt < SECOND_ENTER_MS) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                return;
+            }
             const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
             const looksScanned = fast && isScanPayload(buf);
             const payload = buf;
@@ -1318,6 +1329,12 @@ const installWeightScanCapture = ({ match, onScan }) => {
     let label = null;       // { text, restore, startAt, lastAt } once a ':' or '/' proved one
     let handedOff = null;   // { text, startAt, lastAt }: a label this capture put back in the scan buffer
     let heldAt = 0, heldFrom = 0, heldRun = 0;   // the keys a dialog holds (fccWeightHold): the last one's time, its run
+    // When this capture last sent a scan on. A scanner set to end with CR LF sends a second
+    // Enter right behind it (enterIsAScan's 100 ms), which is the scan's too: it reached the
+    // box's own Enter, which saved the reading typed before the scan (the second review of
+    // Group 62: in Gross, "64" read as an empty spool, archived with Auto Archive on).
+    const SECOND_ENTER_MS = 100;
+    let sentAt = 0;
     const scanState = () => ((typeof state !== 'undefined') ? state : window.state) || null;
     const scanBuf = () => { const st = scanState(); return st && typeof st.scanBuffer === 'string' ? st.scanBuffer : ''; };
     const reset = () => { keys = []; label = null; };
@@ -1360,6 +1377,9 @@ const installWeightScanCapture = ({ match, onScan }) => {
     const send = (e, el, text, restore, startAt, lastAt) => {
         e.preventDefault();
         e.stopImmediatePropagation();
+        sentAt = Date.now();
+        const st = scanState();
+        if (st) st.lastScanEnterAt = sentAt;    // as the accumulator marks a scan's Enter
         putBack(el, restore);
         if (onScan) onScan(text, el);
         else if (window.processScan) window.processScan(text, lastAt - startAt < BURST_MS ? 'barcode' : 'keyboard');
@@ -1470,6 +1490,13 @@ const installWeightScanCapture = ({ match, onScan }) => {
         if (e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)
             || (e.repeat && e.key !== 'Enter')) { reset(); handedOff = null; return; }
         if (e.key === 'Enter') {
+            if (sentAt && now - sentAt < SECOND_ENTER_MS) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                reset();
+                handedOff = null;
+                return;
+            }
             let found = null;
             if (label && now - label.lastAt <= RESET_MS) {
                 found = label;

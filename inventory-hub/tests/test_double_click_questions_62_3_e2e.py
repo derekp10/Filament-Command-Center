@@ -90,7 +90,13 @@ DOORS = {
 
 
 class Recorder:
-    """Every request that isn't a GET answered here (an empty success) and recorded."""
+    """Every request that isn't a GET answered here (an empty success) and recorded, but
+    a read sent as a POST: the buffer cards' refresh (routes_state_pulse.api_spools_refresh)
+    writes nothing, and goes out whenever dev's shared buffer holds a spool, which another
+    test in a batch can leave there (the second review of Group 62: two of these were red
+    in a batch, on `['/api/spools/refresh']`, and passed alone)."""
+
+    READS = {"/api/spools/refresh"}
 
     def __init__(self, page: Page, delay_ms: int = 0):
         self.posts: list[tuple[str, object]] = []
@@ -102,6 +108,9 @@ class Recorder:
             route.continue_()
             return
         path = request.url.split("://", 1)[-1].split("/", 1)[-1].split("?")[0]
+        if "/" + path in self.READS:
+            route.continue_()
+            return
         try:
             body = json.loads(request.post_data or "null")
         except ValueError:

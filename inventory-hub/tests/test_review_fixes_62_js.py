@@ -114,6 +114,37 @@ def test_a_persons_typing_and_enter_stamps_nothing(boxes):
     assert got["scans"] == [] and got["at"] is None, got
 
 
+# The page's clock moves only when a test says (Date.now), so a scanner's pace is exact.
+FAKE_CLOCK = r"""() => { const base = Date.now(); window.__T = 0; Date.now = () => base + window.__T; }"""
+
+
+@pytest.mark.parametrize("box, text", [("#labelled", "ID:57"), ("#labelled", "8812"), ("#plain", "ID:57")],
+                         ids=["a-label", "digits-alone", "a-burst-in-a-plain-box"])
+def test_a_scanners_second_enter_never_reaches_the_box(boxes, box, text):
+    """The second review round (2026-11-17): a scanner set to end with CR LF sends two
+    Enters. The capture took the scan and its first; the second reached the box's own
+    Enter handler, which saved, searched or pressed there unless it asked enterIsAScan.
+    The capture takes it too now. A person's Enter a moment later is theirs (a pin). RED
+    before the fix: the box heard the second Enter."""
+    page = boxes
+    page.evaluate(FAKE_CLOCK)
+    page.evaluate("""(sel) => { window.__boxEnters = 0;
+        document.querySelector(sel).addEventListener('keydown', (e) => { if (e.key === 'Enter') window.__boxEnters += 1; }); }""", box)
+    page.focus(box)
+    for ch in text:
+        page.evaluate("() => { window.__T += 5; }")
+        page.keyboard.type(ch)
+    page.evaluate("() => { window.__T += 5; }")
+    page.keyboard.press("Enter")                    # its CR
+    page.evaluate("() => { window.__T += 3; }")
+    page.keyboard.press("Enter")                    # its LF
+    got = page.evaluate("() => ({ enters: window.__boxEnters, scans: window.__scans.map((s) => s[0]) })")
+    assert got["scans"] == [text] and got["enters"] == 0, got
+    page.evaluate("() => { window.__T += 400; }")
+    page.keyboard.press("Enter")
+    assert page.evaluate("() => window.__boxEnters") == 1
+
+
 # --- the ⌨️ list names the two new codes -------------------------------------------------
 
 def test_the_shortcut_list_names_the_two_new_codes_and_says_what_done_does_now():

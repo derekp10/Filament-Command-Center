@@ -444,8 +444,17 @@ document.addEventListener('DOMContentLoaded', () => {
         // shows one above the open ones, inv_core.js). The global search is a window
         // too (a Bootstrap offcanvas, z 1090; the review of Group 62): over a place's
         // window, an Escape with the keyboard in it closed the place's window, and the
-        // search stayed open.
-        const shown = Array.from(document.querySelectorAll('.modal.show, .offcanvas.show'));
+        // search stayed open. It slides 0.3 s each way (the second review): sliding in
+        // (`showing`) it is on top already, and the Escape waits, since its hide() in
+        // the slide leaves it half shown (it closed the place's window under it);
+        // sliding out (`show hiding`) it is no window, and the Escape is the next one's
+        // (it was handed to the closing search, and did nothing).
+        if (document.querySelector('.offcanvas.showing')) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
+        const shown = Array.from(document.querySelectorAll('.modal.show, .offcanvas.show:not(.hiding)'));
         if (shown.length === 0) return;
         const topmost = shown.reduce((a, b) => {
             const za = parseInt(getComputedStyle(a).zIndex || '0', 10) || 0;
@@ -1148,13 +1157,17 @@ const _paintDepositCard = (card, item) => {
 // Its click and its QR (CMD:DEPOSIT:<id>, processScan) both run it (Group 62.6: the QR
 // was this place's own LOC: label, which files the whole buffer, while the click placed
 // one spool, and the comment here said the two matched).
-window.depositShownSpool = (locId) => {
+// `opts.settled(how)`: processScan's, for the QR's read, which stays in flight until it is
+// called once: 'answered' (its move's answer, or the question or picker it opened) or
+// 'refused' (nothing moved and nothing was asked: no read; the second review of Group 62).
+window.depositShownSpool = (locId, opts = {}) => {
+    const settled = (opts && typeof opts.settled === 'function') ? opts.settled : () => {};
     // The click waits during an audit or a bulk move, as the QR does (the review of
     // Group 62: the QR was refused while a click still moved the spool shown).
-    if (window.auditPressRefused && window.auditPressRefused('CMD:DEPOSIT')) return;
-    if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) return;
+    if (window.auditPressRefused && window.auditPressRefused('CMD:DEPOSIT')) { settled('refused'); return; }
+    if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) { settled('refused'); return; }
     const top = state.heldSpools[0];
-    if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); return; }
+    if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); settled('refused'); return; }
     // Group 40.5 (and D2.4): a multi-slot box, or a Printer row that isn't its own
     // toolhead (XL, RCOI), opens its picker for this spool (a slot; a head or a
     // Printer Pool slot). It used to file the spool on the printer row itself, which
@@ -1164,9 +1177,12 @@ window.depositShownSpool = (locId) => {
             && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
                 || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row)))) {
         window._placeBufferWithPicker(locId, [top.id]);
+        // Its picker is its answer. One that didn't open said why (another window up, a
+        // bulk move armed, a placement already running), and asked nothing.
+        settled(window.isSlotPickerOpen && window.isSlotPickerOpen() ? 'answered' : 'refused');
         return;
     }
-    doAssign(locId, top.id, null);
+    doAssign(locId, top.id, null, null, { onSettled: settled });
 };
 
 const _buildDepositCard = (locId) => {
@@ -1612,7 +1628,7 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
             // Active print → inline confirm overlay (no nested Swal). Its Yes
             // confirms this head, the one whose warning it shows (Group 39.1).
             setProcessing(false);
-            return _confirmActivePrintAssign({
+            const asked = _confirmActivePrintAssign({
                 loc,
                 spool,
                 slot,
@@ -1621,6 +1637,9 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
                 options,
                 heads: [String(loc).toUpperCase()],
             });
+            // `options.onSettled` (DEPOSIT HERE's QR): the question is its answer.
+            if (typeof options.onSettled === 'function') options.onSettled('answered');
+            return asked;
         });
     }
 
@@ -1667,6 +1686,9 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
 };
 
 const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedHeads = [], options = {}) => {
+    // `options.onSettled` (DEPOSIT HERE's QR, whose read is in flight until then): the move
+    // was answered, or got no answer. Its caller takes the first call only.
+    const settle = () => { if (typeof options.onSettled === 'function') options.onSettled('answered'); };
     // FIX: 0-based index correction for MMU/CORE slots
     let finalSlot = slot;
     if (slot !== null) {
@@ -1691,6 +1713,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         if (spoolObj && (spoolObj.archived === true || String(spoolObj.archived).toLowerCase() === 'true')) {
             showToast("Cannot assign an ARCHIVED spool to a location!", "error");
             setProcessing(false);
+            settle();
             return;
         }
     }
@@ -1736,6 +1759,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
     // success handling follows a move that landed, so it only reaches the console.
     const noAnswer = (e) => {
         setProcessing(false);
+        settle();
         showToast(`❌ #${spoolIdStr} → ${loc} failed: ${(e && e.message) || 'network error'} — check the Activity Log`, 'error', 7000);
         if (window.logClientEvent) window.logClientEvent(
             `❌ Assign #${spoolIdStr} → ${loc} got no answer: ${(e && e.message) || 'network error'}`, 'ERROR');
@@ -1750,6 +1774,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         .then(res => {
             if (res === null) return;
             setProcessing(false);
+            settle();
             // The server asks before it moves: a printing head (the yes / no:
             // the printer flipped to PRINTING after our probe, the probe missed
             // it, or the spool is LEAVING a printing head, 39.4), or a bound
@@ -1861,7 +1886,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 window.takeIntoBuffer(res);
             }
         })
-        .catch((e) => { setProcessing(false); console.error(e); });
+        .catch((e) => { setProcessing(false); settle(); console.error(e); });
     _postManageAdd(first, { heads: first.confirmed_toolheads });
 };
 

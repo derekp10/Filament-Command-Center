@@ -265,6 +265,29 @@ def test_one_tab_moves_one_step_in_the_quickswap_confirm(kpage):
     assert _focused(page) == "fcc-quickswap-yes"
 
 
+def test_a_question_over_the_quickswap_confirm_keeps_its_own_tab(kpage):
+    """The second review of Group 62: the Quick-Swap confirm's own key handler (on the
+    document) never asked whether it was on top. With a question over it (a scan opens
+    one over Return's notices, which hold no scan since the first round), every Tab was
+    pulled back to the confirm's button first, then into the question at its first: Tab
+    never left the question's first button. RED before the fix."""
+    page = kpage
+    page.evaluate("""() => {
+        window.checkPrinterForHead = () => Promise.resolve({ active: false, known: true, state: 'IDLE', printer_name: 'XL' });
+        const b = document.createElement('button');
+        Object.assign(b.dataset, { toolhead: 'XL-1', box: 'LR-MDB-1', slot: '1', spoolId: '57' });
+        window.quickSwapTap(b); }""")
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-quickswap-yes'")
+    _open(page, "yes-no")
+    seen = []
+    for _ in range(4):
+        page.keyboard.press("Tab")
+        seen.append(page.evaluate("""() => { const a = document.activeElement;
+            return a && a.closest('#fcc-active-print-confirm-overlay') ? (a.textContent || '').trim() : 'outside:' + (a && a.id); }"""))
+    assert not any(s.startswith("outside") for s in seen), seen
+    assert len(set(seen)) >= 2, f"Tab never moved: {seen}"
+
+
 def test_one_tab_moves_one_step_in_the_slot_picker_and_a_field_behind_tabs_into_it(kpage):
     """One Tab moves one tile (a pin for the opt-out), and with the focus on a field
     behind the picker, Tab comes into it. RED on 697bc4f for the field: Tab went on

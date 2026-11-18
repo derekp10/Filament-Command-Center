@@ -460,6 +460,55 @@ def test_a_label_scanned_into_the_missing_tare_prompt_is_the_scans(weigh, ms):
     assert s["tares"] == [167] and s["prompts"] == 0 and not s["open"], s
 
 
+@pytest.mark.parametrize("mode", ["gross", "net", "set_used"])
+def test_a_scanners_second_enter_never_saves_the_reading_typed_before(weigh, mode):
+    """The second review of Group 62 (RED, older than Group 62): a scanner set to end with
+    CR LF sends two Enters. The weight capture took the label and its first Enter (the
+    reading typed before it put back), and the second reached the window's own Enter,
+    which saved that reading: in Gross, 64 g read as an empty spool, archived with Auto
+    Archive on. The capture takes that second Enter now (inv_core.js)."""
+    page, open_ = weigh
+    open_(mode)
+    press(page, "64", 300, enter=False)
+    later(page, 1000)
+    press(page, "ID:58", 2)                       # the label and its CR
+    later(page, 2)
+    page.keyboard.press("Enter")                  # its LF
+    s = _seen(page)
+    assert s["saved"] == [] and s["scans"] == ["ID:58"] and s["value"] == "64" and s["open"], (mode, s)
+
+
+def test_a_persons_enter_after_a_scan_still_saves(weigh):
+    """A pin: the person's own Enter a moment after a scan saves their reading."""
+    page, open_ = weigh
+    open_("net")
+    press(page, "64", 300, enter=False)
+    later(page, 1000)
+    press(page, "ID:58", 2)
+    later(page, 400)
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => window.__saved.length === 1")
+    assert _seen(page)["scans"] == ["ID:58"]
+
+
+def test_a_scanners_second_enter_in_the_tare_prompt_saves_nothing(weigh):
+    """The same in the missing-tare prompt (its box is a weight box): the second Enter
+    saved the tare typed so far. RED before the fix."""
+    page, open_ = weigh
+    open_("gross", tare=None)
+    press(page, "645", 200)
+    page.wait_for_function("(s) => document.activeElement === document.querySelector(s)", arg=PROMPT_INPUT)
+    later(page, 300)
+    press(page, "16", 300, enter=False)
+    later(page, 1000)
+    press(page, "ID:57", 2)
+    later(page, 2)
+    page.keyboard.press("Enter")
+    s = _seen(page)
+    assert s["saved"] == [] and s["scans"] == ["ID:57"] and s["prompts"] == 1, s
+    assert page.evaluate("(s) => document.querySelector(s).value", PROMPT_INPUT) == "16"
+
+
 def test_a_persons_enter_in_the_tare_prompt_saves_once(weigh):
     """The person types the tare and presses Enter: the weigh is saved once,
     and no prompt is left. RED on 5b5a18e: the window's own Enter ran Save

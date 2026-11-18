@@ -658,6 +658,11 @@
         //     to the page behind (otherwise Tab leaks to the Location
         //     Manager modal behind and eventually the browser chrome).
         const keyHandler = (e) => {
+            // Its keys are its own only while it is on top (the second review of Group 62):
+            // with a question a scan opened over it (over Return's notices, which hold no
+            // scan), each Tab was pulled back here first, so Tab never left the question's
+            // first button.
+            if (window.isTopOverlay && !window.isTopOverlay(ov)) return;
             if (e.key === 'Enter') {
                 // ⚠️ SAFETY (axis-(a) audit, 2026-08-03): a scan in flight OWNS
                 // this Enter — it is the scan TERMINATOR, not a button press.
