@@ -1174,12 +1174,15 @@ def test_a_scan_never_answers_close_without_saving(page61, focus, ms):
 
 
 def test_a_persons_enter_on_close_without_saving_still_answers(page61):
+    """PIN UPDATED DELIBERATELY (Group 62.8): the question is a mountOverlay, and a
+    person's Enter presses its focused button as on any button (the browser's own press,
+    which the page's Enter rule lets through), so a real key, not a dispatched one."""
     _clock(page61)
     _open_close_question(page61, "#editfil-esc-yes")
-    _type(page61, "", 0)
+    page61.keyboard.press("Enter")
     assert _close_question(page61) == {"open": False, "hides": 1}
     _open_close_question(page61, "#editfil-esc-no")
-    _type(page61, "", 0)
+    page61.keyboard.press("Enter")
     assert _close_question(page61) == {"open": False, "hides": 0}
 
 
@@ -1252,7 +1255,12 @@ def test_a_persons_enter_takes_a_key_they_left_with_it(page61, which):
     before = len(_ids(page61))
     _type(page61, "x", 0, enter=False)
     _later(page61, 1000)
-    _type(page61, "", 0)
+    if which == "close":
+        # PIN UPDATED DELIBERATELY (Group 62.8): a mountOverlay's button is pressed by
+        # the browser on a real Enter, which the page's Enter rule lets through.
+        page61.keyboard.press("Enter")
+    else:
+        _type(page61, "", 0)
     assert _pressed(page61, which), f"{which}: the person's Enter answered nothing"
     assert _buffer(page61) == "", f"{which}: the key they left stayed in the scan buffer"
     assert all(t != "x" for t, _ in _ids(page61)[before:]), _ids(page61)

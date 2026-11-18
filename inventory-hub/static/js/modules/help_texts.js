@@ -49,12 +49,12 @@
         lines: [
             'One place and its spools: a box with several slots as its numbered slots, any other place as a list.',
             'Scan a spool and it waits under READY TO SLOT (◀ PREV and NEXT ▶ pick another from your buffer). Click an empty slot, or ⬇️ DEPOSIT HERE, to put it here; a slot that feeds a toolhead loads it onto that toolhead too. A full slot asks first.',
-            'A click on ⬇️ DEPOSIT HERE puts only the spool shown. Scanning its QR (this place\'s own label) puts your buffer here: a toolhead or other one-spool place takes only the top spool, and a box with slots or a printer asks where each spool goes.',
+            '⬇️ DEPOSIT HERE puts only the spool shown, clicked or its QR scanned. This place\'s own printed label puts your whole buffer here: a toolhead or other one-spool place takes only the top spool, and a box with slots or a printer asks where each spool goes.',
             'On a spool: ✋ PICK puts it in your buffer, ⏏️ EJECT or 🗑️ TRASH takes it out of this place after asking, ✏️ edits it, and 🖨️ adds its label to the print queue. A loaded spool\'s ↩️ RETURN SPOOL puts it back in its slot.',
             'A dryer box has 🔗 Slot → Toolhead Feeds (press Show): choose which toolhead each slot feeds, then 💾 Save Feeds. 🖨️ Print Location Label adds this place\'s label to the print queue, and its small QR opens bigger, to scan from the screen.',
-            'Scans while it is open: the QR on a slot\'s tile does what clicking that slot does, and this place\'s own label puts your buffer here, as above.',
+            'Scans while it is open: the QR on a slot\'s tile does what clicking that slot does, DEPOSIT HERE\'s QR what clicking it does, and this place\'s own label puts your buffer here, as above.',
             'In a box with slots, spools with no slot are under Unslotted Items. EJECT ALL in the ☢️ DANGER ZONE below them (or its QR) asks, then sends each back where it came from, or to Unassigned after one more question. A spool loaded on a toolhead stays.',
-            '✅ Done / Sync closes the window, or goes back to the place you came from. The QR beside it does the same, except during an audit, where it is the audit\'s Done, or a bulk move, where it commits the move.',
+            '✅ Done / Sync closes the window, or goes back to the place you came from, and so does the QR beside it, whatever else is running.',
         ],
         sections: [{
             title: '⚡ Quick-Swap (a toolhead or a printer)',
@@ -80,6 +80,7 @@
             'A spool going onto a toolhead takes the place of the one there, which goes back to the box slot it came from (with no record of one, to the printer\'s room, else Unassigned).',
             'On an idle toolhead the question opens on Yes, swap. While the printer prints, or when FCC couldn\'t check the printer, it says so and opens on No, cancel, so a stray Enter moves nothing.',
             'While the printer prints, it also shows a QR above each button: scan one to answer. Enter presses the button that has the keyboard, and Tab moves between the two.',
+            'While it is open, any other scan is ignored, and the question says so: answer it first, then scan again.',
         ],
     });
 
@@ -169,7 +170,7 @@
             'Just store it: the spool goes in the slot, and HEAD-1 is left as it was. Cancel: nothing moves.',
             'Enter stores it, or cancels when there is no Just store it. Scan the QR under a button to answer with it. Any other scan is ignored, and the question says so: scan it again once you have answered.',
             'If what the slot feeds changes while you decide, FCC asks again and names the new toolhead.',
-            'Some actions during a print (a move straight onto or off a printing toolhead, an Undo) ask a shorter question instead: Continue Anyway or Cancel. It opens on Cancel, so a stray Enter moves nothing, but other scans still go through while it is open.',
+            'Some actions during a print (a move straight onto or off a printing toolhead, an Undo) ask a shorter question instead: Continue Anyway or Cancel. It opens on Cancel, so a stray Enter moves nothing, and it holds off other scans too until it is answered.',
         ],
         scopes: ['Load / Store Question'],
     });

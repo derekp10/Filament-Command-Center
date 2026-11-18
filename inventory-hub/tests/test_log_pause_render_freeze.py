@@ -60,8 +60,12 @@ def test_pause_freezes_the_list_but_not_the_pill_or_flags(page):
     # '23:00:00' is later than any real dev log entry (so the pill hides now)
     # but EARLIER than the probe's 23:59:58 (so the probe still counts as
     # unseen and must make the pill reappear).
+    # Group 62.7(d): dev's real entries carry `ts`, compared with lastSeenTs (a day
+    # ahead here, so every real one is seen); the probe carries none, so it keeps the
+    # text compare against lastSeenTime.
     page.evaluate("""
         localStorage.setItem('fcc.logPill.lastSeenTime', '23:00:00');
+        localStorage.setItem('fcc.logPill.lastSeenTs', String(Date.now() + 86400000));
         window._renderLogsPayload({logs: [], status: {spoolman: true}}, true);
     """)
     page.wait_for_function(

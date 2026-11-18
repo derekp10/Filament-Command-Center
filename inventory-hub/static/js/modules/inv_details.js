@@ -1139,9 +1139,11 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
                         const escNo = ov.querySelector('#fcc-escape-no');
                         escYes.addEventListener('click', () => Swal.close());
                         escNo.addEventListener('click', hideConfirmOverlay);
-                        // Arrow keys and Tab switch focus between Yes/No buttons
+                        // Arrow keys switch focus between Yes/No buttons. Tab is
+                        // mountOverlay's (trapTab, Group 62.4): it also brings a focus
+                        // left outside back, which a handler on this overlay never heard.
                         ov.addEventListener('keydown', (e) => {
-                            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Tab') {
+                            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                                 e.preventDefault();
                                 const target = document.activeElement === escYes ? escNo : escYes;
                                 target.focus();
@@ -2745,112 +2747,76 @@ const _editfilOpenModal = (fil) => {
         return parts.join('|');
     };
     let baselineState = '';
-    // Install a capture-phase keydown listener on the modal so we see Escape
-    // before Bootstrap's built-in dismiss handler. When the form is dirty,
-    // swallow the original Escape and show a confirm overlay.
+    // A capture-phase keydown listener on the modal, so it sees Escape before
+    // Bootstrap's built-in dismiss handler (on the same element, registered first).
+    // When the form is dirty, it swallows the Escape and asks. Group 62.8: it was a
+    // bubble listener, so Bootstrap's dismiss ran first and closed the window, and
+    // the question was drawn inside a window already gone; stopImmediatePropagation
+    // also stops Bootstrap's listener when the Escape is the window's own (the
+    // location manager hands it one with the focus on the page, Group 62.4).
     const escGuardHandler = (e) => {
         if (e.key !== 'Escape') return;
-        // If any combobox/chip dropdown has its own Escape handler active,
-        // let those fire first (they stopPropagation when visible).
-        // By the time this bubble-phase handler sees Escape, we know no
-        // dropdown was open.
+        // A combobox / chip dropdown open in the form answers its own Escape (it
+        // closes the list only, and stops propagation): its field's handler runs
+        // after this one now, so the guard steps aside while a list shows. Each
+        // list hides on its field's blur, so only the focused field's can show.
+        const listOpen = Array.from(modalEl.querySelectorAll('[id^="editfil-"][id$="-dropdown"]'))
+            .some((d) => d.style.display !== 'none' && d.getClientRects().length > 0);
+        if (listOpen) return;
         if (snapshotFormState() === baselineState) return; // Clean — let Bootstrap close.
         e.preventDefault();
-        e.stopPropagation();
+        e.stopImmediatePropagation();
         _editfilShowEscapeConfirm(bsModal);
     };
-    modalEl.addEventListener('keydown', escGuardHandler);
+    modalEl.addEventListener('keydown', escGuardHandler, true);
     // Re-snapshot when the modal finishes opening (after we populate fields).
     modalEl.addEventListener('shown.bs.modal', () => { baselineState = snapshotFormState(); }, { once: true });
     modalEl.addEventListener('hidden.bs.modal', () => {
-        modalEl.removeEventListener('keydown', escGuardHandler);
+        modalEl.removeEventListener('keydown', escGuardHandler, true);
     }, { once: true });
 
     bsModal.show();
 };
 
-// Inline confirm overlay for "close without saving?" Mounts inside the
-// modal so it stacks above the modal's own backdrop and shares its z-index.
-// No nested Swal per project convention — just a dark-backdrop div with
-// Yes/No buttons that resolve to close-anyway or dismiss-the-overlay.
+// "Close without saving?" for Edit Filament. Group 62.8: a mountOverlay; it was drawn
+// inside the window (position:absolute) with a document key listener and a Tab trap of
+// its own. Its window is its host, Tab stays inside it (trapTab), Escape keeps editing,
+// and the keyboard starts on Keep Editing, the safe answer. The page's own rules
+// (scripts.html) answer its keys: a person's Enter presses the focused button, a scan's
+// Enter presses nothing (the scan goes to the scan path and the question stays for a
+// person, Group 61), and a Space inside a scan presses nothing.
 const _editfilShowEscapeConfirm = (bsModal) => {
     const modalEl = document.getElementById('editFilamentModal');
     if (!modalEl) return;
-    // Avoid stacking multiples if the user mashes Escape.
-    let ov = document.getElementById('editfil-esc-confirm');
-    if (ov) ov.remove();
-    ov = document.createElement('div');
-    ov.id = 'editfil-esc-confirm';
-    ov.style.cssText = 'position:absolute; inset:0; z-index:20000; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center;';
-    ov.innerHTML = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:26.25rem; text-align:center;">
-            <div style="font-size:1.1em; font-weight:bold; margin-bottom:8px;">Close without saving?</div>
-            <div style="color:#ffc; margin-bottom:14px;">You have unsaved changes to this filament. Leave anyway?</div>
-            <div style="display:flex; gap:10px; justify-content:center;">
-                <button id="editfil-esc-yes" class="btn btn-danger btn-sm" style="min-width:120px;">Close Anyway</button>
-                <button id="editfil-esc-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Keep Editing</button>
-            </div>
-        </div>
-    `;
-    // Use the modal dialog as the mount point so the overlay sits inside
-    // the modal's position:relative parent and inherits its stacking.
-    const dialog = modalEl.querySelector('.modal-content') || modalEl;
-    dialog.style.position = 'relative';
-    dialog.appendChild(ov);
-    const cleanup = () => { try { ov.remove(); } catch (_) { /* noop */ } document.removeEventListener('keydown', keyHandler, true); };
-    // Enter activates the focused button. "Keep Editing" is focused by
-    // default (the SAFE choice — don't lose edits on stray Enter), so
-    // Enter dismisses just the overlay. Tab moves focus to "Close Anyway";
-    // Enter there confirms losing the edits. Escape unconditionally
-    // cancels the overlay. Tab is trapped inside the two buttons so it
-    // can't escape to the page (or browser chrome) behind.
-    const keyHandler = (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
-        const yesBtn = document.getElementById('editfil-esc-yes');
-        const noBtn = document.getElementById('editfil-esc-no');
-        // Group 61: a scan never answers it. Its Enter is the scan's (with
-        // Close Anyway focused it closed the editor unsaved, and either way
-        // the scan stayed in the buffer): the scan goes to the scan path and
-        // the question stays for a person. A Space inside a scan presses
-        // nothing.
-        if (e.key === ' ' && window.scanIsArriving && window.scanIsArriving()) { e.preventDefault(); return; }
-        if (e.key === 'Enter') {
-            if (window.enterIsAScan && window.enterIsAScan()) return;
-            const active = document.activeElement;
-            if (active === yesBtn) {
-                e.preventDefault(); e.stopPropagation();
-                if (window.clearScanBuffer) window.clearScanBuffer();
-                cleanup(); bsModal.hide();
-            } else if (active === noBtn) {
-                e.preventDefault(); e.stopPropagation();
-                if (window.clearScanBuffer) window.clearScanBuffer();
-                cleanup();
-            }
-            return;
-        }
-        if (e.key === 'Tab') {
-            const focusables = [yesBtn, noBtn].filter(Boolean);
-            if (focusables.length === 0) return;
-            const active = document.activeElement;
-            const idx = focusables.indexOf(active);
-            if (idx === -1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
-                return;
-            }
-            if (e.shiftKey && idx === 0) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[focusables.length - 1].focus();
-            } else if (!e.shiftKey && idx === focusables.length - 1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[0].focus();
-            }
-        }
+    // One at a time: a mashed Escape doesn't stack them.
+    if (window.getOverlay && window.getOverlay('editfil-esc-confirm')) return;
+    let handle = null;
+    const cleanup = () => {
+        if (!handle) return;
+        const h = handle;
+        handle = null;
+        h.cleanup();
     };
-    document.getElementById('editfil-esc-no').onclick = cleanup;
-    document.getElementById('editfil-esc-yes').onclick = () => { cleanup(); bsModal.hide(); };
-    document.addEventListener('keydown', keyHandler, true);
-    document.getElementById('editfil-esc-no').focus();
+    handle = window.mountOverlay({
+        id: 'editfil-esc-confirm',
+        tier: 'standard',
+        host: modalEl,
+        initialFocus: '#editfil-esc-no',
+        onEscape: cleanup,
+        content: `
+            <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px;
+                        max-width:min(26.25rem, calc(100vw - 16px)); box-sizing:border-box; text-align:center;">
+                <div style="font-size:1.1em; font-weight:bold; margin-bottom:8px;">Close without saving?</div>
+                <div style="color:#ffc; margin-bottom:14px;">You have unsaved changes to this filament. Leave anyway?</div>
+                <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+                    <button type="button" id="editfil-esc-yes" class="btn btn-danger btn-sm" style="min-width:120px;">Close Anyway</button>
+                    <button type="button" id="editfil-esc-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Keep Editing</button>
+                </div>
+            </div>`,
+    });
+    const ov = handle.element;
+    ov.querySelector('#editfil-esc-no').onclick = cleanup;
+    ov.querySelector('#editfil-esc-yes').onclick = () => { cleanup(); bsModal.hide(); };
 };
 
 // 23.3 — Filament label-invalidation reprint nudge.
@@ -3003,70 +2969,85 @@ window.openAddFilamentForm = () => {
 
 
 // ----------------------------------------------------------------------
-// Buried delete UI (gear-icon dropdown → inline overlay double-confirm).
+// Buried delete UI (gear-icon dropdown → a two-step question).
 // No nested Swal per CLAUDE.md project conventions.
 // ----------------------------------------------------------------------
 
-const FCC_DELETE_OVERLAY_BASE_STYLE =
-    'position:absolute; inset:0; z-index:1100; ' +
-    'background:rgba(0,0,0,0.92); border-radius:inherit; ' +
-    'display:flex; flex-direction:column; align-items:center; justify-content:center; ' +
-    'gap:14px; padding:32px; text-align:center;';
-
-const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel, onConfirm }) => {
-    overlay.style.cssText = FCC_DELETE_OVERLAY_BASE_STYLE;
-    overlay.style.display = 'flex';
-    // It covers its window but traps no Tab: while it shows, Enter presses no
-    // button of the window behind it (Group 50.6; the accumulator's rule).
-    overlay.dataset.fccCover = '1';
-    const inputId = `${overlay.id}-input`;
-    const errId = `${overlay.id}-err`;
-    overlay.innerHTML = `
-        <div style="font-size:1.3em; font-weight:bold; color:#ff8888;">${title}</div>
-        <div style="color:#ddd; font-size:0.95em; max-width:30rem;">${body}</div>
-        ${requireText ? `
-            <div style="display:flex; flex-direction:column; gap:6px; align-items:center;">
-                <label for="${inputId}" style="color:#aaa; font-size:0.85em;">
-                    Type <code style="color:#ffaa55;">${requireText}</code> to confirm:
-                </label>
-                <input id="${inputId}" type="text" autocomplete="off"
-                    style="font-family:monospace; padding:6px 10px; min-width:240px; text-align:center; border:1px solid #555; border-radius:4px; background:#222; color:#fff;" />
-                <div id="${errId}" style="color:#ff5555; font-size:var(--fcc-fs-small); min-height:1em;"></div>
-            </div>
-        ` : ''}
-        <div style="display:flex; gap:10px; margin-top:6px;">
-            <button class="btn btn-danger fw-bold" data-fcc-delete-confirm style="min-width:140px;">${confirmLabel}</button>
-            <button class="btn btn-secondary" data-fcc-delete-cancel style="min-width:120px;">Cancel</button>
-        </div>
-    `;
-    const cancelBtn = overlay.querySelector('[data-fcc-delete-cancel]');
-    const confirmBtn = overlay.querySelector('[data-fcc-delete-confirm]');
-    const input = requireText ? overlay.querySelector(`#${inputId}`) : null;
-    const errEl = requireText ? overlay.querySelector(`#${errId}`) : null;
-
-    // Suspend Bootstrap's modal Escape dismiss while the overlay is showing,
-    // so Escape only closes the overlay (not the underlying modal). Restored
-    // in close() below.
-    const modalElForKbd = overlay.closest('.modal');
-    let bsModalInst = null;
-    let bsModalKeyboardWas = null;
-    if (modalElForKbd && typeof bootstrap !== 'undefined' && bootstrap.Modal) {
-        bsModalInst = bootstrap.Modal.getInstance(modalElForKbd);
-        if (bsModalInst && bsModalInst._config) {
-            bsModalKeyboardWas = bsModalInst._config.keyboard;
-            bsModalInst._config.keyboard = false;
-        }
+// Group 62.8: the delete question is a mountOverlay. It was a div drawn inside its
+// window (position:absolute, z-index 1100), with Escape handlers of its own, Bootstrap's
+// keyboard suspended while it showed, and data-fcc-cover for the Enter rule. Mounted on
+// the page under its old id (#fcc-spool-delete-overlay / #fcc-filament-delete-overlay),
+// so its words and its two steps are what they were: its window is its host (it goes
+// when the window closes), Tab stays inside it (trapTab), Escape is its Cancel, and the
+// keyboard starts on Cancel at step 1 and in the typed box at step 2. Step 2 mounts on
+// the same id, which takes step 1 down.
+let _deleteBoxCapture = false;
+const _renderDeleteOverlay = (overlayId, hostId, { title, body, requireText, confirmLabel, onConfirm }) => {
+    const inputId = `${overlayId}-input`;
+    const errId = `${overlayId}-err`;
+    // A scan typed into the typed box goes to the scan path, the box keeping what it
+    // held (installFieldScanCapture's `labels`: a whole FCC label, or digits faster than
+    // a person types): a spool's own digits-only label, scanned there, matched the id and
+    // its Enter pressed Delete forever. Installed once, for both boxes.
+    if (!_deleteBoxCapture && window.installFieldScanCapture) {
+        _deleteBoxCapture = true;
+        window.installFieldScanCapture({
+            match: (el) => el.tagName === 'INPUT' && /^fcc-(spool|filament)-delete-overlay-input$/.test(el.id || ''),
+            isScanPayload: () => true,
+            labels: true,
+        });
     }
+    let handle = null;
     const close = () => {
-        overlay.style.display = 'none';
-        overlay.innerHTML = '';
-        delete overlay.dataset.fccCover;
-        if (bsModalInst && bsModalInst._config && bsModalKeyboardWas !== null) {
-            bsModalInst._config.keyboard = bsModalKeyboardWas;
-        }
+        if (!handle) return;
+        const h = handle;
+        handle = null;
+        h.cleanup();
     };
+    const content = `
+        <div class="fcc-delete-panel" role="alertdialog" aria-modal="true" aria-label="Delete"
+             style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:24px min(28px, 4vw);
+                    width:min(34rem, calc(100vw - 16px)); box-sizing:border-box; display:flex; flex-direction:column;
+                    align-items:center; gap:14px; text-align:center;">
+            <div style="font-size:1.3em; font-weight:bold; color:#ff8888;">${title}</div>
+            <div style="color:#ddd; font-size:0.95em;">${body}</div>
+            ${requireText ? `
+                <div style="display:flex; flex-direction:column; gap:6px; align-items:center;">
+                    <label for="${inputId}" style="color:#ccc; font-size:var(--fcc-fs-small);">
+                        Type <code style="color:#ffaa55;">${requireText}</code> to confirm:
+                    </label>
+                    <input id="${inputId}" type="text" autocomplete="off"
+                        style="font-family:monospace; padding:6px 10px; width:min(15rem, 70vw); text-align:center; border:1px solid #555; border-radius:4px; background:#222; color:#fff;" />
+                    <div id="${errId}" role="alert" style="color:#ff6b6b; font-size:var(--fcc-fs-small); min-height:1em;"></div>
+                </div>
+            ` : ''}
+            <div style="display:flex; gap:10px; margin-top:6px; flex-wrap:wrap; justify-content:center;">
+                <button type="button" class="btn btn-danger fw-bold" data-fcc-delete-confirm style="min-width:140px;">${confirmLabel}</button>
+                <button type="button" class="btn btn-secondary" data-fcc-delete-cancel style="min-width:120px;">Cancel</button>
+            </div>
+        </div>`;
+    handle = window.mountOverlay({
+        id: overlayId,
+        content,
+        tier: 'standard',
+        host: document.getElementById(hostId) || undefined,
+        initialFocus: requireText ? `#${inputId}` : '[data-fcc-delete-cancel]',
+        onEscape: close,
+    });
+    const ov = handle.element;
+    const cancelBtn = ov.querySelector('[data-fcc-delete-cancel]');
+    const confirmBtn = ov.querySelector('[data-fcc-delete-confirm]');
+    const input = requireText ? ov.querySelector(`#${inputId}`) : null;
+    const errEl = requireText ? ov.querySelector(`#${errId}`) : null;
     cancelBtn.addEventListener('click', close);
-    confirmBtn.addEventListener('click', async () => {
+    let refusedAt = 0;
+    confirmBtn.addEventListener('click', async (e) => {
+        // A pointer's press under 700 ms after a refusal is the second press of a double
+        // click, no retry (the second review of Group 62: a fast refusal re-enabled the
+        // button before it, and it sent a second DELETE, the reason unread). A keyboard's
+        // press (detail 0) goes at once.
+        if (refusedAt && e && e.detail !== 0
+            && Date.now() - refusedAt < (window.questionArmMs ? window.questionArmMs() : 700)) return;
         if (requireText) {
             if ((input.value || '').trim() !== requireText) {
                 if (errEl) errEl.textContent = `Doesn't match — type ${requireText} exactly.`;
@@ -3075,77 +3056,81 @@ const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel,
                 return;
             }
         }
+        // The last refusal's words go while it tries again.
+        if (errEl) errEl.textContent = '';
         confirmBtn.disabled = true;
         cancelBtn.disabled = true;
-        // onConfirm is responsible for closing the overlay on completion.
-        // Some callbacks re-render the overlay (Step 1 → Step 2 transition) —
-        // auto-closing here would nuke the just-rendered next step.
-        await onConfirm();
+        // onConfirm is responsible for closing the question on completion. Step 1's
+        // re-renders it as step 2, on the same id, which takes step 1 down.
+        const out = await onConfirm();
+        // A refused delete (the review of Group 62): the question says why on itself, since
+        // its toast is drawn under it, and its buttons answer again, the keyboard on Cancel
+        // while the question is on top (a window over it keeps it: the second review).
+        // It used to stay up with both greyed out, and only Escape got out.
+        if (out && out.error) {
+            if (errEl) errEl.textContent = out.error;
+            confirmBtn.disabled = false;
+            cancelBtn.disabled = false;
+            refusedAt = Date.now();
+            if (ov.isConnected && (!window.isTopOverlay || window.isTopOverlay(ov))
+                && !(window.fccShortcutsUp && window.fccShortcutsUp())) cancelBtn.focus();
+        }
     });
     if (input) {
+        // Enter in the typed box never presses Delete forever (the review of Group 62): a
+        // spool's digits-only label from a scanner slower than the capture's digit rule (a
+        // key every 40 ms), or a two-digit one, stayed in the box, keys typed into a box
+        // never reach the scan buffer, so its Enter read as a person's, and the id matched.
+        // A person presses Delete forever: a click, or Tab and then Enter on it. Their Enter
+        // here says so.
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                confirmBtn.click();
-            }
+            if (e.key !== 'Enter') return;
+            if (window.enterIsAScan && window.enterIsAScan()) return;   // the scan's
+            e.preventDefault();
+            if (!errEl) return;
+            errEl.textContent = (input.value || '').trim() === requireText
+                ? 'To delete it, press Delete forever.'
+                : `Doesn't match — type ${requireText} exactly.`;
         });
-        setTimeout(() => input.focus(), 0);
-    } else {
-        setTimeout(() => cancelBtn.focus(), 0);
     }
-    // Escape on the overlay also cancels. Register on:
-    //   1. The closest .modal element at capture phase — Bootstrap's modal
-    //      keyboard handler is bound on the modal element itself, so this
-    //      catches Escape before Bootstrap sees it.
-    //   2. document as a fallback for keystrokes that arrive while focus is
-    //      somehow outside the modal.
-    // Both call stopImmediatePropagation so Bootstrap's modal-dismiss path
-    // never runs while the overlay is showing.
-    const modalEl = overlay.closest('.modal');
-    const escHandler = (e) => {
-        if (e.key !== 'Escape') return;
-        if (overlay.style.display === 'none') return;
-        e.stopImmediatePropagation();
-        e.preventDefault();
-        close();
-        if (modalEl) modalEl.removeEventListener('keydown', escHandler, true);
-        document.removeEventListener('keydown', escHandler, true);
-    };
-    if (modalEl) modalEl.addEventListener('keydown', escHandler, true);
-    document.addEventListener('keydown', escHandler, true);
+    return handle;
 };
 
 const _showDeleteSpoolFlow = (spoolId) => {
-    const overlay = document.getElementById('fcc-spool-delete-overlay');
-    if (!overlay || !spoolId) return;
+    if (!spoolId) return;
     // Step 1 — broad warning, no type-to-confirm.
-    _renderDeleteOverlay(overlay, {
+    _renderDeleteOverlay('fcc-spool-delete-overlay', 'spoolModal', {
         title: '⚠️ Delete this spool?',
         body: `This will permanently delete <strong>Spool #${spoolId}</strong> from Spoolman. This action cannot be undone.`,
         requireText: null,
         confirmLabel: 'Continue →',
         onConfirm: async () => {
             // Step 2 — type-the-id confirmation.
-            _renderDeleteOverlay(overlay, {
+            _renderDeleteOverlay('fcc-spool-delete-overlay', 'spoolModal', {
                 title: '🗑️ Final confirmation',
                 body: `Type the spool ID to confirm permanent deletion of <strong>Spool #${spoolId}</strong>.`,
                 requireText: String(spoolId),
                 confirmLabel: 'Delete forever',
+                // A refusal comes back as { error }, said on the question (and in a
+                // toast, read once the question is gone).
                 onConfirm: async () => {
                     try {
                         const r = await fetch(`/api/spool/${spoolId}`, { method: 'DELETE' });
                         const j = await r.json().catch(() => ({}));
                         if (!r.ok || !j.success) {
-                            const err = (j && j.error) || `HTTP ${r.status}`;
-                            showToast(`Delete failed: ${err}`, 'error', 7000);
-                            return;
+                            const err = `Delete failed: ${(j && j.error) || `HTTP ${r.status}`}`;
+                            showToast(err, 'error', 7000);
+                            return { error: err };
                         }
                         showToast(`Spool #${spoolId} deleted`, 'success', 4000);
                         if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
                     } catch (e) {
-                        showToast(`Delete failed: ${e.message || e}`, 'error', 7000);
+                        const err = `Delete failed: ${e.message || e}`;
+                        showToast(err, 'error', 7000);
+                        return { error: err };
                     }
+                    return null;
                 },
             });
         },
@@ -3339,7 +3324,7 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
                 style="width:100%; padding:8px 10px; background:#111; color:#fff;
                        border:1px solid #555; border-radius:4px;
                        font-family:monospace; text-align:center;" />
-            <div id="${errId}" style="color:#ff5555; font-size:0.85em; min-height:1.1em; margin-top:6px;"></div>
+            <div id="${errId}" role="alert" style="color:#ff5555; font-size:0.85em; min-height:1.1em; margin-top:6px;"></div>
             <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
                 <button id="${cancelBtnId}" class="btn btn-secondary" style="min-width:110px;">Cancel</button>
                 <button id="${goBtnId}" class="btn btn-danger fw-bold" style="min-width:160px;">Merge forever</button>
@@ -3361,13 +3346,30 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
     const cancelBtn = handle.panel.querySelector(`#${cancelBtnId}`);
 
     cancelBtn.addEventListener('click', () => handle.cleanup());
-    goBtn.addEventListener('click', async () => {
+    // A refused merge says why on the question (the second review of Group 62, as the delete
+    // question's: its toast is drawn under this confirm-tier window), its buttons answer
+    // again, the keyboard on Cancel while it is on top, and Merge forever takes no pointer
+    // press for 700 ms (a double click's second press sent a second merge).
+    let refusedAt = 0;
+    const refused = (err) => {
+        errEl.textContent = `Merge failed: ${err}`;
+        goBtn.disabled = false;
+        cancelBtn.disabled = false;
+        refusedAt = Date.now();
+        const ov = handle.element;
+        if (ov && ov.isConnected && (!window.isTopOverlay || window.isTopOverlay(ov))
+            && !(window.fccShortcutsUp && window.fccShortcutsUp())) cancelBtn.focus();
+    };
+    goBtn.addEventListener('click', async (e) => {
+        if (refusedAt && e && e.detail !== 0
+            && Date.now() - refusedAt < (window.questionArmMs ? window.questionArmMs() : 700)) return;
         if ((input.value || '').trim() !== 'MERGE') {
             errEl.textContent = "Type MERGE exactly to confirm.";
             input.focus();
             input.select();
             return;
         }
+        errEl.textContent = '';
         goBtn.disabled = true;
         cancelBtn.disabled = true;
         try {
@@ -3378,8 +3380,7 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
             if (!r.ok || !j.success) {
                 const err = (j && j.error) || `HTTP ${r.status}`;
                 showToast(`Merge failed: ${err}`, 'error', 7000);
-                goBtn.disabled = false;
-                cancelBtn.disabled = false;
+                refused(err);
                 return;
             }
             const n = (j.reparented_spool_ids || []).length;
@@ -3390,10 +3391,9 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
             handle.cleanup();
             if (typeof modals !== 'undefined' && modals.filamentModal) modals.filamentModal.hide();
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-        } catch (e) {
-            showToast(`Merge failed: ${e.message || e}`, 'error', 7000);
-            goBtn.disabled = false;
-            cancelBtn.disabled = false;
+        } catch (err) {
+            showToast(`Merge failed: ${err.message || err}`, 'error', 7000);
+            refused(err.message || err);
         }
     });
     input.addEventListener('keydown', (e) => {
@@ -3405,33 +3405,34 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
 };
 
 const _showDeleteFilamentFlow = (filamentId, childSpoolCount) => {
-    const overlay = document.getElementById('fcc-filament-delete-overlay');
-    if (!overlay || !filamentId) return;
+    if (!filamentId) return;
     const cascadeNote = childSpoolCount > 0
         ? `<div style="color:#ffaa55; font-weight:bold;">⚠️ This filament has ${childSpoolCount} spool${childSpoolCount === 1 ? '' : 's'}. Deleting it will also permanently delete ${childSpoolCount === 1 ? 'that spool' : 'all of them'}.</div>`
         : '';
-    _renderDeleteOverlay(overlay, {
+    _renderDeleteOverlay('fcc-filament-delete-overlay', 'filamentModal', {
         title: '⚠️ Delete this filament?',
         body: `${cascadeNote}<div style="margin-top:8px;">This will permanently delete <strong>Filament #${filamentId}</strong> from Spoolman. This action cannot be undone.</div>`,
         requireText: null,
         confirmLabel: 'Continue →',
         onConfirm: async () => {
             const requireText = childSpoolCount > 0 ? 'CONFIRM' : String(filamentId);
-            _renderDeleteOverlay(overlay, {
+            _renderDeleteOverlay('fcc-filament-delete-overlay', 'filamentModal', {
                 title: '🗑️ Final confirmation',
                 body: childSpoolCount > 0
                     ? `Cascade delete will remove <strong>Filament #${filamentId}</strong> and its <strong>${childSpoolCount}</strong> child spool${childSpoolCount === 1 ? '' : 's'}.`
                     : `Type the filament ID to confirm permanent deletion of <strong>Filament #${filamentId}</strong>.`,
                 requireText,
                 confirmLabel: 'Delete forever',
+                // A refusal comes back as { error }, said on the question (and in a
+                // toast, read once the question is gone).
                 onConfirm: async () => {
                     try {
                         const r = await fetch(`/api/filament/${filamentId}`, { method: 'DELETE' });
                         const j = await r.json().catch(() => ({}));
                         if (!r.ok || !j.success) {
-                            const err = (j && j.error) || `HTTP ${r.status}`;
-                            showToast(`Delete failed: ${err}`, 'error', 7000);
-                            return;
+                            const err = `Delete failed: ${(j && j.error) || `HTTP ${r.status}`}`;
+                            showToast(err, 'error', 7000);
+                            return { error: err };
                         }
                         const cascade = (j.deleted_spool_ids || []).length;
                         const msg = cascade > 0
@@ -3441,8 +3442,11 @@ const _showDeleteFilamentFlow = (filamentId, childSpoolCount) => {
                         if (typeof modals !== 'undefined' && modals.filamentModal) modals.filamentModal.hide();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
                     } catch (e) {
-                        showToast(`Delete failed: ${e.message || e}`, 'error', 7000);
+                        const err = `Delete failed: ${e.message || e}`;
+                        showToast(err, 'error', 7000);
+                        return { error: err };
                     }
+                    return null;
                 },
             });
         },
@@ -3491,28 +3495,17 @@ document.addEventListener('DOMContentLoaded', () => {
             _showDeleteFilamentFlow(fid, childCount);
         });
     }
-    // Hide overlays when their parent modal closes (prevents stranded
-    // overlay state if the user ⛶ closes the modal mid-flow).
-    // Also re-implement Escape-to-close on the modal here, since the modals
-    // ship with `data-bs-keyboard="false"` to keep Bootstrap from racing
-    // the delete overlay's own Escape handler. When no overlay is showing,
-    // Escape on the modal closes it (preserves the prior UX).
+    // Escape-to-close on the windows, which ship with `data-bs-keyboard="false"`.
+    // The delete question on them is a mountOverlay (Group 62.8): it answers its
+    // own Escape first (mountOverlay's, on the document) and goes when its window
+    // closes (its host), so while it is up the window leaves Escape alone.
     ['spoolModal', 'filamentModal'].forEach((mid) => {
         const m = document.getElementById(mid);
         if (!m) return;
         const overlayId = mid === 'spoolModal' ? 'fcc-spool-delete-overlay' : 'fcc-filament-delete-overlay';
-        m.addEventListener('hidden.bs.modal', () => {
-            const ov = document.getElementById(overlayId);
-            if (ov) {
-                ov.style.display = 'none';
-                ov.innerHTML = '';
-                delete ov.dataset.fccCover;
-            }
-        });
         m.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
-            const ov = document.getElementById(overlayId);
-            if (ov && ov.style.display !== 'none') return; // overlay's own handler runs
+            if (window.getOverlay && window.getOverlay(overlayId)) return;   // the question's own
             if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
                 const inst = bootstrap.Modal.getInstance(m);
                 if (inst) inst.hide();

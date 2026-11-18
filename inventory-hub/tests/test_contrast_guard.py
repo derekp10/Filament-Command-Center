@@ -99,6 +99,130 @@ def test_quickswap_confirm_overlay_has_no_gray_on_gray_text(page: Page, open_man
     assert_contrast(overlay)
 
 
+@pytest.mark.usefixtures("require_server")
+def test_the_slot_pickers_cancel_qr_reads_while_it_loads_and_on_its_message(page: Page, base_url: str, assert_contrast):
+    """Group 62.7(c): the slot picker draws its 📷 CANCEL QR from the start, in the loading
+    view and on its "couldn't read" message too. Its read held in the page, then answered
+    as failed; nothing sent."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openSlotPicker === 'function' && typeof state !== 'undefined'")
+    page.evaluate("""() => { const real = window.fetch; window.__held = [];
+        window.fetch = (url, opts) => (String(url).includes('/api/placement_options')
+            ? new Promise((r) => window.__held.push(() => r(new Response(
+                JSON.stringify({ read_ok: false, read_error: 'Spoolman did not answer' }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } }))))
+            : real(url, opts));
+        window.openSlotPicker({ location: 'LR-MDB-1', spool: 57 }); }""")
+    picker = page.locator("#fcc-slot-picker")
+    expect(picker.locator("[data-sp-state='loading'] .fcc-qr-caption")).to_be_visible()
+    assert_contrast(picker)
+    assert "CANCEL" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(picker, min_ratio=100))
+    page.evaluate("() => window.__held.forEach((f) => f())")
+    expect(picker.locator("[data-sp-state='message'] .fcc-qr-caption")).to_be_visible()
+    assert_contrast(picker)
+    page.keyboard.press("Escape")
+    expect(picker).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_questions_held_off_scan_line_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 62.2: the printing yes / no and the Quick-Swap confirm hold off other scans
+    now, and say on themselves why a scan did nothing (toasts sit under them), in the
+    three-way's look. Each is drawn with nothing sent (every write answered in the
+    browser, the printer's answer a stub), a label scanned and held off, the line scored,
+    then Escape."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.confirmActivePrint === 'function'"
+                           " && typeof window.quickSwapTap === 'function' && typeof state !== 'undefined'")
+    page.evaluate("""() => window.confirmActivePrint({
+        activePrint: { toolhead: 'XL-3', printer_name: 'XL', state: 'PRINTING' },
+        msg: 'Moving #57 now will disrupt the print. Continue?', ids: { overlay: 'fcc-contrast-yes-no' } })""")
+    question = page.locator("#fcc-contrast-yes-no")
+    expect(question.locator(".fcc-apc-no")).to_be_visible()
+    page.evaluate("() => window.processScan('LOC:SHELF-8', 'barcode')")
+    expect(question.locator(".fcc-apc-status")).to_be_visible()
+    assert_contrast(question)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(question, min_ratio=100))
+    assert "Answer the question on screen first" in scored, scored
+    page.keyboard.press("Escape")
+    expect(question).to_have_count(0)
+
+    page.evaluate("""() => {
+        window.checkPrinterForHead = () => Promise.resolve({ active: true, known: true, state: 'PRINTING', printer_name: 'XL' });
+        const b = document.createElement('button');
+        Object.assign(b.dataset, { toolhead: 'XL-1', box: 'LR-MDB-1', slot: '1', spoolId: '57', spoolLabel: 'PLA Red' });
+        window.quickSwapTap(b); }""")
+    swap = page.locator("#fcc-quickswap-confirm-overlay")
+    expect(swap.locator(".fcc-confirm-qr-row")).to_be_visible(timeout=8000)
+    page.evaluate("() => window.processScan('LOC:SHELF-9', 'barcode')")
+    expect(swap.locator("#fcc-quickswap-confirm-status")).to_be_visible()
+    assert_contrast(swap)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(swap, min_ratio=100))
+    assert "Yes, swap or No, cancel" in scored, scored
+    page.keyboard.press("Escape")
+    expect(swap).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_delete_question_and_a_refused_deletes_reason_are_readable(page: Page, base_url: str, assert_contrast):
+    """Group 62.8 made the delete question a mountOverlay, and the review of Group 62 puts
+    a refused delete's reason on it (its toast is drawn under it). Each step is scored:
+    the warning, the typed box with its mismatch line, and the refusal. Nothing reaches
+    dev: every write is answered in the browser, the DELETE with {}, read as a refusal,
+    and the spool id is made up."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.mountOverlay === 'function'"
+                           " && !!document.getElementById('btn-spool-delete') && !!document.getElementById('detail-id')")
+    page.evaluate("() => { document.getElementById('detail-id').innerText = '424242';"
+                  " document.getElementById('btn-spool-delete').click(); }")
+    question = page.locator("#fcc-spool-delete-overlay")
+    confirm = question.locator("[data-fcc-delete-confirm]")
+    expect(confirm).to_be_visible()
+    assert_contrast(question)
+    confirm.click()                                          # Continue →
+    box = page.locator("#fcc-spool-delete-overlay-input")
+    expect(box).to_be_focused()
+    box.fill("1")
+    confirm.click()                                          # Delete forever: no match
+    err = page.locator("#fcc-spool-delete-overlay-err")
+    expect(err).to_contain_text("Doesn't match")
+    assert_contrast(question)
+    box.fill("424242")
+    confirm.click()
+    expect(err).to_contain_text("Delete failed")
+    assert_contrast(question)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(question, min_ratio=100))
+    assert "Delete failed" in scored, scored
+    page.keyboard.press("Escape")
+    expect(question).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_edit_filaments_close_question_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 62.8: Edit Filament's "Close without saving?" is a mountOverlay. Read-only
+    (the filament is read from dev, every write answered in the browser)."""
+    from test_edit_filament_close_question_62_8_e2e import QUESTION, _open_dirty
+    _open_dirty(page, base_url)
+    page.keyboard.press("Escape")
+    question = page.locator(QUESTION)
+    expect(question).to_be_visible()
+    assert_contrast(question)
+    page.keyboard.press("Escape")                            # Keep Editing
+    expect(question).to_have_count(0)
+
+
 # ---------------------------------------------------------------------------
 # Shortcuts overlay (? help)
 # ---------------------------------------------------------------------------

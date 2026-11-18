@@ -271,6 +271,10 @@ const _AUDIT_REFUSES = new Map([
     ['CMD:DROP', 'Drop mode waits until the audit is finished or cancelled.'],
     ['CMD:EJECT', 'Eject mode waits until the audit is finished or cancelled.'],
     ['CMD:EJECTALL', 'Eject All waits until the audit is finished or cancelled.'],
+    // CMD:TRASH:<id> (matched by its start below), and a spool card's own 🗑️ (62.7b).
+    ['CMD:TRASH', 'Eject waits until the audit is finished or cancelled.'],
+    // CMD:DEPOSIT:<place> (matched by its start below), DEPOSIT HERE's own QR (62.6).
+    ['CMD:DEPOSIT', 'DEPOSIT HERE waits until the audit is finished or cancelled: the buffer is kept during an audit.'],
     ['CMD:CLEAR', 'The buffer is kept during an audit: finish or cancel it first.'],
     ['CMD:UNDO', 'Undo Last Move is off while an audit is running. Finish or cancel the audit first.'],
     ['CMD:BULKMOVE', 'A bulk move waits until the audit is finished or cancelled.'],
@@ -278,7 +282,8 @@ const _AUDIT_REFUSES = new Map([
 const _AUDIT_PANEL_COVERS = ['CMD:LOCATIONS', 'CMD:WEIGH', 'CMD:PREV', 'CMD:NEXT'];
 const _auditCommandRefusal = (upper) => {
     if (_AUDIT_REFUSES.has(upper)) return _AUDIT_REFUSES.get(upper);
-    if (upper.startsWith('CMD:TRASH:')) return 'Eject waits until the audit is finished or cancelled.';
+    if (upper.startsWith('CMD:TRASH:')) return _AUDIT_REFUSES.get('CMD:TRASH');
+    if (upper.startsWith('CMD:DEPOSIT:')) return _AUDIT_REFUSES.get('CMD:DEPOSIT');
     const covered = _AUDIT_PANEL_COVERS.includes(upper) || upper.startsWith('CMD:PRINT:');
     if (covered && window.isAuditPanelOpen && window.isAuditPanelOpen()) {
         return 'The audit panel is on top: press Hide, then scan that again.';
@@ -292,6 +297,17 @@ const _auditCommandRefusal = (upper) => {
 window.auditPressRefused = (cmd) => {
     if (!state.auditActive) return false;
     _auditSay(_AUDIT_REFUSES.get(cmd), 'warning');
+    return true;
+};
+
+// A press, or a scan, whose question would open behind the bulk move's panel waits
+// until the move is finished or cancelled, as CMD:TRASH: does (Group 39.9; 62.7b: Eject
+// All's "Nuke all?" and a card's 🗑️ asked behind the panel, z 20000, and their gating
+// dialog then swallowed every scan meant for the session). True when it waited.
+window.bulkMovePressWaits = (what) => {
+    if (!state.bulkMoveActive) return false;
+    showToast(`${what} waits until the bulk move is finished or cancelled`, 'info', 4000);
+    if (window.logClientEvent) window.logClientEvent(`ℹ️ ${what} ignored: a bulk move is armed — finish or cancel it first`, 'INFO');
     return true;
 };
 
@@ -778,6 +794,10 @@ window.commitBulkMove = () => {
         if (document.querySelector('[data-overlay-mount="1"]')
             && !(typeof window.isBulkMovePanelOpen === 'function' && window.isBulkMovePanelOpen())) return;
         if (document.querySelector('.modal.show, .offcanvas.show')) return;
+        // Nor under the ⌨️ list, which lists Shift+B (Group 62.5): read there, it armed
+        // a session and opened its panel under the list, out of sight. The 'B' stays
+        // in the scan buffer, and the list's close takes it out (shortcuts_registry.js).
+        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
         if (_scanInFlight()) return;
         e.preventDefault();
 
@@ -3224,9 +3244,14 @@ const LOC_REPEAT_MS = 1500;
 // text read within LOC_REPEAT_MS of it as a scanner's double read.
 let _lastScanRead = null;
 window._fccLastLocScan = window._fccLastLocScan || null;
+// DEPOSIT HERE's own QR (CMD:DEPOSIT:<place>, Group 62.6) is read twice as a location
+// label is, by the same rule (the review of Group 62): it was the place's LOC: label, and
+// its second read, queued while the first move was answered, put the NEXT spool in the
+// buffer there (on a toolhead, Smart Load then took the first one back off).
+const _readOnceKey = (key) => key.startsWith('LOC:') || key.startsWith('CMD:DEPOSIT:');
 const _isLocRepeat = (key, capturedAt) => {
     const last = window._fccLastLocScan;
-    if (!key.startsWith('LOC:') || !last || last.text !== key) return false;
+    if (!_readOnceKey(key) || !last || last.text !== key) return false;
     const at = capturedAt || Date.now();
     return last.doneAt == null || at < last.doneAt + LOC_REPEAT_MS;
 };
@@ -3293,7 +3318,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // Answered at once unless it reaches the server below (every early return
     // here is an answer); in flight from the request until its answer.
     const locBefore = window._fccLastLocScan;
-    const locScan = locKey.startsWith('LOC:') ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
+    const locScan = _readOnceKey(locKey) ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
     const locInFlight = () => { if (locScan) locScan.doneAt = null; };
     const locDone = () => { if (locScan && locScan.doneAt == null) locScan.doneAt = Date.now(); };
     // A read the open question or the slot picker took by its last label (a key
@@ -3314,11 +3339,13 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // generic CMD-routes below. Returns true on a matched session — fall
     // through to the rest of the dispatch otherwise.
     if (window.routeConfirmScan && window.routeConfirmScan(text)) return;
-    // Group 40.3: a load question on screen (the three-way "Load it instead /
-    // Just store it / Cancel") holds off every other scan until it is answered.
-    // Its own QRs were answered just above; CMD:CANCEL cancels it; anything else
-    // is refused and does nothing (a second slot label used to start a second
-    // move behind the dialog). The dialog says why too: toasts sit under it.
+    // Group 40.3: a question on screen holds off every other scan until it is
+    // answered: the three-way "Load it instead / Just store it / Cancel", and since
+    // Group 62.2 the printing yes / no "Continue Anyway / Cancel" and the Quick-Swap
+    // confirm. Its own QRs were answered just above; CMD:CANCEL cancels it (the
+    // question, never an audit behind it); anything else is refused and does
+    // nothing (a second slot label used to start a second move behind the dialog).
+    // The dialog says why too: toasts sit under it.
     let openQuestion = window._fccOpenMoveQuestion;
     while (openQuestion && openQuestion.element && openQuestion.element.isConnected === false) {
         // Its dialog left the page without being answered (Group 40.3 review,
@@ -3400,6 +3427,29 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     if (auditRefusal) {
         _auditSay(auditRefusal, 'warning');
         if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: ${escLog(auditRefusal)}`, 'WARNING');
+        unread();
+        return;
+    }
+    // The review of Group 62: the two codes below are read only here, above the gating
+    // dialogs' gate further down, so they acted behind "Clear entire Buffer?" or "Nuke
+    // all?" (DEPOSIT HERE moved the top spool under the question, and CMD:CLOSE closed
+    // the window there), where the LOC: label and CMD:DONE they replaced were dropped.
+    // While one is up they wait, and say so; the dialog's own QRs still answer it.
+    if ((upper === 'CMD:CLOSE' || upper.startsWith('CMD:DEPOSIT:'))
+        && (state.activeModal === 'safety' || state.activeModal === 'confirm')) {
+        const why = 'Answer the question on screen first, then scan that again';
+        showToast(why, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: a question is still open`, 'WARNING');
+        unread();
+        return;
+    }
+    // Group 62.7(a): the location window's own Done / Sync QR. CMD:DONE is the audit's
+    // and the bulk move's, which took it while either ran (the window can be open under
+    // a hidden panel); this code, read only here, closes the window whatever else runs.
+    if (upper === 'CMD:CLOSE') {
+        const m = document.getElementById('manageModal');
+        if (m && m.classList.contains('show') && typeof window.closeManage === 'function') window.closeManage();
+        else showToast('ℹ️ No location window is open to close', 'info', 3000);
         return;
     }
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
@@ -3433,6 +3483,48 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         return;
     }
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if (parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
+    // Group 62.6: ⬇️ DEPOSIT HERE's own QR does what clicking the card does: the spool
+    // READY TO SLOT shows, into the place whose Location Manager window is open, through
+    // its slot or Printer picker where the click opens one. It was the place's LOC:
+    // label, which files the whole buffer (that printed label still does). Read only
+    // here: anywhere else, during a bulk move or (above) an audit, it moves nothing.
+    // Read twice, it acts once (_isLocRepeat); a read refused here is no read, so the
+    // QR scanned again once its window is open acts. It is in flight until it is answered,
+    // as a LOC: label's read is until the server's answer (the second review of Group 62: a
+    // second read held by the scan queue while the first move was out, on a head whose
+    // printer was slow to answer, went out once it landed, past the 1.5 s, and put the NEXT
+    // spool there): its move's answer, or the question or picker it opened. A deposit
+    // refused there (nothing in the buffer, a picker that didn't open) is no read either.
+    if (upper.startsWith('CMD:DEPOSIT:')) {
+        const place = upper.slice('CMD:DEPOSIT:'.length).trim();
+        if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) { unread(); return; }
+        const m = document.getElementById('manageModal');
+        const locEl = document.getElementById('manage-loc-id');
+        const open = (m && m.classList.contains('show') && locEl) ? String(locEl.value || '').trim() : '';
+        if (!place || !open || open.toUpperCase() !== place) {
+            showToast(`⬇️ DEPOSIT HERE ignored: open ${place || 'its place'}'s window first, then scan it again`, 'warning', 7000);
+            if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: DEPOSIT HERE `
+                + `${open ? `for another place (${escLog(open)}'s window is open)` : 'with no location window open'}`, 'WARNING');
+            unread();
+            return;
+        }
+        if (typeof window.depositShownSpool === 'function') {
+            locInFlight();
+            let settledYet = false;
+            const settled = (how) => {
+                if (settledYet) return;
+                settledYet = true;
+                clearTimeout(guard);
+                if (how === 'refused') unread(); else locDone();
+            };
+            // Every path answers well inside this (fetchT's 15 s, the printer check's 3 s);
+            // it only keeps a missed answer from dropping this QR's every later read.
+            const guard = setTimeout(() => settled('answered'), 30000);
+            try { window.depositShownSpool(open, { settled }); }
+            catch (e) { settled('refused'); console.error(e); }
+        }
+        return;
+    }
 
     // A CONFIRM scan may fire a dialog's callback ONLY while that dialog is
     // genuinely on screen (fully shown, not dismissed). activeModal/pendingConfirm
@@ -4214,10 +4306,12 @@ const _askRecordSource = (pick, sid, host) => {
         let question = null;
         let statusTimer = null;
         let hostOff = null;
+        let keysOff = null;
         const finish = (value) => {
             if (settled) return;
             settled = true;
             if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
+            if (keysOff) { keysOff(); keysOff = null; }
             if (qr) { try { qr.cleanup(); } catch (_) { /* noop */ } qr = null; }
             if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
             const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
@@ -4265,6 +4359,9 @@ const _askRecordSource = (pick, sid, host) => {
                     <div class="fcc-rs-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
                 </div>`,
             initialFocus: pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none',
+            // own-tab: onKeys below cycles Tab (and ← / →) through its free slots, No box
+            // and Cancel, never its ? button or a held slot.
+            trapTab: false,
         });
         // The host closing settles the question too (Group 40 review, BD-1), as
         // it does confirmActivePrint's: mountOverlay only removes the DOM, which
@@ -4289,16 +4386,30 @@ const _askRecordSource = (pick, sid, host) => {
             statusTimer = setTimeout(() => { line.style.display = 'none'; }, 7000);
         };
         const choose = (f) => finish({ box: String(f.box).toUpperCase(), slot: String(f.slot) });
+        // Its answers take no click until a double click has passed (Group 62.3): it opens
+        // where the Printer picker's question was, right after "Load it instead", and the
+        // second click of a double click on that recorded a home nobody had read. Cancel
+        // takes a click at once; Enter and the QRs answer at once (`acts`, never the click).
+        const armMs = window.questionArmMs ? window.questionArmMs() : 700;
+        const armed = (fn) => (window.armedClick ? window.armedClick(fn, armMs) : fn);
+        const acts = new Map();
         feeds.forEach((f, i) => {
             if (!f.free) return;
             const b = ov.querySelector(`.fcc-rs-opt[data-rs-i="${i}"]`);
-            if (b) b.onclick = () => choose(f);
+            if (b) { acts.set(b, () => choose(f)); b.onclick = armed(() => choose(f)); }
         });
         const noneBtn = ov.querySelector('.fcc-rs-none');
         const cancelBtn = ov.querySelector('.fcc-rs-cancel');
-        noneBtn.onclick = () => finish('');
+        acts.set(noneBtn, () => finish(''));
+        acts.set(cancelBtn, () => finish(null));
+        noneBtn.onclick = armed(() => finish(''));
         cancelBtn.onclick = () => finish(null);
-        ov.addEventListener('keydown', (e) => {
+        // Heard on the document while it is on top and the ⌨️ list is down (Group 62.4):
+        // on its own overlay they went dead after a click on its words, which moves the
+        // focus to the page.
+        const onKeys = (e) => {
+            if (window.isTopOverlay && !window.isTopOverlay(ov)) return;
+            if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
             const order = Array.from(ov.querySelectorAll('.fcc-rs-opt:not([disabled]), .fcc-rs-none, .fcc-rs-cancel'));
             if (e.key === 'Enter') {
                 // A scan's Enter is the scan's (Group 40 review, BD-2): a slower
@@ -4310,18 +4421,30 @@ const _askRecordSource = (pick, sid, host) => {
                 if (order.includes(ae)) {
                     e.preventDefault(); e.stopPropagation();
                     if (window.clearScanBuffer) window.clearScanBuffer();   // a key a person left starts no scan
-                    ae.click();
+                    (acts.get(ae) || (() => ae.click()))();                 // never waits: no second click
+                    return;
                 }
+                // Its other controls (its ?): Enter presses them, as on any button.
+                if (ae && ov.contains(ae)) return;
+                // On no answer (after a click on its words): the keyboard comes back to
+                // the answer it opened on, and the next Enter chooses it. Recording a
+                // home takes a choice the person can see.
+                e.preventDefault(); e.stopPropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                const first = ov.querySelector(pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none');
+                if (first) first.focus();
                 return;
             }
-            if (e.key === 'Tab' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            if ((e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                 const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
                 const idx = order.indexOf(document.activeElement);
-                const next = idx === -1 ? 0 : (idx + (back ? order.length - 1 : 1)) % order.length;
+                const next = idx === -1 ? (back ? order.length - 1 : 0) : (idx + (back ? order.length - 1 : 1)) % order.length;
                 e.preventDefault(); e.stopPropagation();
                 order[next].focus();
             }
-        }, true);
+        };
+        document.addEventListener('keydown', onKeys, true);
+        keysOff = () => document.removeEventListener('keydown', onKeys, true);
         if (window.attachConfirmQRs) {
             const panel = ov.querySelector('.fcc-rs-panel') || handle.panel;
             // With a slot pre-selected, No box gets its own code (Group 40

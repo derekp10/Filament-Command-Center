@@ -19,7 +19,7 @@
 //       backdrop: true,                // dark backdrop (default true)
 //       backdropDismiss: false,        // click-outside cancels (default false)
 //       focusGuard: true,              // capture-phase focusin neutralizer (default true)
-//       trapTab: false,                // Tab stays inside it while it is on top (default false)
+//       trapTab: true,                 // Tab stays inside it while it is on top (default true)
 //       initialFocus: '#my-input',     // selector or HTMLElement
 //       onEscape: () => handle.cleanup(),  // default = handle.cleanup()
 //       onBackdropClick: () => {},
@@ -38,13 +38,17 @@
 //     a confirm overlay. The ⌨️ shortcut list (dashboard.html) sits above both
 //     (backdrop 20200, list 20201): it is read over whatever is open, and the
 //     keys of what is under it stand down while it is up.
-//   - Tab: `trapTab: true` keeps Tab and Shift+Tab inside the overlay while it is on
-//     top, wrapping at the ends, and brings a focus left outside it to its first
-//     control. Group 58 review: Tab walked out of the Loose spools list onto the
-//     audit panel's buttons, where a mouse can't reach and nobody sees the focus,
-//     and Space pressed Cancel Audit. It stops only Tab, with stopPropagation, so
-//     the document's other capture listeners (the legacy picker's, which reads a
-//     Tab as a person's key) still hear it.
+//   - Tab: `trapTab` (the default since Group 62.4) keeps Tab and Shift+Tab inside
+//     the overlay while it is on top, wrapping at the ends, and brings a focus left
+//     outside it to its first control. Group 58 review: Tab walked out of the Loose
+//     spools list onto the audit panel's buttons, where a mouse can't reach and
+//     nobody sees the focus, and Space pressed Cancel Audit; it was opt-in, and Bulk
+//     Move's panel, the empty-weight prompt and most other overlays let Tab walk
+//     out. It stops only Tab, with stopPropagation, so the document's other capture
+//     listeners (the legacy picker's, which reads a Tab as a person's key) still
+//     hear it. An overlay that cycles Tab itself on the document passes
+//     `trapTab: false` with an `// own-tab:` comment naming its handler, or one Tab
+//     moves the focus twice (tests/test_overlay_tab_canary.py).
 //   - Focus guard: capture-phase focusin listener on document that
 //     stopImmediatePropagation's events targeting the overlay subtree. Defeats
 //     Bootstrap's modal _enforceFocus trap without subtree mounting.
@@ -105,18 +109,31 @@
         return !!root && top === root;
     }
 
-    // What Tab can land on right now: in the tab order, enabled and on screen.
+    // What Tab can land on right now: in the tab order, enabled and on screen. A radio
+    // group is one stop, as in a browser: its checked radio, else its first (the review
+    // of Group 62: with the trap the default, Tab walked onto each reason of the Low stock
+    // reason dialog, and Enter on an unchecked one saved the checked one).
     const TAB_CANDIDATES = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]';
+    const _radioName = (el) => (el && el.tagName === 'INPUT' && el.type === 'radio' && el.name) ? el.name : null;
     function _tabStops(root) {
-        return Array.from(root.querySelectorAll(TAB_CANDIDATES)).filter((el) => (
+        const all = Array.from(root.querySelectorAll(TAB_CANDIDATES)).filter((el) => (
             el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[inert]')
             && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden'));
+        return all.filter((el) => {
+            const name = _radioName(el);
+            if (!name) return true;
+            const group = all.filter((r) => _radioName(r) === name);
+            return el === (group.find((r) => r.checked) || group[0]);
+        });
     }
 
     // The stop Tab goes to next. From a focused element that is no stop itself (a list
-    // row out of the tab order, the panel), the nearest stop that way.
+    // row out of the tab order, the panel), the nearest stop that way; from a radio that
+    // isn't its group's stop, its group's stop's neighbour, so Tab leaves the group.
     function _nextTabStop(stops, from, back) {
-        const at = stops.indexOf(from);
+        const name = _radioName(from);
+        let at = stops.indexOf(from);
+        if (at === -1 && name) at = stops.findIndex((el) => _radioName(el) === name);
         if (at !== -1) return stops[(at + (back ? stops.length - 1 : 1)) % stops.length];
         const side = back ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING;
         const near = stops.filter((el) => from.compareDocumentPosition(el) & side);
@@ -132,7 +149,7 @@
         const backdrop = o.backdrop !== false;
         const backdropDismiss = o.backdropDismiss === true;
         const focusGuard = o.focusGuard !== false;
-        const trapTab = o.trapTab === true;
+        const trapTab = o.trapTab !== false;
         const className = o.className || '';
         const occludeList = Array.isArray(o.occlude)
             ? o.occlude

@@ -239,10 +239,30 @@ def test_deposit_card_redraws_synchronously(page: Page, base_url, reset_dom_stat
         f"#{B['id']}, the spool in the centre of the carousel")
     assert f"#{A['id']}" not in text, text
 
-    # The card's QR is the location's (LOC:<id>), so a redraw must keep it.
+    # The card's QR (CMD:DEPOSIT:<id> since Group 62.6) never depends on the spool,
+    # so a redraw must keep it.
     has_qr = page.evaluate(
         "() => { const q = document.getElementById('qr-deposit-trigger'); return !!q; }")
-    assert has_qr, "the redrawn DEPOSIT card lost its LOC: QR placeholder"
+    assert has_qr, "the redrawn DEPOSIT card lost its QR placeholder"
+
+
+def test_scanning_the_cards_qr_writes_the_centre_spool_alone(page: Page, base_url, reset_dom_state_js):
+    """Group 62.6: the card's QR does what its click does. Rotate, scan the card's own
+    code: the spool in the centre of the carousel is written, alone, and nothing goes to
+    the scan route. Before, the QR was the place's LOC: label, which filed the whole
+    buffer there."""
+    be = _open_with_buffer(page, base_url, reset_dom_state_js)
+    page.wait_for_function("() => { const q = document.getElementById('qr-deposit-trigger');"
+                           " return !!q && !!q.title; }", timeout=5_000)
+    assert page.evaluate("() => document.getElementById('qr-deposit-trigger').title") == f"CMD:DEPOSIT:{LOC}"
+    page.evaluate("() => window.nextBuffer()")
+    page.evaluate("(t) => window.processScan(t, 'barcode')", f"CMD:DEPOSIT:{LOC}")
+    _until(page, lambda: be.bodies("/api/manage_contents"), 5_000,
+           "the DEPOSIT QR scan never POSTed /api/manage_contents")
+    bodies = be.bodies("/api/manage_contents")
+    assert len(bodies) == 1, bodies
+    assert bodies[0].get("location") == LOC and bodies[0].get("spool_id") == f"ID:{B['id']}", bodies[0]
+    assert be.bodies("/api/identify_scan") == []
 
 
 def test_deposit_card_disappears_when_the_buffer_empties(page: Page, base_url, reset_dom_state_js):

@@ -236,6 +236,18 @@
     let _closedBy = null;
     let _eating = 0;
 
+    // A scan plainly on its way (a scanner-speed burst, or a buffer that already looks
+    // like a label): the scan's keys, which a close must leave whole. Not
+    // window.scanIsArriving: it also counts any key under 500 ms old, so a person's N
+    // and a quick Escape would keep the N.
+    function _scanPlainlyArriving() {
+        // inv_core.js's `let state` is a global binding, not a window property.
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer.trim() : '';
+        return !!buf && !!((window.isScannerBurst && window.isScannerBurst())
+            || (window.looksLikeScanPayload && window.looksLikeScanPayload(buf)));
+    }
+
     // `ev`: the click that closed it, when a pointer did. `gone`: its dialog closed, or
     // another opened over it, rather than the person closing it.
     function _close(ev, gone) {
@@ -243,6 +255,14 @@
         if (!ov) return;
         const bd = document.getElementById('fcc-shortcuts-overlay-backdrop');
         const was = ctx && ctx.el;
+        // A person closing it (Escape, its ✕, its backdrop, ? again) takes the keys they
+        // pressed under it with it (Group 62.5). The hotkeys it covers stand down while it
+        // is up (the audit panel's N, the Quick-Weigh's D, the grid's Q, Shift+B), so the
+        // scan accumulator kept such a key as a scan's first: a person's Enter under
+        // 500 ms after the close then read as a scan of "n" (enterIsAScan's in-flight
+        // rule), and two keys left made it the accumulator's full 2 s. A scan read under
+        // the list had its Enter before the close; one plainly arriving stays whole.
+        if (!gone && !_scanPlainlyArriving() && window.clearScanBuffer) window.clearScanBuffer();
         ov.style.display = 'none';
         if (bd) bd.style.display = 'none';
         if (document.body) document.body.classList.remove('fcc-shortcuts-up');
@@ -726,12 +746,23 @@
     window.registerShortcut({
         id: 'scan-cmd-done', scope: 'Scan Commands',
         keys: ['CMD:DONE'],
-        description: 'Close the open location manager, or finish an audit: it asks before moving anything.'
+        description: 'Finish an audit (it asks before moving anything) or commit a bulk move. With neither running, it closes the open location window.'
+    });
+    // The review of Group 62: the two codes 62.6 and 62.7 put on the location window.
+    window.registerShortcut({
+        id: 'scan-cmd-close', scope: 'Scan Commands',
+        keys: ['CMD:CLOSE'],
+        description: 'Close the open location window, even during an audit or a bulk move (the QR under its Done / Sync button).'
+    });
+    window.registerShortcut({
+        id: 'scan-cmd-deposit', scope: 'Scan Commands',
+        keys: ['CMD:DEPOSIT:<place>'],
+        description: 'DEPOSIT HERE: the spool at the top of the buffer goes into the place whose location window is open, as clicking the card does. Read twice, it acts once.'
     });
     window.registerShortcut({
         id: 'scan-cmd-cancel', scope: 'Scan Commands',
         keys: ['CMD:CANCEL'],
-        description: 'Cancel without moving anything: an active audit (safe bail; opposite of CMD:DONE), the slot picker, or the load question on screen.'
+        description: 'Cancel without moving anything: the question on screen (a load, printing or Quick-Swap question; never an audit behind it), the slot picker, or an active audit (safe bail; opposite of CMD:DONE).'
     });
     window.registerShortcut({
         id: 'scan-cmd-needlabel', scope: 'Scan Commands',
@@ -760,7 +791,7 @@
     window.registerShortcut({
         id: 'load-question-cancel', scope: 'Load / Store Question',
         keys: ['Esc'],
-        description: 'Cancel: nothing moves, and the QR under Cancel does the same. A question with Load it instead or Just store it holds off other scans until it is answered; the shorter Continue Anyway question doesn\'t.'
+        description: 'Cancel: nothing moves, and the QR under Cancel does the same. The question holds off other scans until it is answered, and so does the shorter Continue Anyway question.'
     });
     window.registerShortcut({
         id: 'scan-cmd-slot', scope: 'Scan Commands',

@@ -581,6 +581,10 @@ class _TeardownPage:
     def on(self, event, handler):
         pass
 
+    def add_init_script(self, script):
+        # conftest.page sets the 62.3 arming seam on every page (window.fccQuestionArmMs).
+        pass
+
     def close(self):
         self.done.append("close")
         if self.browser_gone:

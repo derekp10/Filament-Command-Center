@@ -159,9 +159,11 @@ def _small_question(asked, park=1):
 
 # Every shape of call the doors make, and the sha-256 of what it drew on f59485a.
 # A deliberate change to these dialogs changes these; a new option must not.
+# PIN UPDATED DELIBERATELY (Group 62.2): the yes / no (the first two) holds off scans
+# now, so it draws the three-way's status line, hidden until a scan is refused.
 DEFAULTS = {
-    "{}": "2ef2dbd65a28",
-    "{ activePrint: { printer_name: 'XL', state: 'PRINTING' }, msg: 'Careful <b>now</b>.' }": "6860d5a6c705",
+    "{}": "9fdca2ace2bd",
+    "{ activePrint: { printer_name: 'XL', state: 'PRINTING' }, msg: 'Careful <b>now</b>.' }": "dbc5e69d44a4",
     "{ title: 'Load #57 onto XL-1?', msg: 'Body.', onConfirm() {}, onCancel() {} }": "33850cae1760",
     "{ title: 'Load #57 onto XL-1?', msg: 'Body.', onConfirm() {}, onCancel() {}, onStore() {},"
     " storeLabel: 'Just store it in LR-MDB-1 slot 1' }": "46ef246785ed",

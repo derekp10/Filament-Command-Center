@@ -318,8 +318,9 @@
         // it; a scanner never repeats), never while a scan read earlier still
         // waits to go out, never behind the overlay on top or under the
         // processing dim, never in a Bootstrap window fading out or covered by
-        // its own inline overlay (the delete flow's, data-fcc-cover) or by the
-        // shortcut list, and in a gating dialog only once it is fully on screen.
+        // the shortcut list, and in a gating dialog only once it is fully on
+        // screen. (The delete flow's question was a cover inside its window,
+        // data-fcc-cover; it is a mountOverlay since Group 62.8, the overlay rule.)
         // On window: a [role=button] that answers its own keys (a Printer Status
         // head, a Quick-Swap tile) asks it too, or its press under the dim lifts
         // the dim and lets the next scan past the queue (Group 50 review).
@@ -344,9 +345,6 @@
             if (modal && !modal.classList.contains('show')) return false;
             if (modal && ['confirmModal', 'safetyModal', 'actionModal'].includes(modal.id)
                 && window.isGatingModalOnScreen && !window.isGatingModalOnScreen(modal.id)) return false;
-            const cover = modal && Array.from(modal.querySelectorAll('[data-fcc-cover="1"]'))
-                .find((c) => c.getClientRects().length);
-            if (cover && !cover.contains(el)) return false;
             return !el.closest('.offcanvas.hiding');
         }
         window.personMayPress = personMayPress;
