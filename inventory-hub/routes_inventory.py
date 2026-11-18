@@ -1514,6 +1514,38 @@ def _write_may_have_landed(err):
                 or _NEVER_SENT_MARK in s)
 
 
+_BASED_ON_EPS_G = 0.05   # grams: Spoolman keeps weights as floats
+
+
+def _details_changed(pre, based_on):
+    """Group 63.6: what changed since a weigh screen worked its preview out, or None.
+    `based_on` is what the page sent beside its updates: {mode, capacity, used},
+    the spool's net capacity and used weight as the page had them. What a mode's
+    reading depends on: Net and Gross the capacity (the used weight is the capacity
+    less what is left), Additive the used weight (it adds to it); Set Used nothing.
+    Returns ('capacity' | 'used', the page's figure, Spoolman's figure), or None
+    when nothing the mode depends on changed, or it can't be compared (no check)."""
+    if not isinstance(based_on, dict):
+        return None
+    mode = str(based_on.get('mode') or '').strip().lower()
+    if mode in ('net', 'gross'):
+        key, now = 'capacity', spoolman_api.effective_initial_weight(pre)
+    elif mode == 'additive':
+        key, now = 'used', pre.get('used_weight')
+    else:
+        return None
+    was = based_on.get(key)
+    if isinstance(was, bool):
+        return None
+    try:
+        was_g, now_g = float(was), float(now if now is not None else 0)
+    except (TypeError, ValueError):
+        return None
+    if was_g != was_g or abs(was_g - now_g) <= _BASED_ON_EPS_G:
+        return None
+    return key, was_g, now_g
+
+
 @app.route('/api/spool/update', methods=['POST'])
 def api_spool_update():
     """Generic endpoint to partially update a spool from frontend modules.
@@ -1553,6 +1585,31 @@ def api_spool_update():
 
         pre = spoolman_api.get_spool(spool_id) or {}
         pre_archived = bool(pre.get('archived', False))
+
+        # Group 63.6: a weigh screen sends what its preview was worked out from
+        # (`based_on`); when what its mode depends on changed since (a print
+        # charged the spool, its total was corrected), the save writes nothing and
+        # answers the fresh figures, so a reading of 0 g can't be saved as the old
+        # total's used weight (it archived a spool with grams on its record; R5-4).
+        # Only against the spool's own record: a read that failed is no check, as
+        # is a request without `based_on` (a page from before 63.6).
+        changed = (_details_changed(pre, data.get('based_on'))
+                   if _is_spool_record(pre, spool_id) else None)
+        if changed:
+            what, was_g, now_g = changed
+            words = ("its total" if what == 'capacity' else "its used weight")
+            state.add_log_entry(
+                f"⚖️ Spool #{spool_id}'s reading wasn't saved: {words} changed since it was read "
+                f"({was_g:g} g, now {now_g:g} g). Its preview was redrawn; press Enter again to save.",
+                "WARNING", "ffaa00")
+            return jsonify({
+                "status": "details_changed", "changed": what,
+                "msg": (f"#{spool_id}'s weight changed since this was read: check its preview "
+                        f"and press Enter again"),
+                "fresh": {"initial": spoolman_api.effective_initial_weight(pre) or 0,
+                          "used": float(pre.get('used_weight') or 0),
+                          "archived": bool(pre.get('archived'))},
+            })
 
         if isinstance(updates, dict) and 'location' in updates:
             refusal, updates = _direct_location_write(spool_id, pre, updates)

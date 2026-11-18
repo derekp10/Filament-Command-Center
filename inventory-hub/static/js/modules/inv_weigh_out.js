@@ -1034,7 +1034,9 @@ window.saveWeighOutRow = async (idStr) => {
         // vendor cascade value) so the post-archive record prompt is pre-filled.
         handed = true;
         window.saveSpoolWeight(id, null, { used_weight: r.used_weight }, autoArchive, details.empty,
-            { archiveSwitch: switchOn, empties: remainingAfter <= 0, wasArchived: details.archived === true });
+            { archiveSwitch: switchOn, empties: remainingAfter <= 0, wasArchived: details.archived === true,
+              // Group 63.6: the figures this reading was worked out from.
+              basedOn: { mode, capacity: details.initial, used: details.used }, fromList: true });
     } finally {
         // Not saved after all, and scanned again while its details were read:
         // its box is open for the new reading, with what was typed for it.
@@ -1081,6 +1083,12 @@ const warnStillPlaced = (id, place) => {
 //   empties: the save leaves 0 g by the page's own reading.
 //   wasArchived: the spool was archived before the save, as the page read it
 //     (it stays archived at 0 g with the switch off, so it isn't "kept in stock").
+//   basedOn (Group 63.6): what the reading was worked out from, {mode, capacity,
+//     used}, sent as `based_on`: the server refuses the save when what the mode
+//     depends on changed since (`details_changed`), and the row's preview is drawn
+//     again from the fresh figures it answers, its reading kept.
+//   fromList: the save is a weigh-out row's (its row is redrawn on a refusal;
+//     the Quick-Weigh, which has closed, says to weigh again).
 // A caller that names no switch (an older one): the weigh-out list's switch when
 // it leaves the verdict to this function, as that path always read it, else none,
 // and the server's rule decides, as before.
@@ -1122,6 +1130,7 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     const wasArchived = typeof told.wasArchived === 'boolean' ? told.wasArchived : heldArchived(id);
     const request = { id: id, updates: updates };
     if (archiveSwitch !== null) request.auto_archive = archiveSwitch;
+    if (told.basedOn && typeof told.basedOn === 'object') request.based_on = told.basedOn;
 
     setProcessing(true);
 
@@ -1262,6 +1271,33 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 ? { place: res.still_at.trim() } : null;
             finalize(stillAt);
             
+        } else if (res.status === 'details_changed') {
+            // Group 63.6: the spool's figures changed since this reading was worked
+            // out (a print charged it, its total was corrected): nothing was saved.
+            // Its row's preview is drawn again from the fresh figures, its reading
+            // kept, and its next Enter saves; the Quick-Weigh has closed, so it says
+            // to weigh again. The server logged one WARNING line.
+            setProcessing(false);
+            const fresh = (res && res.fresh) || {};
+            const cached = weighOutDetailsCache.get(id);
+            if (cached) {
+                if (Number.isFinite(Number(fresh.initial))) cached.initial = Number(fresh.initial);
+                if (Number.isFinite(Number(fresh.used))) cached.used = Number(fresh.used);
+                if (typeof fresh.archived === 'boolean') cached.archived = fresh.archived;
+                cached.fetchedAt = Date.now();
+                weighOutDetailsCache.set(id, cached);
+            }
+            markSaving(id, false);
+            const box = told.fromList ? boxFor(id) : null;
+            if (box) {
+                window.updateWeighRowPreview(box);
+                showToast(res.msg || `#${id}'s weight changed since this was read: check its preview and press Enter again`,
+                    'warning', 7000);
+                refocusAfterFailedSave(id);
+            } else {
+                showToast(`#${id}'s weight changed since this window read it, so nothing was saved: open it again to weigh it.`,
+                    'warning', 7000);
+            }
         } else {
             setProcessing(false);
             // Refused: the route's own reason, in words (its `msg`: "Couldn't
@@ -1389,7 +1425,9 @@ window.openQuickWeigh = (spoolId) => {
                     // This window's own switch goes as `auto_archive` (Group 54.7),
                     // never the weigh-out list's.
                     window.saveSpoolWeight(d.id, null, updates, autoArchive, payload.empty_spool_weight,
-                        { archiveSwitch: switchOn, empties, wasArchived: d.archived === true });
+                        { archiveSwitch: switchOn, empties, wasArchived: d.archived === true,
+                          // Group 63.6: the figures this window read when it opened.
+                          basedOn: { mode: payload.mode, capacity: initial, used } });
                 },
             });
         })

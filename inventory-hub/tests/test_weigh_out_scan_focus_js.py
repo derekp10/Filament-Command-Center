@@ -184,8 +184,20 @@ def _box(page, sid):
 def _updates(page):
     """Every weight posted, as sent. Since Group 54.7 each carries `auto_archive`,
     the list's "Auto-Archive 0g" switch (on unless a test turns it off), so the
-    exact bodies below say `"auto_archive": True` (updated deliberately)."""
-    return page.evaluate("() => window.__posts.filter((p) => p.url === '/api/spool/update').map((p) => p.body)")
+    exact bodies below say `"auto_archive": True` (updated deliberately). Since
+    Group 63.6 a row's save also carries `based_on`, the figures its reading was
+    worked out from: it is left out of the bodies here (updated deliberately) and
+    checked on its own (`_bases`; test_weigh_based_on_page_63_6_js)."""
+    bodies = page.evaluate("() => window.__posts.filter((p) => p.url === '/api/spool/update').map((p) => p.body)")
+    for body in bodies:
+        body.pop("based_on", None)
+    return bodies
+
+
+def _bases(page):
+    """The `based_on` of every weight posted (Group 63.6), as sent."""
+    return page.evaluate("() => window.__posts.filter((p) => p.url === '/api/spool/update')"
+                         ".map((p) => p.body.based_on)")
 
 
 def _scans(page):
@@ -250,7 +262,10 @@ def test_a_scanned_spools_box_takes_the_focus_and_its_reading(wo, reading, used)
     ups = _updates(page)
     assert [u["id"] for u in ups] == [57] and ups[0]["updates"]["used_weight"] == used, ups
     unassigned = page.evaluate("() => window.__posts.filter((p) => p.url === '/api/manage_contents').map((p) => p.body.spool_id)")
-    assert unassigned == ([57] if reading == "0" else []), unassigned
+    # PIN UPDATED DELIBERATELY (Groups 63.2 / 63.4): a 0 g reading's archive takes
+    # the spool off its place inside the save itself, so the page posts no
+    # force_unassign after it (it used to, for #57).
+    assert unassigned == [], unassigned
     assert page.evaluate("() => window.__errors") == []
 
 
@@ -1263,6 +1278,9 @@ def test_a_key_typed_on_another_rows_save_button_while_a_scan_is_answered_goes_w
     press(page, "25", 150)
     _saved(page)
     assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
+    # Group 63.6: the save says what its reading was worked out from (#57's 750 g
+    # total and 100 g used, as the list read them).
+    assert _bases(page) == [{"mode": "net", "capacity": 750, "used": 100}], _bases(page)
 
 
 def test_a_backspace_takes_back_a_key_held_for_a_scan(wo):
