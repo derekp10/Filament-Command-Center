@@ -52,8 +52,10 @@ JSON_STRING_FIELDS = [
     # Vendor extras (Group 6 — Edit Modal new panels):
     "website",
     # Group 42.6: a location id is text even when it looks like a number. Group 58:
-    # so is an audit's note, which an older FCC wrote as a bare location id.
-    "fcc_pre_box_location", "fcc_pre_audit_location",
+    # so is an audit's note, which an older FCC wrote as a bare location id. Group
+    # 63.3: and the archive's note, or a place named "12" or "TRUE" went out as a
+    # number or a boolean, and Spoolman refused the whole archive.
+    "fcc_pre_box_location", "fcc_pre_audit_location", "fcc_pre_archive_location",
     # Excluded from Low and Out (stock_report.py): a note such as "123" or "true"
     # must stay text.
     "fcc_stock_excluded", "fcc_stock_excluded_note", "fcc_stock_excluded_at",
@@ -497,9 +499,9 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
     """Mutates `data` in-place to add {archived: True, location: ''} when the
     post-update state would leave remaining_weight at 0 (or below).
 
-    Called from update_spool and create_spool so any path that empties a spool
-    (weigh-out, wizard edit, slurp-in from CSV, etc.) automatically archives
-    and unassigns it — per the user's 2026-04-22 answer of "Auto" on the
+    Called from update_spool only, so any write that empties a spool (the
+    weigh screens, a wizard edit, a print deduct)
+    archives and unassigns it, per the user's 2026-04-22 answer of "Auto" on the
     archive-on-zero backlog item.
 
     `existing_filament_weight` (31.2) is the parent filament's net weight. A
