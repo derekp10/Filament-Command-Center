@@ -7,6 +7,7 @@ import datetime
 import html
 import json
 import re
+import threading
 import time
 
 def parse_inbound_data(data):
@@ -1117,6 +1118,8 @@ def update_spool(sid, data, archive_on_empty=True):
     emptied, unarchive_warning, patch_sent = False, None, False   # likewise (review R1-2)
     refill_ask = None   # Group 63.1: after a toolhead, the page asks where it goes
     clears = {}   # how the extras this write clears are written (_plan_extra_clears)
+    # Group 63.5: a lost answer's verdict is this write's, never an earlier one's.
+    _unanswered_slot().pop(str(sid), None)
     try:
         # [ALEX FIX] Intercept "UNASSIGNED" and coerce into empty string for Spoolman API
         if 'location' in data and isinstance(data['location'], str):
@@ -1246,21 +1249,103 @@ def update_spool(sid, data, archive_on_empty=True):
     return None
 
 
+_LANDED_EPS_G = 0.05   # grams: Spoolman keeps weights as floats
+
+
+def _sent_place_key(value):
+    """A location in the one form a landed check compares: quotes and blanks
+    stripped, upper-cased, "UNASSIGNED" read as '' (the Unassigned list)."""
+    s = _place_text(value).upper()
+    return '' if s == 'UNASSIGNED' else s
+
+
+def landed_as_sent(rec, sent):
+    """Whether spool record `rec`, read back after a write whose answer was lost,
+    holds what `sent` asked (the write update_spool sent, as its edges left it: the
+    used-weight cap, the archive's `archived` and `location`): True when every
+    weight it sent, its `archived` and its location match; False when any doesn't
+    (a read-back of a spool that is gone, with no id, is False too); None when FCC
+    can't tell (a value the record doesn't hold, or a write naming none of them).
+
+    Group 63.5: the one verdict on a lost answer, moved here from routes_inventory
+    (Group 54 review R5-2), so update_spool's own re-read and /api/spool/update's
+    answer can't judge the same write two ways."""
+    if not isinstance(rec, dict) or rec.get('id') is None:
+        return False
+    unknown, checked = False, False
+    for key in ('used_weight', 'initial_weight', 'remaining_weight'):
+        if key not in sent or (key == 'remaining_weight' and 'used_weight' in sent):
+            continue   # with both, Spoolman takes the used weight
+        try:
+            want, held = float(sent[key]), float(rec.get(key))
+        except (TypeError, ValueError):
+            unknown = True
+            continue
+        if key == 'remaining_weight':
+            # Spoolman stores a weight left as used = max(initial - left, 0), so one
+            # above the spool's capacity reads back as the capacity (review R6-6).
+            try:
+                want = min(want, float(rec.get('initial_weight')))
+            except (TypeError, ValueError):
+                pass
+        if abs(held - want) > _LANDED_EPS_G:
+            return False
+        checked = True
+    if 'archived' in sent:
+        if bool(rec.get('archived')) != bool(sent['archived']):
+            return False
+        checked = True
+    if 'location' in sent:
+        if _sent_place_key(rec.get('location')) != _sent_place_key(sent.get('location')):
+            return False
+        checked = True
+    return None if (unknown or not checked) else True
+
+
+# Group 63.5: what update_spool's own re-read after a lost answer found, per thread
+# and spool id, for the caller that made the write (/api/spool/update) to take once
+# (`take_unanswered`), so it reads nothing more and answers from the same verdict
+# the Activity Log line came from, with the 42.3c warning and the refill question.
+_UNANSWERED = threading.local()
+
+
+def _unanswered_slot():
+    slot = getattr(_UNANSWERED, 'by_sid', None)
+    if slot is None:
+        slot = _UNANSWERED.by_sid = {}
+    return slot
+
+
+def take_unanswered(sid):
+    """update_spool's re-read of spool `sid` after this thread's last write to it
+    lost its answer, taken once: {'record', 'answered', 'landed', 'warning',
+    'refill_ask'} (`record` and `answered` as get_spool_answer gives them,
+    `landed` landed_as_sent's verdict; the warning and the question only when an
+    un-archive landed), or None when update_spool read nothing back (a write that
+    neither archives nor un-archives a spool). update_spool clears it for the spool
+    as each write starts, so it is always this thread's last write's."""
+    return _unanswered_slot().pop(str(sid), None)
+
+
 def _after_unanswered_write(sid, data, existing, pre_archived, emptied=False, unarchive_warning=None,
                             refill_ask=None):
     """A PATCH whose answer never came may still have landed: update_spool's
     `timeout` is a READ timeout (a print deduct that empties a spool, a weigh-out
     to 0). When the write would archive the spool, or take it out of the archive,
-    read it again, and if the change landed (archived, or back in stock, where the
-    write put it):
+    read it again (one read: get_spool_answer, judged by landed_as_sent), keep the
+    verdict for the caller (`take_unanswered`, Group 63.5: /api/spool/update used
+    to read it a second time and judge it its own way, so the two could disagree,
+    and its answer lost the 42.3c warning), and if the change landed:
       - write its Activity Log line(s), as for an answered write (Group 54 review
         R1-2: never before the write lands, so one that never landed reads as
         nothing, and one that did still says so);
-      - for an archive that blanked the location, release the spool's own
-        single-slot box (Group 42 review: the deduct re-reads and counts such a
-        charge as landed, and nothing could release the box afterwards: the spool
-        is off the head and its trail is cleared).
-    Never changes the result or LAST_SPOOLMAN_ERROR (get_spool leaves it alone)."""
+      - for an archive that blanked the location, or a refill that took a spool off
+        the head it was archived on, release the spool's own single-slot box
+        (Group 42 review: the deduct re-reads and counts such a charge as landed,
+        and nothing could release the box afterwards: the spool is off the head and
+        its trail is cleared).
+    Never changes the result or LAST_SPOOLMAN_ERROR (get_spool_answer leaves it
+    alone)."""
     try:
         if not isinstance(data, dict) or not isinstance(existing, dict):
             return
@@ -1268,18 +1353,21 @@ def _after_unanswered_write(sid, data, existing, pre_archived, emptied=False, un
         unarchiving = bool(pre_archived) and data.get('archived') is False
         if not (archiving or unarchiving):
             return
-        rec = get_spool(sid)
-        if not isinstance(rec, dict) or rec.get('id') is None:
-            return   # unreadable, or Spoolman's truthy 404 / 5xx body
-        if 'location' in data and _place_text(rec.get('location')).upper() != _place_text(data.get('location')).upper():
-            return   # not where the write put it: the write didn't land
-        if archiving and rec.get('archived'):
+        rec, answered = get_spool_answer(sid)
+        landed = landed_as_sent(rec, data) if isinstance(rec, dict) else None
+        _unanswered_slot()[str(sid)] = {
+            'record': rec, 'answered': answered, 'landed': landed,
+            'warning': unarchive_warning if (landed and unarchiving) else None,
+            'refill_ask': refill_ask if (landed and unarchiving) else None,
+        }
+        if not landed:
+            return   # unreadable, gone, or not what the write put there: it didn't land
+        if archiving:
             _log_archive_change(sid, data, existing, rec, pre_archived, emptied, None)
-            _release_box_on_archive(sid, data, existing, pre_archived)
-        elif unarchiving and not rec.get('archived'):
+        else:
             _log_archive_change(sid, data, existing, rec, pre_archived, emptied, unarchive_warning,
                                 refill_ask)
-            _release_box_on_archive(sid, data, existing, pre_archived)
+        _release_box_on_archive(sid, data, existing, pre_archived)
     except Exception as e:
         state.logger.warning(f"Re-read of #{sid} after an unanswered write skipped: {e}")
 

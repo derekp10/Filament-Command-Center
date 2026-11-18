@@ -1500,7 +1500,6 @@ _ANSWERED_REFUSAL_RE = re.compile(r"HTTP \d{3}:")
 # raised only while connecting (refused, timed out, a name that doesn't resolve) and the
 # request never left FCC (review R6-1). A read error comes out as itself instead.
 _NEVER_SENT_MARK = "Max retries exceeded"
-_LANDED_EPS_G = 0.05   # grams: Spoolman keeps weights as floats
 
 
 def _write_may_have_landed(err):
@@ -1513,45 +1512,6 @@ def _write_may_have_landed(err):
     s = str(err or '')
     return not (_ANSWERED_REFUSAL_RE.match(s) or spoolman_api.PREMERGE_READ_REFUSAL in s
                 or _NEVER_SENT_MARK in s)
-
-
-def _landed_as_sent(rec, updates):
-    """Whether spool record `rec`, read back after a write whose answer was lost,
-    holds what `updates` asked (the write update_spool sent, as its edges left it:
-    the used-weight cap, the archive's `archived` and `location`): True when every
-    weight it sent, its `archived` and its location match; False when any doesn't
-    (a read-back of a spool that is gone, with no id, is False too); None when FCC
-    can't tell (a value the record doesn't hold, or a write naming none of them)."""
-    if not isinstance(rec, dict) or rec.get('id') is None:
-        return False
-    unknown, checked = False, False
-    for key in ('used_weight', 'initial_weight', 'remaining_weight'):
-        if key not in updates or (key == 'remaining_weight' and 'used_weight' in updates):
-            continue   # with both, Spoolman takes the used weight
-        try:
-            sent, held = float(updates[key]), float(rec.get(key))
-        except (TypeError, ValueError):
-            unknown = True
-            continue
-        if key == 'remaining_weight':
-            # Spoolman stores a weight left as used = max(initial - left, 0), so one
-            # above the spool's capacity reads back as the capacity (review R6-6).
-            try:
-                sent = min(sent, float(rec.get('initial_weight')))
-            except (TypeError, ValueError):
-                pass
-        if abs(held - sent) > _LANDED_EPS_G:
-            return False
-        checked = True
-    if 'archived' in updates:
-        if bool(rec.get('archived')) != bool(updates['archived']):
-            return False
-        checked = True
-    if 'location' in updates:
-        if _loc_key(rec.get('location')) != _loc_key(updates.get('location')):
-            return False
-        checked = True
-    return None if (unknown or not checked) else True
 
 
 @app.route('/api/spool/update', methods=['POST'])
@@ -1619,8 +1579,16 @@ def api_spool_update():
             # Quick-Weigh's Additive mode added the grams a second time). A
             # read-back that fails can't tell, and the answer says so.
             if isinstance(updates, dict) and _write_may_have_landed(err):
-                back, _answered = spoolman_api.get_spool_answer(spool_id)
-                landed = _landed_as_sent(back, updates) if isinstance(back, dict) else None
+                # Group 63.5: one read, one verdict. update_spool re-read an archive or
+                # an un-archive itself (its Activity Log line came from that read):
+                # take its verdict, the 42.3c warning and the refill question with it.
+                # Any other write was read by nobody yet, so it is read here.
+                lost = spoolman_api.take_unanswered(spool_id)
+                if lost is not None:
+                    back, landed = lost.get('record'), lost.get('landed')
+                else:
+                    back, _answered = spoolman_api.get_spool_answer(spool_id)
+                    landed = spoolman_api.landed_as_sent(back, updates) if isinstance(back, dict) else None
                 if landed is None:
                     # Review R6-3 / R6-8: a weigh to empty is safe to save again in
                     # every mode (the weight is capped at empty) and the re-save
@@ -1639,7 +1607,11 @@ def api_spool_update():
                 if landed:
                     state.logger.warning(f"Spool #{spool_id}: the save's answer was lost ({err}), "
                                          f"but a read-back shows it landed")
-                    res = back
+                    res = dict(back)
+                    if lost is not None and lost.get('warning'):
+                        res['fcc_warning'] = lost['warning']
+                    if lost is not None and isinstance(lost.get('refill_ask'), dict):
+                        res['fcc_refill_ask'] = lost['refill_ask']
             if not res:
                 return jsonify({"status": "error",
                                 "msg": f"Couldn't save Spool #{spool_id}: {words}",
