@@ -255,7 +255,9 @@ window.computeUsedWeight = computeUsedWeight;
 // on the scale. Derek's picture walk (2026-11-18): Skip on one line ("Skip: save as
 // filament left", its longer words in its title), and the offer worded as an
 // estimate (newSpoolTareOfferWords: "some brands aren't 100% exact on the 1kg
-// filament (prusament will have more sometimes)").
+// filament (prusament will have more sometimes)"); and at its second look
+// (2026-11-19) its buttons centred, "so there isn't so much space to the left of
+// cancel" (they wrap, still centred, on a narrow window).
 const PROMPT_SKIP_TARE = 'skip';
 
 // The words under a new spool's offered empty weight (Group 63.9(a)): the reading
@@ -331,7 +333,7 @@ function promptMissingEmptyWeight({
                 </div>
                 ${offerRow}
                 <div id="${overlayId}-err" role="alert" style="color:#ff8a8a;font-size:var(--fcc-fs-small);margin-top:4px;"></div>
-                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+                <div class="fcc-missing-tare-buttons" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:14px;">
                     <button type="button" id="${overlayId}-cancel" class="btn btn-sm btn-secondary">Cancel</button>
                     ${allowSkip ? `<button type="button" id="${overlayId}-skip" class="btn btn-sm btn-warning" style="white-space:nowrap;"
                         title="No empty weight is kept: the number you typed is saved as the filament left on the spool, as Net does.">Skip: save as filament left</button>` : ''}
