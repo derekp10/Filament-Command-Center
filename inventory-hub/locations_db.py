@@ -169,6 +169,18 @@ def _ensure_json_migration():
     except Exception as e:
         state.logger.error(f"❌ Migration Error: {e}")
 
+_LAST_READ = threading.local()
+
+
+def last_read_failed():
+    """Whether this thread's last load_locations_list() answered [] because the
+    file couldn't be read (the disk refusing it), not because it holds no rows
+    (Group 63 review, K35: a refill read the [] as "no such head" and put a spool
+    back in stock on its head). A caller that must fail safe asks right after its
+    read; a stand-in for load_locations_list never sets it."""
+    return bool(getattr(_LAST_READ, 'failed', False))
+
+
 def load_locations_list():
     """Loads location configurations from the JSON file.
 
@@ -183,6 +195,7 @@ def load_locations_list():
     _ensure_data_dir()
     _ensure_runtime_migration()
     _ensure_json_migration()
+    _LAST_READ.failed = False
 
     if not os.path.exists(JSON_FILE):
         return []
@@ -198,6 +211,7 @@ def load_locations_list():
         raise LocationsCorruptError(JSON_FILE, e) from e
     except Exception as e:
         state.logger.error(f"JSON Read Error: {e}")
+        _LAST_READ.failed = True
         return []
 
     # Ensure we always return a list

@@ -36,6 +36,7 @@ Tests marked RED fail on dev @ e1b22f4 (the branch's base).
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from contextlib import ExitStack
@@ -383,3 +384,115 @@ def test_undo_of_a_load_that_unarchived_a_spool_brings_no_note_back(logs):
     assert out["success"] is True, out
     assert sm.spools[57]["location"] == "CR-CT-2-R2" and sm.spools[57]["archived"] is False
     assert sm.spools[57]["extra"]["fcc_pre_archive_location"] == "", sm.spools[57]["extra"]
+
+
+# ---- Group 63 review ----------------------------------------------------------------------------------
+
+def _unreadable_locations(shape):
+    """locations.json as FCC fails to read it: corrupt (load_locations_list raises),
+    or refused by the disk (it answers [] and says so, locations_db.last_read_failed)."""
+    if shape == "corrupt":
+        def load(*a, **k):
+            raise spoolman_api.locations_db.LocationsCorruptError(
+                "data/locations.json", json.JSONDecodeError("Expecting value (test)", "{", 1))
+    else:
+        def load(*a, **k):
+            flag = getattr(spoolman_api.locations_db, "_LAST_READ", None)   # (none before the fix)
+            if flag is not None:
+                flag.failed = True
+            return []
+    return patch.object(spoolman_api.locations_db, "load_locations_list", side_effect=load)
+
+
+@pytest.mark.parametrize("shape", ["corrupt", "disk-refused"])
+def test_a_spool_archived_on_a_head_fcc_cant_read_the_places_for_is_taken_off(logs, shape):
+    """K18 / K35. 63.2's spool, archived ON XL-1 (from PM-DB-9) with #99 loaded there
+    since, is weighed back while locations.json can't be read: FCC can't tell what
+    XL-1 is, so it is taken off with the 42.3c warning, as a place it can't read is
+    taken (the note branch already did this). RED on 8153b81: it came back in stock
+    on XL-1, its trail kept, beside #99, with no warning; the disk-refused shape read
+    the [] as "no such head" the same way."""
+    sm = WeightWireSpoolman(_spool("XL-1", archived=True, used=1000, physical_source="PM-DB-9",
+                                   physical_source_slot="1"))
+    ctx, _r, _d = _wire(sm, residents={"XL-1": [99]})
+    # The printer map is read from the same file, so it fails with it.
+    ctx = [p for p in ctx if getattr(p, "attribute", "") not in ("load_locations_list", "get_active_printer_map")]
+    ctx.append(_unreadable_locations(shape))
+    try:
+        out = _write(sm, ctx, {"used_weight": 600})
+    finally:
+        flag = getattr(spoolman_api.locations_db, "_LAST_READ", None)
+        if flag is not None:
+            flag.failed = False
+    assert "FCC couldn't check where it was, so it is Unassigned" in (out.get("fcc_warning") or ""), out
+    rec = sm.spools[57]
+    assert rec["archived"] is False and rec["location"] == "", rec
+    assert rec["extra"]["physical_source"] == "" and rec["extra"]["physical_source_slot"] == "", rec
+
+
+def test_control_a_place_with_no_rows_is_still_read_as_a_spoolman_place(logs):
+    """Control: a locations.json that is simply absent (no rows, read fine) is no
+    failure: a spool archived on a Spoolman-native shelf stays there, as before."""
+    sm = WeightWireSpoolman(_spool("GARAGE SHELF", archived=True, used=1000))
+    ctx, _r, _d = _wire(sm)
+    ctx = [p for p in ctx if getattr(p, "attribute", "") not in ("load_locations_list", "get_active_printer_map")]
+    ctx += [patch.object(spoolman_api.locations_db, "load_locations_list", return_value=[]),
+            patch.object(spoolman_api.locations_db, "get_active_printer_map", return_value={})]
+    out = _write(sm, ctx, {"used_weight": 600})
+    assert not out.get("fcc_warning"), out
+    assert sm.spools[57]["location"] == "GARAGE SHELF" and sm.spools[57]["archived"] is False
+
+
+def test_an_untick_at_nothing_left_on_a_head_takes_it_off_and_asks(logs):
+    """C1. 63.2's stuck spool is always at 0 g: an untick of Archived in Edit Spool
+    takes it out of the archive. On XL-1, with #99 loaded since, it is taken off the
+    head and asked about, as a refill there is. RED on 8153b81: it came back in
+    stock on XL-1, its trail kept, beside #99, with no question and no warning."""
+    sm = WeightWireSpoolman(_spool("XL-1", archived=True, used=1000, physical_source="PM-DB-9",
+                                   physical_source_slot="1"))
+    ctx, _r, detached = _wire(sm, residents={"XL-1": [99]})
+    out = _write(sm, ctx, {"archived": False})
+    assert out["fcc_refill_ask"] == {"place": "XL-1", "room": "LR", "held_by": [99]}, out
+    rec = sm.spools[57]
+    assert rec["archived"] is False and rec["location"] == "", rec
+    assert rec["extra"]["physical_source"] == "", rec
+    assert detached == [("PM-DB-9", "XL-1")], detached
+
+
+def test_an_untick_at_nothing_left_in_a_box_slot_another_spool_claims_goes_unassigned(logs):
+    """C1, a box slot: #12 holds LR-MDB-1 slot 2 now. RED on 8153b81: back in stock
+    claiming slot 2 beside #12."""
+    sm = WeightWireSpoolman(_spool("LR-MDB-1", archived=True, used=1000, container_slot="2"))
+    ctx, _r, _d = _wire(sm, residents={"LR-MDB-1": [
+        {"id": 12, "location": "LR-MDB-1", "is_ghost": False, "slot": "2"}]})
+    out = _write(sm, ctx, {"archived": False})
+    assert out["fcc_warning"] == ("#57 is back in stock (0 g), but LR-MDB-1 slot 2 now holds #12, so it is "
+                                  "Unassigned — scan it to where you put it."), out
+    assert sm.spools[57]["location"] == "" and sm.spools[57]["extra"]["container_slot"] == ""
+
+
+def test_control_an_untick_at_nothing_left_unassigned_stays_unassigned(logs):
+    """Control (Claude's call 3): Unassigned, an untick at 0 g uses its note up and
+    moves nowhere, asking nothing."""
+    sm = WeightWireSpoolman(_spool("", archived=True, used=1000, note="XL-1"))
+    ctx, reads, _d = _wire(sm)
+    out = _write(sm, ctx, {"archived": False})
+    assert not out.get("fcc_refill_ask") and not out.get("fcc_warning"), out
+    assert sm.spools[57]["location"] == "" and _note(sm) == "", sm.spools[57]
+    assert reads == []
+
+
+@pytest.mark.parametrize("runs_from_box, released", [(True, []), (False, [("PM-DB-9", "XL-1")])],
+                         ids=["another-spool-runs-from-the-box", "control-nothing-runs-from-it"])
+def test_a_refill_off_a_head_keeps_the_box_another_spool_runs_from(logs, runs_from_box, released):
+    """K24. #57 was archived on XL-1 from PM-DB-9 (63.2's stuck spool); since, #99
+    went into PM-DB-9 and was loaded onto XL-1, which attached the box again. A
+    refill takes #57 off the head and must leave PM-DB-9 attached for #99. RED on
+    8153b81: PM-DB-9 was let go, and the Quick-Swap grid lost it for XL-1."""
+    sm = WeightWireSpoolman(_spool("XL-1", archived=True, used=1000, physical_source="PM-DB-9",
+                                   physical_source_slot="1"))
+    box = [{"id": 99, "location": "PM-DB-9", "is_ghost": True, "slot": "1", "deployed_to": "XL-1"}]
+    ctx, _r, detached = _wire(sm, residents={"XL-1": [99], "PM-DB-9": box if runs_from_box else []})
+    out = _write(sm, ctx, {"used_weight": 600})
+    assert out["fcc_refill_ask"]["place"] == "XL-1", out
+    assert detached == released, detached

@@ -1705,9 +1705,11 @@ def _cancel_monitor_loop():
             except Exception:
                 pass
         # Group 63.2: a spool a weigh archived in place that FCC couldn't take off
-        # is tried again here, FCC's only always-on loop, whatever the printers
-        # (the tick returns early with none). retry_due never raises.
-        archive_takeoff.retry_due()
+        # is tried again from here, FCC's only always-on loop, whatever the printers
+        # (the tick returns early with none), on a thread of its own (Group 63
+        # review, K29: each try can wait on several Spoolman timeouts, and this
+        # loop is the only one that sees a print end). Never raises.
+        archive_takeoff.start_retry_pass()
         # Adaptive cadence: fast while the fleet is busy, slow when idle.
         time.sleep(_CANCEL_MONITOR_FAST_S if busy else _CANCEL_MONITOR_IDLE_S)
 

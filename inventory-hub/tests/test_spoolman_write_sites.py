@@ -438,7 +438,7 @@ WRITE_SITES = {
     # --- archive_takeoff.py: a spool a weigh archived at its place, taken off (Group
     #     63.2): the write, and its retry / the listed line's button through _try ---
     ("archive_takeoff.py", "take_off", "update_spool"): (1, "archive_takeoff.take_off"),
-    ("archive_takeoff.py", "_try", "archive_takeoff.take_off"): (1, None),
+    ("archive_takeoff.py", "_try_claimed", "archive_takeoff.take_off"): (1, None),
 
     # --- routes_inventory.py: the wizard, vendors, creates, /api/spool/update ---
     ("routes_inventory.py", "_take_archived_off", "update_spool"): (1, "_take_archived_off"),

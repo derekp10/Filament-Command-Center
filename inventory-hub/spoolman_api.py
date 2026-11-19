@@ -701,11 +701,15 @@ def _take_off_on_refill(data, existing):
 
 def _places():
     """(the active printer map, locations.json's rows by upper-cased LocationID),
-    or (None, None) when locations.json can't be read."""
+    or (None, None) when locations.json can't be read: a corrupt file raises, and
+    one the disk refused answers [] with locations_db.last_read_failed() (Group 63
+    review, K35: read as no rows, the head was no head)."""
     try:
+        listed = locations_db.load_locations_list() or []
+        if locations_db.last_read_failed() is True:
+            raise OSError("locations.json couldn't be read")
         printer_map = locations_db.get_active_printer_map() or {}
-        rows = {str(r.get('LocationID', '')).strip().upper(): r
-                for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+        rows = {str(r.get('LocationID', '')).strip().upper(): r for r in listed if isinstance(r, dict)}
         return printer_map, rows
     except Exception as e:
         state.logger.warning(f"63.1: couldn't read the locations: {e}")
@@ -738,9 +742,33 @@ def _refill_ask(sid, place, rows):
 
 
 def _back_in_stock_warning(sid, remaining, why):
-    """Group 42.3c's words for a refilled spool that couldn't go where it was."""
-    return (f"#{sid} is back in stock ({remaining:.0f} g), but {why}, so it is Unassigned — "
+    """Group 42.3c's words for a refilled spool that couldn't go where it was (its
+    grams left out when there is no reading: an untick)."""
+    grams = (f" ({remaining:.0f} g)" if isinstance(remaining, (int, float)) and not isinstance(remaining, bool)
+             and remaining == remaining else "")
+    return (f"#{sid} is back in stock{grams}, but {why}, so it is Unassigned — "
             f"scan it to where you put it.")
+
+
+def _box_runs_another(box, head, sid):
+    """Whether another spool runs on `head` from single-slot box `box` now (a spool
+    deployed from the box that is on that head), from one strict read of the box;
+    True when the box can't be read, so its attachment is kept (Group 63 review,
+    K24: a spool taken off a head after the next spool from the same PolyDryer was
+    loaded there let the box go, and the Quick-Swap grid lost it). A stale
+    attachment shows with Unbind; a lost one shows nothing."""
+    box, head = str(box).strip().upper(), str(head).strip().upper()
+    try:
+        items = get_spools_at_location_detailed_strict(box) or []
+    except Exception as e:
+        state.logger.warning(f"kept {box} attached to {head} for #{sid}: couldn't read the box ({e})")
+        return True
+    others = [it.get('id') for it in items
+              if isinstance(it, dict) and it.get('is_ghost') and str(it.get('id')) != str(sid)
+              and _place_text(it.get('deployed_to')).upper() == head]
+    if others:
+        state.logger.info(f"kept {box} attached to {head}: #{others[0]} runs on it from there")
+    return bool(others)
 
 
 def _refill_place_taken(existing, lid, rows):
@@ -806,7 +834,9 @@ def _refill_outcome(data, existing):
         (`_unarchive_destination`, 42.3c's warning); no note, or an old "UNKNOWN"
         one (Claude's call 2), leaves it Unassigned.
     Whatever the outcome, the note is used up (Claude's call 3), an untick of a
-    spool still at 0 g included; it moves nowhere.
+    spool still at 0 g included; Unassigned, that one moves nowhere, and archived
+    AT a place it is judged as a refill there is (Group 63 review, C1). A place
+    FCC can't read the locations for counts as taken (K18).
 
     The caller's explicit intent always wins: if the payload already sets
     `archived` or `location`, we leave those keys alone. A payload that sets
@@ -831,11 +861,9 @@ def _refill_outcome(data, existing):
     if not weighed and not untick:
         return None, None
     remaining = _refill_remaining(data, existing)
-    if remaining is None or remaining <= 0:
-        # Still empty, or no reading: the archive stays, unless the caller
-        # unticks it, which takes it out of the archive where it is.
-        if untick:
-            _use_note_up(data, existing)
+    empty = remaining is None or remaining <= 0
+    if empty and not untick:
+        # Still empty, or no reading: the archive stays.
         return None, None
     if 'archived' not in data:
         data['archived'] = False
@@ -845,12 +873,22 @@ def _refill_outcome(data, existing):
     sid = existing.get('id')
     where = _place_text(existing.get('location'))
     note = _note_of(existing)
+    if empty and not where:
+        # An untick of a spool still at 0 g takes it out of the archive where it
+        # is: Unassigned, its note used up (Claude's call 3).
+        return None, None
     if not where and not note:
         return None, None
     printer_map, rows = _places()
     if where:
+        # Archived AT a place. Group 63 review: an untick at 0 g gets the same
+        # protection as a refill (C1: 63.2's stuck spool is always at 0 g, and an
+        # untick put it back in stock on its head, beside the spool loaded there
+        # since), and a place FCC can't tell (locations.json unreadable) counts as
+        # taken (K18: it came back in stock on its head, its trail kept).
         if rows is None:
-            return None, None   # can't tell what the place is: it stays, as before
+            _take_off_on_refill(data, existing)
+            return _back_in_stock_warning(sid, remaining, "FCC couldn't check where it was"), None
         lid = where.upper()
         if locations_db.head_holds_one_spool(lid, printer_map, rows):
             _take_off_on_refill(data, existing)
@@ -969,7 +1007,14 @@ def _release_box_on_archive(sid, data, existing, pre_archived):
         if not head or head not in locations_db.get_active_printer_map():
             return
         box = str(((existing or {}).get('extra') or {}).get('physical_source') or '').strip().strip('"').upper()
-        if box and box != head and locations_db.detach_single_slot_box(box, head):
+        if not box or box == head:
+            return
+        # Group 63 review (K24): a spool weighed back into stock off a head it was
+        # archived on lets its box go only while no other spool runs on that head
+        # from that box (the next spool from the same PolyDryer, loaded since).
+        if refill_off and _box_runs_another(box, head, sid):
+            return
+        if locations_db.detach_single_slot_box(box, head):
             why = "was archived empty" if archive_edge else "was weighed back into stock off it"
             state.add_log_entry(f"🔓 {box} detached from {head} — its spool #{sid} {why}", "INFO")
     except Exception as e:

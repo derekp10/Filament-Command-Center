@@ -3278,6 +3278,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             auto_deploy_skipped[str(sid)] = f"only the last spool placed in slot {target_slot} feeds {th}"
         to_deploy = placed[-1:]
         if to_deploy:
+            # Group 63 review (K17 / K25): the head this chain loads gets Derek's
+            # hook too (perform_smart_move runs it only for the outer move, whose
+            # target is the box): a slot-label scan or a deposit into a bound slot
+            # is the usual way a spool reaches a head. Never raises.
+            archive_takeoff.retry_at(th)
             chain_origin = f'auto_deploy_from_{origin or "smart_move"}'
             outer_sink = getattr(_chain_undo_sink, 'records', None)
             _chain_undo_sink.records = []
