@@ -59,7 +59,13 @@ def test_process_scan_routes_to_the_picker_before_any_command():
     # refused doesn't (round 8): unread(); nor one the question refused (round
     # 9: a held feed slot).
     assert "const picker = window.routePickerScan ? window.routePickerScan(text) : false;" in body
-    assert "if (picker) { if (picker === 'refused') unread(); else routed(); return; }" in body
+    # PIN UPDATED DELIBERATELY (Group 63 review, round 3): a bare CMD:CANCEL the picker
+    # took stamps the closed-question time too, so the scanner's second read of it can't
+    # cancel the refill question that opens behind the picker. Read with its spaces
+    # folded, since the branch is a block now.
+    compact = re.sub(r"\s+", " ", body)
+    assert ("if (picker) { if (picker === 'refused') unread(); else { if (/CMD:CANCEL$/.test(upper)) "
+            "_questionCancelledAt = Date.now(); routed(); } return; }") in compact
     # PIN UPDATED DELIBERATELY (Group 61, 2026-10-29): the route gets the
     # scan's source too, so the legacy-ID picker's pick of a scanned label keeps
     # it (a pick from its list goes as 'keyboard', no label verify).

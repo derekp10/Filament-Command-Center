@@ -22,6 +22,7 @@ from __future__ import annotations
 import copy
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -196,8 +197,10 @@ def test_five_failed_retries_list_it_once_with_its_button_and_it_keeps_trying(ht
     line = listed[0]
     assert line["type"] == "WARNING" and line.get("meta") == {
         "type": "archive_takeoff_pending", "spool_id": 57, "place": "XL-1"}, line
+    # PIN UPDATED DELIBERATELY (review round 3): the button names the place its line
+    # lists, so a press after a try left the spool elsewhere is answered as that.
     assert ('<button type="button" class="btn btn-sm btn-outline-warning ms-2 py-0 px-1 fcc-takeoff-btn" '
-            'data-takeoff-spool="57">Take it off</button>') in line["msg"], line
+            'data-takeoff-spool="57" data-takeoff-place="XL-1">Take it off</button>') in line["msg"], line
     assert "(Spoolman refused it: database is locked)" in line["msg"], line
 
 
@@ -723,6 +726,7 @@ def test_a_store_that_cant_write_never_fails_a_take_off_that_landed(http, client
     def refuse(data):
         raise PermissionError(13, "Permission denied")
     monkeypatch.setattr(archive_takeoff, "_save", refuse)
+    pressed = time.time()
     resp = client.post("/api/spool/archive_takeoff", json={"id": 57})
     assert resp.status_code == 200, resp.data[:200]
     body = resp.get_json()
@@ -730,8 +734,13 @@ def test_a_store_that_cant_write_never_fails_a_take_off_that_landed(http, client
     assert http.records["spool"][57]["location"] == ""
     assert _logs("Took archived Spool #57 off XL-1"), state.RECENT_LOGS
     gets = len(http.gets)
-    archive_takeoff.retry_due(now=1031.0)
+    # PIN UPDATED DELIBERATELY (review round 3, the critic): the press keeps its next
+    # try on the real clock, so the old check (1031.0) held with no backoff at all.
+    # The loop's real next tick tries nothing; once the backoff has passed, it does.
+    archive_takeoff.retry_due(now=pressed + 5)
     assert len(http.gets) == gets, http.gets[gets:]
+    archive_takeoff.retry_due(now=time.time() + archive_takeoff.SLOW_RETRY_S + 5)
+    assert len(http.gets) > gets
 
 
 def test_after_a_set_aside_store_the_button_checks_the_spool(http, client):

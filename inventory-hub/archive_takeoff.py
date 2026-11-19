@@ -337,11 +337,14 @@ def _reads_empty(rec):
         return True
 
 
-def _button(sid):
+def _button(sid, place=''):
     """The listed line's button, in the line itself so every view of the log has it
-    (the audit report's 📝 pattern); the page's one delegated click posts it."""
+    (the audit report's 📝 pattern); the page's one delegated click posts it, with
+    the place the line names (`data-takeoff-place`, review round 3: take_off_now
+    reads a spool archived anywhere else as one FCC left there)."""
+    at = f' data-takeoff-place="{html.escape(_place(place), quote=True)}"' if _place(place) else ''
     return (' <button type="button" class="btn btn-sm btn-outline-warning ms-2 py-0 px-1 fcc-takeoff-btn" '
-            f'data-takeoff-spool="{int(sid)}">Take it off</button>')
+            f'data-takeoff-spool="{int(sid)}"{at}>Take it off</button>')
 
 
 def _sentence(words):
@@ -361,11 +364,11 @@ def _log_listed(rec, again=False):
         # the words hedge, whatever place the guess names.
         msg = (f"⚠️ {lead}Spool #{sid} was weighed empty while Spoolman wasn't answering, and FCC "
                f"couldn't check whether it came off {_where(place)}{reason}. If it is still there, it is "
-               f"hidden there until it comes off, and FCC keeps trying.{_button(sid)}")
+               f"hidden there until it comes off, and FCC keeps trying.{_button(sid, place)}")
     elif place:
         msg = (f"⚠️ {lead}Spool #{sid} is archived but still at {_where(place)}: "
                f"FCC couldn't take it off there{reason}. "
-               f"It is hidden there until it comes off, and FCC keeps trying.{_button(sid)}")
+               f"It is hidden there until it comes off, and FCC keeps trying.{_button(sid, place)}")
     else:
         msg = (f"⚠️ {lead}Spool #{sid} was weighed empty, and FCC couldn't check that it came off "
                f"its place{reason}. If it is still there, it is hidden there until it comes off, "
@@ -565,9 +568,11 @@ def retry_at(place, now=None, placeless=True):
         state.logger.warning(f"63.2: the take-off retry before a move onto {lid} skipped: {e}")
 
 
-def take_off_now(sid):
+def take_off_now(sid, listed_at=None):
     """The listed line's "Take it off" button: one try now. Returns (ok, msg), the
-    msg in words for the page's toast."""
+    msg in words for the page's toast. `listed_at`: the place the line names (its
+    button's `data-takeoff-place`; None from an older line or a line that names no
+    place)."""
     try:
         rec = get(sid)
     except StoreUnreadable as e:
@@ -577,13 +582,21 @@ def take_off_now(sid):
     if rec is None:
         # Nothing written down: the spool says whether that is the whole story
         # (review round 2: after a store was set aside, a listed line's button
-        # answered "nothing left" while its spool stayed archived, hidden).
+        # answered "nothing left" while its spool stayed archived, hidden). Review
+        # round 3: a spool archived somewhere other than the place its line names
+        # was moved there, and a try dropped it as left there (Derek's 43.2 rule:
+        # an archived spool stays where it was put), so it is told so, as a press
+        # before that drop was; only one still at that place, or a line that names
+        # none, is told to unassign it.
         got, answered = spoolman_api.get_spool_answer(sid)
         if not answered or got is None:
             return False, (f"FCC has #{int(sid)} on no list to take off, and couldn't check it in Spoolman just "
                            f"now: try again in a moment.")
         at = _place(got.get('location')) if isinstance(got, dict) else ''
+        named = _place(listed_at)
         if isinstance(got, dict) and str(got.get('id')) == str(sid) and got.get('archived') and at:
+            if named and at.upper() != named.upper():
+                return True, f"#{int(sid)} isn't at {named} any more, so it was left where it is."
             return False, (f"#{int(sid)} is still archived at {at}, and FCC's list of spools to take off "
                            f"doesn't hold it: set its Location to Unassigned in Edit Spool to take it off.")
         return True, f"FCC has nothing left to take off for #{int(sid)}."

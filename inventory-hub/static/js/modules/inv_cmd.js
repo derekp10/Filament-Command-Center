@@ -3289,7 +3289,8 @@ const _quickPickItem = (locData, res) => {
     return direct;
 };
 
-// When a bare CMD:CANCEL last closed an open question (processScan).
+// When a bare CMD:CANCEL last closed an open question, the slot picker or a gating
+// dialog (processScan).
 let _questionCancelledAt = 0;
 
 // --- SCAN ROUTER ---
@@ -3341,12 +3342,11 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // generic CMD-routes below. Returns true on a matched session — fall
     // through to the rest of the dispatch otherwise.
     // A dialog's own Cancel QR it answered closed a question too: a second read of
-    // it, or of a bare CMD:CANCEL, is the same press (Group 63 review, round 2).
+    // it is a closed dialog's QR (Group 63 review, round 2; below). It stamps no
+    // bare cancel: a bare CMD:CANCEL is never its second read, and the stamp held a
+    // person's Cancel Audit off for 1.5 s after a question's own Cancel QR (round 3).
     const cancelQr = /CMD:CANCEL:[A-Z0-9_-]+$/.test(upper);
-    if (window.routeConfirmScan && window.routeConfirmScan(text)) {
-        if (cancelQr) _questionCancelledAt = Date.now();
-        return;
-    }
+    if (window.routeConfirmScan && window.routeConfirmScan(text)) return;
     // Group 40.3: a question on screen holds off every other scan until it is
     // answered: the three-way "Load it instead / Just store it / Cancel", and since
     // Group 62.2 the printing yes / no "Continue Anyway / Cancel" and the Quick-Swap
@@ -3369,8 +3369,9 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         // question and the post-archive prompt), so the next one opens the moment
         // one is answered. A session Cancel QR routeConfirmScan didn't answer is a
         // closed dialog's, never this one's; and a bare CMD:CANCEL read right
-        // after the CMD:CANCEL that closed a question, nothing read between them
-        // and within LOC_REPEAT_MS, is that read again (a scanner's double read):
+        // after the CMD:CANCEL that closed a question (or the slot picker, round
+        // 3), nothing read between them and within LOC_REPEAT_MS, is that read
+        // again (a scanner's double read):
         // either cancelled the next question unread. A CMD:CANCEL after another
         // scan (the slot label that opened this question) is meant, and answers it.
         if (cancelQr) {
@@ -3380,9 +3381,14 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             unread();
             return;
         }
+        // Said on the question too (review round 3: only a log line said it, and the
+        // question stayed up with no word why). A third read stays compared with the
+        // second, so a scanner's repeats never cancel it either.
         const readAt = capturedAt || Date.now();
         if (/CMD:CANCEL$/.test(upper) && prevRead && /CMD:CANCEL$/.test(prevRead.text)
                 && readAt - prevRead.at < LOC_REPEAT_MS && readAt - _questionCancelledAt < LOC_REPEAT_MS) {
+            if (openQuestion.flash) openQuestion.flash(
+                'Ignored a second read of Cancel: it answered the question before this one. Scan it again in a moment to cancel this one.');
             if (window.logClientEvent) window.logClientEvent(
                 `ℹ️ A second read of CMD:CANCEL was ignored, so "${escLog(openQuestion.title)}" stays open: the first read answered the question before it`, 'INFO');
             unread();
@@ -3407,8 +3413,18 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // Group 40.1: an open slot picker claims every scan next. A choice's label
     // picks it, CMD:CANCEL cancels, anything else is refused with a warning, so
     // a scan never acts behind the picker (slot_picker.js; 'refused' says so).
+    // A bare CMD:CANCEL it took closed a question too (Group 63 review, round 3: a
+    // picker the refill question opened, cancelled, let the next refill question
+    // open, and the scanner's second read of that Cancel cancelled it unread).
     const picker = window.routePickerScan ? window.routePickerScan(text) : false;
-    if (picker) { if (picker === 'refused') unread(); else routed(); return; }
+    if (picker) {
+        if (picker === 'refused') unread();
+        else {
+            if (/CMD:CANCEL$/.test(upper)) _questionCancelledAt = Date.now();
+            routed();
+        }
+        return;
+    }
     // A session-scoped CMD:CONFIRM:<sid> that routeConfirmScan didn't claim
     // belongs to a dialog that has already closed. Never let it fall through to
     // the substring-matching routes below and answer whatever unrelated dialog

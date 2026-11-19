@@ -2400,6 +2400,10 @@ def _isolate_archive_takeoff_store(tmp_path, monkeypatch):
     except ImportError:  # pragma: no cover - backend not importable in this env
         return
     monkeypatch.setattr(archive_takeoff, "_STORE_PATH", str(tmp_path / "pending_archive_takeoffs.json"))
+    # Its in-memory next tries and said-once marks too (Group 63 review, round 3:
+    # module-level, they carried over from one test to the next).
+    monkeypatch.setattr(archive_takeoff, "_NEXT_AT_MEM", {})
+    monkeypatch.setattr(archive_takeoff, "_STORE_FAIL_SAID", set())
 
 
 # --- Group 38.7 — make `--offline` structurally airtight ---------------------

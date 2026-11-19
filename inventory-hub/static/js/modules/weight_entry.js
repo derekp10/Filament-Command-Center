@@ -409,8 +409,12 @@
                 const offer = (mode === 'gross' && !allowUnknownInitial && Number(currentUsed) === 0
                                && Number(initial) > 0 && v > Number(initial))
                     ? Math.round((v - Number(initial)) * 10) / 10 : null;
+                // With no net known (the wizard), what is on the spool is the reading
+                // less its empty weight: a figure at or above the reading is refused
+                // (review round 3: it wrote a total of 0 g into the form).
                 const ceiling = (mode === 'gross' && typeof window.tareCeiling === 'function')
-                    ? window.tareCeiling(v, Number(initial), Number(currentUsed)) : null;
+                    ? window.tareCeiling(v, Number(initial), Number(currentUsed), { unknownNet: !!allowUnknownInitial })
+                    : null;
                 const tare = await window.promptMissingEmptyWeight({
                     vendor: promptCtx.vendor || '',
                     material: promptCtx.material || '',
@@ -422,6 +426,7 @@
                     // Group 63 review (K05, round 2): the heaviest empty weight this reading allows.
                     maxTare: ceiling ? ceiling.max : null,
                     maxTareWhy: ceiling ? ceiling.why : '',
+                    maxTareBelow: !!(ceiling && ceiling.below),
                 });
                 if (tare === null) { inputEl.focus(); return; }  // user cancelled: back to the reading
                 let effectiveMode = mode;

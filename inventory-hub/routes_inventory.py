@@ -1089,7 +1089,10 @@ def _take_archived_off(sid, original, written, dirty, moving=True, report=None):
         # Group 63 review, round 2: a locations.json FCC can't read (corrupt, or
         # refused by the disk) can't say whether `was` is a head: the spool stays
         # where it is and the Save says so (report['unread']), never raising after
-        # the spool's own write landed.
+        # the spool's own write landed. Round 3: only while it is still filed
+        # there. A weigh to empty's archive edge takes it off any place itself, and
+        # the Save said it "stays hidden" at a place it had just left.
+        blanked = isinstance(written, dict) and 'location' in written and not _loc_key(written.get('location'))
         try:
             locations_db.forget_read_failure()
             listed = locations_db.load_locations_list() or []
@@ -1097,13 +1100,13 @@ def _take_archived_off(sid, original, written, dirty, moving=True, report=None):
         except locations_db.LocationsCorruptError:
             listed, unread = [], True
         if unread:
-            if isinstance(report, dict):
+            if isinstance(report, dict) and not blanked:
                 report['unread'] = was
             return None
         rows = {str(r.get('LocationID', '')).strip().upper(): r for r in listed if isinstance(r, dict)}
         if not logic._holds_one_spool(was, locations_db.get_active_printer_map(listed) or {}, rows):
             return None
-        if isinstance(written, dict) and 'location' in written and not _loc_key(written.get('location')):
+        if blanked:
             # The archive edge took it off already (a weigh to empty): it noted the
             # head and let the box go. Nothing more to write (K30).
             return was
@@ -1141,6 +1144,23 @@ def _take_archived_off(sid, original, written, dirty, moving=True, report=None):
     state.add_log_entry(f"📦 #{sid} is archived ({_archived_why(written)}), so it was taken off {was}"
                         f"{' before its move' if moving else ''}", "INFO", "00ccff")
     return was
+
+
+def _archived_on_head(rec):
+    """Review round 3: the toolhead an archived spool sits ON (63.2's spool FCC
+    couldn't take off, or one moved there while archived), by the engine's
+    one-spool rule (locations_db.head_holds_one_spool), as its record writes it;
+    else ''. A locations.json FCC can't read answers '': the refill edge then
+    decides, with 42.3c's warning."""
+    if not isinstance(rec, dict) or not rec.get('archived'):
+        return ''
+    where = str(rec.get('location') or '').strip().strip('"').strip()
+    if not _loc_key(where):
+        return ''
+    printer_map, rows = spoolman_api._places()
+    if rows is None:
+        return ''
+    return where if locations_db.head_holds_one_spool(where, printer_map, rows) else ''
 
 
 def _archived_why(rec):
@@ -1280,6 +1300,9 @@ def api_edit_spool_wizard():
     archived_off = None
     # Group 63 review (C2): where a take-off that failed left it ({'stuck_at': place}).
     takeoff_report = {}
+    # Review round 3: the toolhead an archived spool sat on that the Save's first
+    # write took it off, before its move.
+    off_head = ''
     try:
         # 28.B5 — track whether the spool half actually persisted so a later
         # filament rejection reports partial success accurately (the spool write
@@ -1346,6 +1369,17 @@ def api_edit_spool_wizard():
                     # and it never restores a note's place for a spool filed somewhere.
                     if not (original_spool.get('archived') and _loc_key(original_spool.get('location'))):
                         dirty_spool_data['location'] = original_spool.get('location') or ''
+                    else:
+                        # Review round 3: archived ON a toolhead, it comes off the
+                        # head in this write (Unassigned, its trail blank, as the
+                        # refill edge takes it off), so that edge asks nothing (its
+                        # Activity Log line said "FCC asks where it goes", and nothing
+                        # asked: the move decides), and a spool the Save leaves
+                        # archived isn't left hidden on the head by a move that is
+                        # asked about or refused.
+                        off_head = _archived_on_head(original_spool)
+                        if off_head:
+                            spoolman_api._take_off_on_refill(dirty_spool_data, original_spool)
                 spool_data = dirty_spool_data
                 state.logger.info(f"DIRTY SPOOL DATA: {dirty_spool_data}")
             else:
@@ -1416,6 +1450,16 @@ def api_edit_spool_wizard():
                     # before its move, even if a filament rejection stops below.
                     archived_off = _take_archived_off(spool_id, original_spool, spool_res, spool_data,
                                                       report=takeoff_report)
+                    if (off_head and not archived_off and isinstance(spool_res, dict)
+                            and spool_res.get('archived')
+                            and not _loc_key(spool_res.get('location'))):
+                        # Review round 3: still archived (no refill), it was taken off
+                        # its head by the first write; the rest of the Save reads it
+                        # as one taken off before its move.
+                        archived_off = off_head
+                        state.add_log_entry(f"📦 #{spool_id} is archived, so it was taken off "
+                                            f"{html.escape(off_head, quote=False)} before its move",
+                                            "INFO", "00ccff")
                 else:
                     # 2026-10-20 review (engine-1): a Save that archives a spool on a
                     # head (a tick, or a weight to 0) never leaves it archived ON the
@@ -1472,9 +1516,11 @@ def api_edit_spool_wizard():
                         # failure path reads location_now only without it).
                         failed.update(location_now='', location_where='Unassigned')
                         failed["msg"] += f" {_archived_off_note(spool_id, archived_off, spool_res)}"
-                    if new_location is None:
-                        for words in _takeoff_words(spool_id, takeoff_report):
-                            failed["msg"] += f" {words}"
+                    # With a Location change too (review round 3): the move never
+                    # runs on this path, so a take-off that failed before it left the
+                    # spool where the words say.
+                    for words in _takeoff_words(spool_id, takeoff_report):
+                        failed["msg"] += f" {words}"
                 if unassigned_by_archive:
                     failed["location_moved"] = True
                     failed["msg"] += f" {_archived_off_note(spool_id, archived_off)}"
@@ -1493,9 +1539,12 @@ def api_edit_spool_wizard():
         if original_spool is not None:
             out["archived_now"] = archived_now
         warnings = []
-        # Group 42.3c: see /api/spool/update.
-        if spool_data and isinstance(spool_res, dict) and spool_res.get('fcc_warning'):
-            warnings.append(spool_res['fcc_warning'])
+        # Group 42.3c: see /api/spool/update. Review round 3: a refill that took the
+        # spool off a one-spool place another spool holds says it is Unassigned
+        # ("scan it to where you put it"), which a move that lands makes untrue: it
+        # is said only when no move was asked, or the move didn't land.
+        refill_warning = (spool_res.get('fcc_warning')
+                          if spool_data and isinstance(spool_res, dict) else None)
         # 2026-10-21: a field the Save cleared that Spoolman still holds (its
         # write logged it; the page toasts `warning` at 7 s).
         for written in (spool_res if spool_data else None, fil_res if fil_committed else None):
@@ -1560,13 +1609,16 @@ def api_edit_spool_wizard():
             # next Save, which sends the Location field, moves nothing.
             out.update(_edit_wrote_place(original_spool, spool_res, new_location))
         if not (new_location is not None and out.get('location_moved')):
+            if refill_warning:
+                warnings.insert(0, refill_warning)
             warnings.extend(_takeoff_words(spool_id, takeoff_report))
         if warnings:
             out["warning"] = " ".join(warnings)
         # Group 63.1: a Save that weighed the spool back into stock (or unticked
         # Archived) after it left a toolhead moved it nowhere; the wizard asks where
-        # it goes ({place, room, held_by}). A Save that names a Location writes the
-        # spool's own place first, so its refill asks nothing and the move decides.
+        # it goes ({place, room, held_by}). A Save that names a Location asks
+        # nothing: the move decides where it goes (one archived on a head is taken
+        # off it by the first write, review round 3, so its refill asks nothing).
         if (spool_data and new_location is None and isinstance(spool_res, dict)
                 and isinstance(spool_res.get('fcc_refill_ask'), dict)):
             out["refill_ask"] = spool_res['fcc_refill_ask']
@@ -1982,10 +2034,14 @@ def api_spool_archive_takeoff():
     spool a weigh archived at its place and FCC couldn't take off there
     (archive_takeoff). One try now, by the retry's own rules: a strict re-read
     first, and a spool weighed back into stock, moved, already taken off or deleted
-    since is left alone. Body {id}. Answers {success, msg}: success when nothing is
-    left to take off; `msg` is in words for the page's toast."""
+    since is left alone. Body {id, place}: `place`, the place the line names (review
+    round 3; absent from an older page). Answers {success, msg}: success when
+    nothing is left to take off; `msg` is in words for the page's toast."""
     data = request.get_json(silent=True)
     sid = data.get('id') if isinstance(data, dict) else None
+    listed_at = data.get('place') if isinstance(data, dict) else None
+    if not isinstance(listed_at, str):
+        listed_at = None
     if isinstance(sid, bool):
         sid = None
     try:
@@ -1993,7 +2049,7 @@ def api_spool_archive_takeoff():
     except (TypeError, ValueError):
         return jsonify({"success": False, "msg": "No spool was named."}), 400
     try:
-        ok, msg = archive_takeoff.take_off_now(sid)
+        ok, msg = archive_takeoff.take_off_now(sid, listed_at)
     except Exception as e:
         # Review round 2: an answer in words, never an error page the button can't
         # read (it toasted "wasn't taken off" for a take-off that had landed).

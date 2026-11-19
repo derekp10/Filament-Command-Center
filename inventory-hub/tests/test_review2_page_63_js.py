@@ -262,10 +262,16 @@ return { order };
 
 
 @needs_node
-def test_control_inside_a_window_the_list_leaves_the_search_panel_alone(tmp_path):
+def test_control_inside_a_window_with_no_search_panel_up_nothing_is_closed(tmp_path):
+    """PIN UPDATED DELIBERATELY (review round 3): it said "inside a window the list
+    leaves the search panel alone", with a panel up; over a window the panel stayed
+    open, the list drawn in the window under it. With no panel up, nothing is closed
+    (test_review3_page_63_js pins the panel over a window)."""
     res = _real(tmp_path, SEARCH_PANEL + r"""
 const host = document.getElementById('wizardModal');
 host.classList.add('show');
+const qs = document.querySelector;
+document.querySelector = (sel) => (sel === '.offcanvas.show' ? null : qs(sel));
 window.promptEditLocation(57, '', { fromCard: true, host });
 await __settle(60);
 return { order };

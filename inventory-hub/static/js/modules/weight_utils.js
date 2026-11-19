@@ -251,8 +251,8 @@ window.computeUsedWeight = computeUsedWeight;
 // unasked.
 // Group 63 review: the figure filled in is selected once the box has the keyboard
 // (K05: a figure typed over it was joined to it, 250245 g, and saved); `maxTare`
-// (the Gross reading) refuses, in words, an empty spool as heavy as the whole spool
-// on the scale. Derek's picture walk (2026-11-18): Skip on one line ("Skip: save as
+// (window.tareCeiling, from the Gross reading) refuses, in words, an empty weight
+// the spool on the scale can't have. Derek's picture walk (2026-11-18): Skip on one line ("Skip: save as
 // filament left", its longer words in its title), and the offer worded as an
 // estimate (newSpoolTareOfferWords: "some brands aren't 100% exact on the 1kg
 // filament (prusament will have more sometimes)"); and at its second look
@@ -271,21 +271,34 @@ window.newSpoolTareOfferWords = newSpoolTareOfferWords;
 
 // The heaviest empty weight a Gross reading allows (Group 63 review, round 2: the
 // first rule, "at or above the reading", refused an empty spool's own reading, the
-// one figure an empty spool on the scale has). A new spool (nothing used, its net
-// known, the reading above it) holds its net, often a little more and never much
-// less, so its empty spool is at most the reading less 85% of the net; any other
-// spool may be empty on the scale, its own reading or the maker's figure a little
-// above being its empty weight, so only a figure far above the reading is refused
-// (one typed onto the end of another, "250245"). {max, why}, or null.
-const tareCeiling = (reading, initial, used) => {
+// one figure an empty spool on the scale has). A spool may be empty on the scale,
+// its own reading or the maker's figure a little above being its empty weight, so
+// only a figure far above the reading is refused (one typed onto the end of
+// another, "250245"). Two kinds of spool can't be empty there, so for them a figure
+// at or above the reading is refused (`below`: the empty weight must be less than
+// `max`):
+//   - a spool FCC has nothing used from whose reading is above its net: the scale
+//     holds more than its filament, which no empty spool weighs. Review round 3:
+//     round 2 allowed it at most the reading less 85% of its net, as if a spool with
+//     nothing used were full, and refused the true empty weight of a part-used spool
+//     being catalogued (the wizard's Weigh from Scale has nothing used for a new
+//     record) or of one under a filament whose net is wrong, calling it new;
+//   - `opts.unknownNet` (the wizard with no net known: what is on the spool is the
+//     reading less its empty weight, kept as its total): a figure at or above the
+//     reading wrote a total of 0 g into the form (round 3; round 1 refused it).
+// {max, below, why}, or null.
+const tareCeiling = (reading, initial, used, opts) => {
     const r = Number(reading), net = Number(initial), u = Number(used);
     if (!(r > 0)) return null;
     const g = (n) => (typeof window.fmtGramsPrecise === 'function' ? window.fmtGramsPrecise(n) : n);
-    if (u === 0 && net > 0 && r > net) {
-        return { max: Math.round((r - 0.85 * net) * 10) / 10,
-                 why: `a new spool's ${g(net)} g of filament is in the ${g(r)} g on the scale` };
+    if (opts && opts.unknownNet) {
+        return { max: r, below: true, why: `it must be less than the ${g(r)} g on the scale, which is the spool with its filament` };
     }
-    return { max: Math.round((r + 100) * 10) / 10, why: `the spool on the scale weighs ${g(r)} g` };
+    if (u === 0 && net > 0 && r > net) {
+        return { max: r, below: true,
+                 why: `it must be less than the ${g(r)} g on the scale, which is more than this spool's ${g(net)} g of filament` };
+    }
+    return { max: Math.round((r + 100) * 10) / 10, below: false, why: `the spool on the scale weighs ${g(r)} g` };
 };
 window.tareCeiling = tareCeiling;
 
@@ -311,9 +324,11 @@ function promptMissingEmptyWeight({
     prefill = null,
     offer = '',
     // Group 63 review (K05, round 2): the heaviest empty weight the Gross reading
-    // allows (window.tareCeiling) and why, in words; a heavier one is refused.
+    // allows (window.tareCeiling) and why, in words; a heavier one is refused, and
+    // with `maxTareBelow` (round 3) one as heavy too.
     maxTare = null,
     maxTareWhy = '',
+    maxTareBelow = false,
 } = {}) {
     return new Promise((resolve) => {
         const swatch = color_hex
@@ -386,7 +401,7 @@ function promptMissingEmptyWeight({
             }
             if (!(v > 0)) { input.focus(); return; }
             const most = Number(maxTare);
-            if (maxTare !== null && Number.isFinite(most) && v > most) {
+            if (maxTare !== null && Number.isFinite(most) && (maxTareBelow ? v >= most : v > most)) {
                 const g = (n) => `${typeof window.fmtGramsPrecise === 'function' ? window.fmtGramsPrecise(n) : n} g`;
                 if (errEl) errEl.textContent = maxTareWhy
                     ? `${g(v)} can't be its empty weight: ${maxTareWhy}. Check the number.`

@@ -1013,21 +1013,26 @@ window.moveSpoolFromCard = (spoolId, from) => {
 // dialog is drawn inside it, as the spool window's ✏️ draws inside #spoolModal:
 // on the page body, that window's focus trap took the keyboard from its search
 // box (and in the weigh-out list a digit typed for it went into a spool's
-// weight box). Its questions are hosted there too. `opts.onSettled(outcome)`:
-// once, however it ends ('moved', 'failed', 'cancelled'), from fccForceMove.
+// weight box). Its questions are hosted there too. `opts.onSettled(outcome, words)`:
+// once, however it ends ('moved', 'failed' with why, 'cancelled', 'error'), from
+// fccForceMove, or here when its place list can't be read ('failed').
 window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
     const fromCard = !!(opts && opts.fromCard);
     // Where it is drawn is decided as it opens, after the place list's read (review
     // round 2: a window closed during that read got the list drawn inside it, out of
     // sight, taking every Escape, and the weigh questions waiting behind it waited
     // for good): the window it was asked over while that is still open, else the
-    // page body, a search panel over the page closed first (its focus trap took the
-    // keyboard, as moveSpoolFromCard closes it first).
+    // page body. A search panel that is up is closed first, window or not (its
+    // focus trap took the keyboard, as moveSpoolFromCard closes it first; review
+    // round 3: over a window it stayed open, the list drawn in that window under
+    // the panel and its backdrop).
     const shownHost = () => ((opts && opts.host && opts.host.classList && opts.host.classList.contains('show'))
         ? opts.host : null);
-    const settled = (outcome) => {
+    // `words`: why it ended, for a caller whose own question covers the toast
+    // (review round 3: the refill question asked again with no reason on it).
+    const settled = (outcome, words = '') => {
         if (opts && typeof opts.onSettled === 'function') {
-            try { opts.onSettled(outcome); } catch (e) { console.error(e); }
+            try { opts.onSettled(outcome, words); } catch (e) { console.error(e); }
         }
     };
     let defaultLoc = currentLoc || "Unassigned";
@@ -1041,7 +1046,7 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
         .then(r => r.json())
         .then(locs => {
             const hostEl = fromCard ? shownHost() : null;
-            if (fromCard && !hostEl) {
+            if (fromCard) {
                 const panel = document.querySelector('.offcanvas.show');
                 if (panel && window.bootstrap && window.bootstrap.Offcanvas) {
                     try { window.bootstrap.Offcanvas.getOrCreateInstance(panel).hide(); } catch (_) { /* noop */ }
@@ -1324,9 +1329,10 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
         })
         .catch((e) => {
             // The place list didn't come: nothing opened, and nothing moved (it said nothing before).
-            showToast(`Couldn't read the list of places, so #${spoolId} wasn't moved. Try again in a moment.`, 'warning', 7000);
+            const words = `Couldn't read the list of places, so #${spoolId} wasn't moved. Try again in a moment.`;
+            showToast(words, 'warning', 7000);
             console.error(e);
-            settled('failed');
+            settled('failed', words);
         });
 };
 
@@ -1618,10 +1624,25 @@ window.fccForceMove = (spoolId, newLoc, locs, opts = {}) => {
 // as the question is up (or has decided not to open), so a caller never waits for
 // a person (a test's evaluate hung on one that did).
 let _weighQuestionTail = Promise.resolve();
-// When a person last answered a refill question (review round 2): the next one in
-// the line opens under the pointer and the keyboard at once, so the second press of
-// that double click, or a second Escape, must not answer it unread.
+// When a person last answered a question in the line (review round 2): the next one
+// opens under the pointer and the keyboard at once, so the second press of that
+// double click, a second Escape, or a second Enter or Space, must not answer it
+// unread. Review round 3: every question in the line says so when a person's
+// answer closes it (_weighAnswered: the empty-weight prompt didn't, and a double
+// Escape across it answered the refill question behind it), and each ignores any
+// press or Escape this soon after (_weighTooSoon: a keyboard's click too, since the
+// line put the keyboard on the next question's answer; a double Enter answered two
+// refill questions, and saved the prompt's figure as the filament's empty weight).
 let _weighAnsweredAt = 0;
+const _weighAnswered = () => {
+    _weighAnsweredAt = Date.now();
+    // A pointer's press closed it: the second press of that double click reaches
+    // nothing behind it (Group 62.3's rule), the next question included.
+    if (typeof window.fccShieldNextPress === 'function') window.fccShieldNextPress();
+};
+// A question opened right after another was answered, and still that soon after.
+const _weighTooSoon = (openedAt, armMs) =>
+    openedAt - _weighAnsweredAt < armMs && Date.now() - _weighAnsweredAt < armMs;
 const _inWeighLine = (run) => {
     let shown = () => {};
     const up = new Promise((r) => { shown = r; });
@@ -1789,17 +1810,12 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
     // `moving`: an answer that starts a move; the line goes on once that settles.
     const openedAt = Date.now();
     // Opened right after another was answered: a press or an Escape this soon is the
-    // second half of the one that answered it (review round 2).
-    const tooSoon = () => openedAt - _weighAnsweredAt < armMs && Date.now() - _weighAnsweredAt < armMs;
+    // second half of the one that answered it (review rounds 2 and 3).
+    const tooSoon = () => _weighTooSoon(openedAt, armMs);
     const close = (how, moving = false) => {
         if (closed) return;
         closed = true;
-        if (how !== 'host') {
-            _weighAnsweredAt = Date.now();
-            // A pointer's press closed it: the second press of that double click
-            // reaches nothing behind it (Group 62.3's rule), the next question included.
-            if (typeof window.fccShieldNextPress === 'function') window.fccShieldNextPress();
-        }
+        if (how !== 'host') _weighAnswered();
         unregister();
         document.removeEventListener('keydown', onArrow, true);
         if (qr) { try { qr.cleanup(); } catch (_) { /* noop */ } qr = null; }
@@ -1821,11 +1837,14 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
     // round 2: the next weigh question mounted over the failure's toast, and the
     // spool, Unassigned with its note used up, was never asked about again). An
     // 'error' (FCC's own code threw while handling the answer, the move maybe
-    // landed) asks nothing again.
+    // landed) asks nothing again. It asks with the first ask's own waits and skip
+    // (review round 3: a spool scanned in the weigh-out list during the move lost
+    // its box's keyboard to the question asked again, and its reading went out as
+    // a scan): a scan being answered, a reading being typed, a spool scanned since.
     const settled = (outcome, words) => {
         if (outcome === 'failed') {
-            const again = { host: opts.host, onClosed: opts.onClosed, onMoved: opts.onMoved,
-                notice: words || `#${sid} wasn't moved: ask again, or Leave it Unassigned.` };
+            const again = Object.assign({}, opts,
+                { notice: words || `#${sid} wasn't moved: ask again, or Leave it Unassigned.` });
             _askRefillPlace(spoolId, ask, again, () => {}).then(doneNow, doneNow);
             return;
         }
@@ -1890,8 +1909,10 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
             onSettled: settled,
         });
     });
-    if (leaveBtn) leaveBtn.onclick = (e) => {
-        if (tooSoon() && !(e && e.type === 'click' && e.detail === 0)) return;   // a double click's second press
+    // A double click's second press, or a double Enter or Space's (review round 3:
+    // the keyboard's click was let through, and answered the next question unread).
+    if (leaveBtn) leaveBtn.onclick = () => {
+        if (tooSoon()) return;
         leave('leave');
     };
     document.addEventListener('keydown', onArrow, true);
@@ -2147,12 +2168,23 @@ const _askArchiveEmptyWeight = async (spoolId, filamentId, prefillWeight = null,
     // round 6). It opens after a save, while the next spool's label may be on
     // its way (inv_core.js's weight capture puts a label split by its focus
     // back together).
+    // In the line of weigh questions (review round 3): a person's answer (Later,
+    // Escape, a save) says so, and a press, an Escape or an Enter that comes right
+    // after the question before it was answered is that answer's second half,
+    // never this prompt's (a double Enter saved its figure, unread, as the
+    // filament's empty weight; a double Escape went on to answer the refill
+    // question behind it). A spool scanned over it isn't a person's answer.
+    const openedAt = Date.now();
+    const armMs = typeof window.questionArmMs === 'function' ? window.questionArmMs() : 700;
+    const tooSoon = () => _weighTooSoon(openedAt, armMs);
+    const answered = () => { if (!handle) return; _weighAnswered(); cleanup(); };
     handle = window.mountOverlay({
         id: 'fcc-archive-empty-overlay',
         content,
         tier: 'standard',
         initialFocus: '#fcc-archive-empty-wt',
-        onEscape: cleanup,   // Escape == "Later" (no-op); mountOverlay owns Escape
+        // Escape == "Later" (no-op); mountOverlay owns Escape
+        onEscape: () => { if (!tooSoon()) answered(); },
     });
     const ov = handle.element;
     // An id kept whole that is longer than the line itself widens the whole prompt
@@ -2250,13 +2282,13 @@ const _askArchiveEmptyWeight = async (spoolId, filamentId, prefillWeight = null,
         } else {
             showToast(`Saved ${n}g as Filament #${fil.id} empty weight.`, 'success');
         }
-        cleanup();
+        answered();
     };
 
-    if (saveBtn) saveBtn.onclick = doSave;
-    if (laterBtn) laterBtn.onclick = cleanup;
+    if (saveBtn) saveBtn.onclick = () => { if (!tooSoon()) doSave(); };
+    if (laterBtn) laterBtn.onclick = () => { if (!tooSoon()) answered(); };
     if (wtEl) wtEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); doSave(); }
+        if (e.key === 'Enter') { e.preventDefault(); if (!tooSoon()) doSave(); }
     });
     shown();
     const gone = setInterval(() => {

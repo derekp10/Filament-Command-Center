@@ -1069,7 +1069,8 @@ window.saveWeighOutRow = async (idStr) => {
             const tare = await window.promptMissingEmptyWeight(Object.assign({}, details.context || {},
                 { onScanDismiss: unsaved, scanPending: () => !!pendingScan, prefill: offer,
                   offer: offer === null ? '' : window.newSpoolTareOfferWords(reading, Number(details.initial), offer),
-                  maxTare: ceiling ? ceiling.max : null, maxTareWhy: ceiling ? ceiling.why : '' }));
+                  maxTare: ceiling ? ceiling.max : null, maxTareWhy: ceiling ? ceiling.why : '',
+                  maxTareBelow: !!(ceiling && ceiling.below) }));
             // Cancelled: back to the target's box (round 7: the focus fell to
             // the page), where the person is: this spool's, unless the save
             // moved them on (round 10: it went back to this one, and the next
@@ -1279,11 +1280,23 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                         // Its host: the weigh-out list, else the window the Quick-Weigh was
                         // opened over (a spool window, the Location Manager), so Pick a
                         // place… draws Force Location's list inside it (review round 2);
-                        // over the search panel, none (the list closes the panel first).
-                        const shownModals = document.querySelectorAll('.modal.show');
+                        // with no window, none. The list closes a search panel over it
+                        // first, window or not (round 3). That window is the one on top,
+                        // by its z-index (the page gives each window it shows one above
+                        // the open ones, inv_core.js; round 3: the last one in the page's
+                        // order was the Location Manager under a spool window), a tie
+                        // going to the later one.
+                        const zOf = (el) => {
+                            try {
+                                return (typeof getComputedStyle === 'function'
+                                    && parseInt(getComputedStyle(el).zIndex || '0', 10)) || 0;
+                            } catch (_) { return 0; }
+                        };
+                        const shownModals = Array.from(document.querySelectorAll('.modal.show'));
+                        const topModal = shownModals.length
+                            ? shownModals.reduce((a, b) => (zOf(b) >= zOf(a) ? b : a)) : null;
                         window.askRefillPlace(id, askRefill, {
-                            host: weighOutShown() ? document.getElementById('weighOutModal')
-                                : (shownModals.length ? shownModals[shownModals.length - 1] : null),
+                            host: weighOutShown() ? document.getElementById('weighOutModal') : topModal,
                             settle: scanSettled, scanPending: () => !!pendingScan,
                             waitWhile: weighReadingBeingTyped,
                             skipIf: () => scansTaken !== takenAtSave,
@@ -1588,7 +1601,8 @@ if (typeof window.registerShortcut === 'function') {
 // after 5 failed retries, and again after every restart while it waits). The line
 // holds the button itself (the audit report's 📝 pattern), so it is in #live-logs
 // and in the 📡 pill's list alike: one delegated click posts
-// /api/spool/archive_takeoff {id} and toasts its answer's words, which the pill's
+// /api/spool/archive_takeoff {id, place} (the place its line names, review round 3)
+// and toasts its answer's words, which the pill's
 // list also shows on its own line (its overlay covers the toast layer). A press
 // while one is out for that spool asks nothing, and so does the second click of a
 // double click (`detail` 2). A real <button>: a person's Enter or Space presses it
@@ -1612,13 +1626,16 @@ if (typeof window.registerShortcut === 'function') {
         out.add(sid);
         const fromPill = !!btn.closest('#fcc-log-pill-overlay');
         if (fromPill && typeof window.logPillNotice === 'function') window.logPillNotice('');
+        // The place the line names goes with it (review round 3): a spool archived
+        // somewhere else now was left there on purpose, and is told so.
+        const place = btn.getAttribute('data-takeoff-place');
         // A long wait, as Undo's (review round 2): one try can wait on several
         // Spoolman timeouts, and a short one said "wasn't taken off" while the
         // take-off went on and landed. No answer says it may still be going.
         (window.fetchT || fetch)('/api/spool/archive_takeoff', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: sid }),
+            body: JSON.stringify(place ? { id: sid, place } : { id: sid }),
         }, 120000)
             .then((r) => r.json())
             .then((res) => say(String((res && res.msg) || `FCC couldn't take #${sid} off its place.`),
