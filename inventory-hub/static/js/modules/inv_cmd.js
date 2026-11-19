@@ -3314,6 +3314,8 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             `ℹ️ Scan "${escLog(String(text).trim())}" ignored: the same label was read twice within ${LOC_REPEAT_MS / 1000} s`, 'INFO');
         return;
     }
+    // The scan read just before this one (the cancel double-read rule below).
+    const prevRead = _lastScanRead;
     _lastScanRead = { text: locKey, at: capturedAt || Date.now() };
     // Answered at once unless it reaches the server below (every early return
     // here is an answer); in flight from the request until its answer.
@@ -3366,9 +3368,11 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         // Group 63 review, round 2: questions now wait in a line (the refill
         // question and the post-archive prompt), so the next one opens the moment
         // one is answered. A session Cancel QR routeConfirmScan didn't answer is a
-        // closed dialog's, never this one's; and a bare CMD:CANCEL read within
-        // LOC_REPEAT_MS of the read that closed a question is that read again (a
-        // scanner's double read): either cancelled the next question unread.
+        // closed dialog's, never this one's; and a bare CMD:CANCEL read right
+        // after the CMD:CANCEL that closed a question, nothing read between them
+        // and within LOC_REPEAT_MS, is that read again (a scanner's double read):
+        // either cancelled the next question unread. A CMD:CANCEL after another
+        // scan (the slot label that opened this question) is meant, and answers it.
         if (cancelQr) {
             const said = 'That cancel QR belongs to a dialog that has closed — ignored';
             if (openQuestion.flash) openQuestion.flash(said);
@@ -3376,7 +3380,9 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             unread();
             return;
         }
-        if (/CMD:CANCEL$/.test(upper) && (capturedAt || Date.now()) - _questionCancelledAt < LOC_REPEAT_MS) {
+        const readAt = capturedAt || Date.now();
+        if (/CMD:CANCEL$/.test(upper) && prevRead && /CMD:CANCEL$/.test(prevRead.text)
+                && readAt - prevRead.at < LOC_REPEAT_MS && readAt - _questionCancelledAt < LOC_REPEAT_MS) {
             if (window.logClientEvent) window.logClientEvent(
                 `ℹ️ A second read of CMD:CANCEL was ignored, so "${escLog(openQuestion.title)}" stays open: the first read answered the question before it`, 'INFO');
             unread();
