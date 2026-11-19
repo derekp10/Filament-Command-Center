@@ -705,6 +705,7 @@ def _places():
     one the disk refused answers [] with locations_db.last_read_failed() (Group 63
     review, K35: read as no rows, the head was no head)."""
     try:
+        locations_db.forget_read_failure()
         listed = locations_db.load_locations_list() or []
         if locations_db.last_read_failed() is True:
             raise OSError("locations.json couldn't be read")
@@ -898,7 +899,13 @@ def _refill_outcome(data, existing):
             return None, None
         _take_off_on_refill(data, existing)
         return _back_in_stock_warning(sid, remaining, why), None
-    if rows is not None and locations_db.head_holds_one_spool(note.upper(), printer_map, rows):
+    if rows is None:
+        # Group 63 review, round 2 (K35 on the note path, the common one): FCC can't
+        # tell what the noted place is (locations.json corrupt, or refused by the
+        # disk), so it stays Unassigned with 42.3c's warning, never a guess: read as
+        # "a place with no row", a head with a spool on it got this one too.
+        return _back_in_stock_warning(sid, remaining, "FCC couldn't check where it was"), None
+    if locations_db.head_holds_one_spool(note.upper(), printer_map, rows):
         return None, _refill_ask(sid, note, rows)
     dest, warning = _unarchive_destination(existing, note, remaining)
     data['location'] = dest
@@ -937,13 +944,10 @@ def _unarchive_destination(existing, prev_loc, remaining):
     loc = str(prev_loc).strip().strip('"')
     lid = loc.upper()
     sid = existing.get('id')
-    try:
-        printer_map = locations_db.get_active_printer_map() or {}
-        rows = {str(r.get('LocationID', '')).strip().upper(): r
-                for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
-    except Exception as e:
-        state.logger.warning(f"42.3c: couldn't read the locations for #{sid}: {e}")
-        printer_map, rows = None, None
+    # One reader with the refill edge (_places): a file the disk refused reads as
+    # unreadable, not as "no rows" (Group 63 review, round 2: read as no rows, a
+    # head with another spool on it was "a Spoolman-native place in use").
+    printer_map, rows = _places()
     if rows is None:
         why = "FCC couldn't check where it was"
     elif lid not in printer_map and lid not in rows:
@@ -1404,6 +1408,10 @@ def _after_unanswered_write(sid, data, existing, pre_archived, emptied=False, un
             'record': rec, 'answered': answered, 'landed': landed,
             'warning': unarchive_warning if (landed and unarchiving) else None,
             'refill_ask': refill_ask if (landed and unarchiving) else None,
+            # Group 63 review, round 2: the PATCH took the spool off its place itself
+            # (the archive edge ran), so landed or not it is never left archived
+            # there, and /api/spool/update writes nothing down for archive_takeoff.
+            'blanked': 'location' in data and not _place_text(data.get('location')),
         }
         if not landed:
             return   # unreadable, gone, or not what the write put there: it didn't land

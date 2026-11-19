@@ -496,3 +496,48 @@ def test_a_refill_off_a_head_keeps_the_box_another_spool_runs_from(logs, runs_fr
     out = _write(sm, ctx, {"used_weight": 600})
     assert out["fcc_refill_ask"]["place"] == "XL-1", out
     assert detached == released, detached
+
+
+@pytest.mark.parametrize("note, residents", [
+    ("XL-1", {"XL-1": [99]}),
+    ("PM-DB-9", {"PM-DB-9": [12]}),
+    ("XL-1", {}),
+], ids=["occupied-head", "occupied-polydryer", "empty-head"])
+def test_a_note_fcc_cant_read_the_places_for_leaves_it_unassigned(logs, note, residents):
+    """Review round 2 (server-edges-1): the common refill shape, #57 archived
+    Unassigned with its note, weighed back while the disk refuses locations.json.
+    FCC can't tell what the note names: Unassigned, "FCC couldn't check where it
+    was". RED on 0f3162c: the helper read the file again as "no rows", took XL-1 for
+    a Spoolman-native place in use, and put #57 back on it beside #99 (or said "XL-1
+    no longer exists", asking nothing)."""
+    sm = WeightWireSpoolman(_spool("", archived=True, used=1000, note=note))
+    ctx, _r, _d = _wire(sm, residents=residents)
+    ctx = [p for p in ctx if getattr(p, "attribute", "") not in ("load_locations_list", "get_active_printer_map")]
+    ctx.append(_unreadable_locations("disk-refused"))
+    try:
+        out = _write(sm, ctx, {"used_weight": 600})
+    finally:
+        flag = getattr(spoolman_api.locations_db, "_LAST_READ", None)
+        if flag is not None:
+            flag.failed = False
+    assert "FCC couldn't check where it was, so it is Unassigned" in (out.get("fcc_warning") or ""), out
+    assert sm.spools[57]["location"] == "" and sm.spools[57]["archived"] is False, sm.spools[57]
+
+
+def test_an_earlier_failed_read_is_never_taken_for_this_one(logs):
+    """Review round 2: a read FCC checks clears the failure an earlier read left on
+    the thread, so a refill after a failed read elsewhere reads its places as they
+    are (here a stand-in that reads fine): #57, archived on its cart, stays there.
+    RED on 0f3162c: the stale flag read as this read's, and #57 was taken off its
+    cart with "FCC couldn't check where it was"."""
+    flag = getattr(spoolman_api.locations_db, "_LAST_READ", None)
+    if flag is not None:
+        flag.failed = True
+    try:
+        sm = WeightWireSpoolman(_spool("CR-CT-2-R2", archived=True, used=1000))
+        ctx, _r, _d = _wire(sm)
+        out = _write(sm, ctx, {"used_weight": 600})
+    finally:
+        if flag is not None:
+            flag.failed = False
+    assert not out.get("fcc_warning") and sm.spools[57]["location"] == "CR-CT-2-R2", out

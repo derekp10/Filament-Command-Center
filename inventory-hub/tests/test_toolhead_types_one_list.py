@@ -999,6 +999,9 @@ def test_force_location_offers_a_custom_type_but_never_a_head(tmp_path):
     "MMU Buffer" or "Direct Load Rack" was hidden as a head."""
     res = run_js(tmp_path, ["inv_core.js", "ui_builder.js", "inv_details.js"], """
 const rows = """ + json.dumps(LIST_ROWS) + """;
+// inv_core.js's own fetchT needs AbortSignal, which the sandbox lacks: Force Location
+// reads its place list through fetchT since the Group 63 review (round 2).
+window.fetchT = (u, o) => window.fetch(u, o);
 window.__respond = (url) => (url === '/api/locations' ? { body: rows } : { body: {} });
 let html = null;
 globalThis.Swal = { fire: (o) => { html = o.html; return Promise.resolve({ isConfirmed: false }); },

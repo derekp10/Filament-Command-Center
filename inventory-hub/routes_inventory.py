@@ -1086,9 +1086,22 @@ def _take_archived_off(sid, original, written, dirty, moving=True, report=None):
         # A Save that archives without a move: taken off only a head (a one-spool
         # place), where an archived spool is invisible (2026-10-20 review,
         # engine-1); anywhere else it stays filed where it is, archived.
-        rows = {str(r.get('LocationID', '')).strip().upper(): r
-                for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
-        if not logic._holds_one_spool(was, locations_db.get_active_printer_map() or {}, rows):
+        # Group 63 review, round 2: a locations.json FCC can't read (corrupt, or
+        # refused by the disk) can't say whether `was` is a head: the spool stays
+        # where it is and the Save says so (report['unread']), never raising after
+        # the spool's own write landed.
+        try:
+            locations_db.forget_read_failure()
+            listed = locations_db.load_locations_list() or []
+            unread = locations_db.last_read_failed() is True
+        except locations_db.LocationsCorruptError:
+            listed, unread = [], True
+        if unread:
+            if isinstance(report, dict):
+                report['unread'] = was
+            return None
+        rows = {str(r.get('LocationID', '')).strip().upper(): r for r in listed if isinstance(r, dict)}
+        if not logic._holds_one_spool(was, locations_db.get_active_printer_map(listed) or {}, rows):
             return None
         if isinstance(written, dict) and 'location' in written and not _loc_key(written.get('location')):
             # The archive edge took it off already (a weigh to empty): it noted the
@@ -1110,14 +1123,19 @@ def _take_archived_off(sid, original, written, dirty, moving=True, report=None):
                             f"off ({html.escape(str(err), quote=False)})", "ERROR", "ff4444")
         # C2: written down, so archive_takeoff's retries, its listed line and the
         # hook before a move onto the head cover it, as for a weigh's (63.2).
+        recorded = True
         try:
             archive_takeoff.note_stuck(sid, was, err)
         except Exception as e:
+            recorded = False
             state.add_log_entry(f"❌ #{sid} couldn't be written down to be taken off {esc_was} later "
                                 f"({html.escape(str(e), quote=False)}): set its Location to Unassigned to "
                                 f"finish it", "ERROR", "ff4444")
         if isinstance(report, dict):
             report['stuck_at'] = was
+            if not recorded:
+                # Review round 2: nothing retries it, so the Save never says "keeps trying".
+                report['stuck_unrecorded'] = True
         return None
     logic.release_box_after_direct_write(sid, original, res)
     state.add_log_entry(f"📦 #{sid} is archived ({_archived_why(written)}), so it was taken off {was}"
@@ -1134,6 +1152,27 @@ def _archived_why(rec):
 
 def _archived_off_note(sid, was, rec=None):
     return f"#{sid} is archived ({_archived_why(rec)}), so it was taken off {was}: it is Unassigned."
+
+
+def _takeoff_words(spool_id, report):
+    """What an Edit Spool Save says about a take-off it couldn't make (Group 63
+    review): written down for archive_takeoff's retries ("keeps trying"), not
+    written down (nothing retries it: the person finishes it), or a place FCC
+    couldn't check (its list of places unreadable)."""
+    words = []
+    stuck_at = (report or {}).get('stuck_at')
+    if stuck_at and (report or {}).get('stuck_unrecorded'):
+        words.append(f"#{spool_id} is archived but still at {stuck_at}: FCC couldn't take it off there, "
+                     f"and couldn't note it to try again: set its Location to Unassigned to finish it.")
+    elif stuck_at:
+        words.append(f"#{spool_id} is archived but still at {stuck_at}: FCC couldn't take it off there, "
+                     f"and keeps trying.")
+    unread_at = (report or {}).get('unread')
+    if unread_at:
+        words.append(f"#{spool_id} is archived at {unread_at}, and FCC couldn't read its list of places to "
+                     f"check whether that is a toolhead: if it is, set its Location to Unassigned, or it stays "
+                     f"hidden there.")
+    return words
 
 
 def _edit_wrote_place(original, written, new_location):
@@ -1299,7 +1338,14 @@ def api_edit_spool_wizard():
                     # back where it was archived from), and they have always left a
                     # location the caller named alone. The move is the engine's, so
                     # this write names where the spool is now.
-                    dirty_spool_data['location'] = original_spool.get('location') or ''
+                    # Group 63 review, round 2: except for a spool archived AT a place
+                    # (63.2's stuck spool on its head): named, a refill or untick there
+                    # brought it back in stock ON its head beside the spool loaded
+                    # since. Left out, the refill edge's own rule decides (a head or a
+                    # taken one-spool place: taken off first; anywhere else it stays),
+                    # and it never restores a note's place for a spool filed somewhere.
+                    if not (original_spool.get('archived') and _loc_key(original_spool.get('location'))):
+                        dirty_spool_data['location'] = original_spool.get('location') or ''
                 spool_data = dirty_spool_data
                 state.logger.info(f"DIRTY SPOOL DATA: {dirty_spool_data}")
             else:
@@ -1420,6 +1466,15 @@ def api_edit_spool_wizard():
                     if (new_location is None and isinstance(spool_res, dict)
                             and isinstance(spool_res.get('fcc_refill_ask'), dict)):
                         failed["refill_ask"] = spool_res['fcc_refill_ask']
+                    if new_location is None and archived_off:
+                        # Review round 2: the Save's own take-off moved it (a tick on a
+                        # head): where it is now, never location_moved (the page's
+                        # failure path reads location_now only without it).
+                        failed.update(location_now='', location_where='Unassigned')
+                        failed["msg"] += f" {_archived_off_note(spool_id, archived_off, spool_res)}"
+                    if new_location is None:
+                        for words in _takeoff_words(spool_id, takeoff_report):
+                            failed["msg"] += f" {words}"
                 if unassigned_by_archive:
                     failed["location_moved"] = True
                     failed["msg"] += f" {_archived_off_note(spool_id, archived_off)}"
@@ -1458,7 +1513,11 @@ def api_edit_spool_wizard():
                     moved, result, stale = _wizard_move(
                         spool_id, new_location, data,
                         placement=dict(data, auto_deploy=False) if keep_archived else data,
-                        current_loc='' if archived_off else (original_spool or {}).get('location'),
+                        # Where the first write left it (a refill may have taken it
+                        # off its head: review round 2), else where it was.
+                        current_loc='' if archived_off else (
+                            spool_res.get('location') if isinstance(spool_res, dict) and 'location' in spool_res
+                            else (original_spool or {}).get('location')),
                         keep_archived=keep_archived)
                 except Exception as e:   # the other edits are saved: say so
                     state.add_log_entry(f"❌ Wizard edit: #{spool_id} was not moved to "
@@ -1500,11 +1559,8 @@ def api_edit_spool_wizard():
             # archive took it off its place): the page shows where it is now, so its
             # next Save, which sends the Location field, moves nothing.
             out.update(_edit_wrote_place(original_spool, spool_res, new_location))
-        stuck_at = takeoff_report.get('stuck_at')
-        if stuck_at and not (new_location is not None and out.get('location_moved')):
-            # C2: the take-off failed, FCC wrote it down and keeps trying (63.2's words).
-            warnings.append(f"#{spool_id} is archived but still at {stuck_at}: FCC couldn't take it off "
-                            f"there, and keeps trying.")
+        if not (new_location is not None and out.get('location_moved')):
+            warnings.extend(_takeoff_words(spool_id, takeoff_report))
         if warnings:
             out["warning"] = " ".join(warnings)
         # Group 63.1: a Save that weighed the spool back into stock (or unticked
@@ -1774,7 +1830,11 @@ def api_spool_update():
                     # is was read before the save, if at all ('' when not: the try
                     # takes it off wherever it is archived), and a spool found in
                     # stock or Unassigned is forgotten with no line (`quiet`).
-                    if (archive_on_empty and updates.get('archived') is True
+                    # Review round 2: not when update_spool's own PATCH blanked the
+                    # location (its archive edge ran): landed or not, the spool was
+                    # never left archived at its place.
+                    blanked = lost is not None and bool(lost.get('blanked'))
+                    if (archive_on_empty and updates.get('archived') is True and not blanked
                             and any(k in updates for k in ("used_weight", "initial_weight", "remaining_weight"))):
                         guess = (str(pre.get('location') or '').strip().strip('"')
                                  if _is_spool_record(pre, spool_id) else '')
@@ -1820,11 +1880,17 @@ def api_spool_update():
         # with grams left while FCC couldn't read it first stays where it is
         # (Derek's 43.2 rule).
         still_at = None
+        still_at_unrecorded = False
         weighed = any(k in updates for k in ("used_weight", "initial_weight", "remaining_weight"))
         place_now = str(res.get('location') or '').strip()
         if (archive_on_empty and weighed and updates.get('archived') is True
                 and res.get('archived') and place_now):
-            landed, why = archive_takeoff.take_off(spool_id, res, same_request=True)
+            # The save's own take-off skips the box check only for a spool FCC read
+            # in stock just before it: it was the head's only spool until then. One
+            # archived there already (63.2's stuck spool), or one FCC couldn't read,
+            # may share its box with the spool loaded since (review round 2, K24).
+            landed, why = archive_takeoff.take_off(
+                spool_id, res, same_request=_is_spool_record(pre, spool_id) and not pre_archived)
             if landed:
                 state.add_log_entry(f"📦 Took archived Spool #{spool_id} off "
                                     f"{html.escape(place_now, quote=False)}: it is Unassigned now",
@@ -1838,7 +1904,9 @@ def api_spool_update():
                     archive_takeoff.note_stuck(spool_id, place_now, why)
                 except Exception as e:
                     # Group 63 review (C5): the reading landed, so the save still
-                    # answers as saved; only the retry is missing, and this says so.
+                    # answers as saved; only the retry is missing, and this says so
+                    # (round 2: on the page too, never "keeps trying").
+                    still_at_unrecorded = True
                     state.add_log_entry(
                         f"❌ Spool #{spool_id} is archived but still at {esc_place}: FCC couldn't take it off "
                         f"there ({html.escape(words.rstrip('.'), quote=False)}), and couldn't write it down to "
@@ -1888,8 +1956,12 @@ def api_spool_update():
             "location_now": str(res.get('location') or '').strip(),
         }
         if still_at:
-            # Group 63.2: the take-off above failed; FCC tries again (archive_takeoff).
+            # Group 63.2: the take-off above failed; FCC tries again (archive_takeoff),
+            # unless it couldn't write the spool down (still_at_unrecorded: the page
+            # then says to weigh it to 0 g again).
             out["still_at"] = still_at
+            if still_at_unrecorded:
+                out["still_at_unrecorded"] = True
         # Group 42.3c: an auto-unarchived spool whose old one-spool place holds
         # another spool now went to Unassigned; the weigh screen toasts this at 7 s.
         if res.get('fcc_warning'):
@@ -1920,7 +1992,16 @@ def api_spool_archive_takeoff():
         sid = int(sid)
     except (TypeError, ValueError):
         return jsonify({"success": False, "msg": "No spool was named."}), 400
-    ok, msg = archive_takeoff.take_off_now(sid)
+    try:
+        ok, msg = archive_takeoff.take_off_now(sid)
+    except Exception as e:
+        # Review round 2: an answer in words, never an error page the button can't
+        # read (it toasted "wasn't taken off" for a take-off that had landed).
+        state.add_log_entry(f"❌ Take it off for #{sid} stopped part-way: {html.escape(str(e), quote=False)}. "
+                            f"The Activity Log above says whether it came off.", "ERROR", "ff4444")
+        return jsonify({"success": False,
+                        "msg": f"FCC stopped part-way taking #{sid} off ({e}): see the Activity Log for "
+                               f"whether it came off."})
     return jsonify({"success": bool(ok), "msg": msg})
 
 

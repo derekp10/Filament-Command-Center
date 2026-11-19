@@ -92,6 +92,11 @@ _CLAIMS = set()
 _PASS = {"running": False}
 # The reasons an unreadable store has been said for, so the loop says each once.
 _UNREADABLE_SAID = set()
+# Review round 2: a store write that fails inside a try (a disk that refuses
+# writes) is said once per spool and kind, and the spool's next try is kept here
+# in memory, so the loop still backs off when the store can't hold it.
+_STORE_FAIL_SAID = set()
+_NEXT_AT_MEM = {}
 
 
 class StoreUnreadable(Exception):
@@ -200,7 +205,33 @@ def drop(sid, rev=None):
             return None
         data.pop(_key(sid), None)
         _save(data)
+        _NEXT_AT_MEM.pop(_key(sid), None)
         return rec
+
+
+def _store_write_failed(sid, what, e, next_at):
+    """A store write inside a try failed (review round 2): one ERROR line per spool
+    and kind, and the spool's next try kept in memory (`next_at`), so the loop
+    doesn't try it on every tick."""
+    with _LOCK:
+        _NEXT_AT_MEM[_key(sid)] = float(next_at)
+        said = (_key(sid), what) in _STORE_FAIL_SAID
+        _STORE_FAIL_SAID.add((_key(sid), what))
+    if not said:
+        state.add_log_entry(
+            f"❌ FCC couldn't update its list of archived spools to take off for #{sid} ({what}: "
+            f"{html.escape(str(e), quote=False)}).", "ERROR", "ff4444")
+
+
+def _next_at(rec):
+    """When `rec`'s next try is due: the later of the stored time and the one kept
+    in memory after a store write failed."""
+    stored = float((rec or {}).get('next_at') or 0)
+    try:
+        mem = _NEXT_AT_MEM.get(_key((rec or {}).get('sid')), 0)
+    except (TypeError, ValueError):
+        mem = 0
+    return max(stored, float(mem or 0))
 
 
 def note_stuck(sid, place, why, now=None, quiet=False):
@@ -227,15 +258,17 @@ def note_stuck(sid, place, why, now=None, quiet=False):
             rec.pop("quiet", None)
         data[key] = rec
         _save(data)
+        _NEXT_AT_MEM.pop(key, None)
         return dict(rec)
 
 
-def _release_box(sid, place, pre_extra, check_feed=True):
+def _release_box(sid, place, pre_extra, check_feed=True, emptied=True):
     """A spool taken off a head lets its own single-slot box go (Derek's 42.1 rule:
     by any path), as logic._release_single_slot_box does; best-effort. On a try
     after the save's own request (`check_feed`), only while no other spool runs on
     that head from that box (K24: the next spool put into the same PolyDryer and
-    loaded since keeps the attachment)."""
+    loaded since keeps the attachment). `emptied`: its record reads empty (the log
+    line says "archived empty" only then: a ticked spool has grams left)."""
     head = _place(place).upper()
     try:
         if not head or head not in (locations_db.get_active_printer_map() or {}):
@@ -247,8 +280,8 @@ def _release_box(sid, place, pre_extra, check_feed=True):
             return
         if locations_db.detach_single_slot_box(box, head):
             state.add_log_entry(f"🔓 {html.escape(box, quote=False)} detached from "
-                                f"{html.escape(head, quote=False)} — its spool #{sid} was archived empty",
-                                "INFO")
+                                f"{html.escape(head, quote=False)} — its spool #{sid} was archived"
+                                f"{' empty' if emptied else ''}", "INFO")
     except Exception as e:
         state.logger.warning(f"63.2: the box release for #{sid} skipped: {e}")
 
@@ -283,8 +316,25 @@ def take_off(sid, rec, same_request=False):
                 and back.get('archived') and not _place(back.get('location'))):
             return False, why
         state.logger.warning(f"63.2: taking #{sid} off {place} answered {why!r}, but a re-read shows it off")
-    _release_box(sid, place, pre_extra, check_feed=not same_request)
+    _release_box(sid, place, pre_extra, check_feed=not same_request, emptied=_reads_empty(rec))
     return True, None
+
+
+def _reads_empty(rec):
+    """Whether spool record `rec` has no filament left on it: Spoolman's
+    remaining_weight, else its effective capacity less what is used. A record
+    that says neither reads as empty (the take-off's usual case: a weigh to 0 g)."""
+    try:
+        left = (rec or {}).get('remaining_weight')
+        if left is not None and not isinstance(left, bool):
+            return float(left) <= 0
+        cap = spoolman_api.effective_initial_weight(rec)
+        used = (rec or {}).get('used_weight')
+        if cap is None or used is None:
+            return True
+        return float(cap) - float(used) <= 0
+    except (TypeError, ValueError):
+        return True
 
 
 def _button(sid):
@@ -306,7 +356,13 @@ def _log_listed(rec, again=False):
     why = spoolman_api.refusal_words(rec.get('last_error') or '') if rec.get('last_error') else ''
     reason = f" ({html.escape(why.rstrip('.'), quote=False)})" if why else ""
     lead = "Still waiting from before FCC restarted: " if again else ""
-    if place:
+    if rec.get('quiet'):
+        # A lost save's guess (review round 2): FCC never saw it archived there, so
+        # the words hedge, whatever place the guess names.
+        msg = (f"⚠️ {lead}Spool #{sid} was weighed empty while Spoolman wasn't answering, and FCC "
+               f"couldn't check whether it came off {_where(place)}{reason}. If it is still there, it is "
+               f"hidden there until it comes off, and FCC keeps trying.{_button(sid)}")
+    elif place:
         msg = (f"⚠️ {lead}Spool #{sid} is archived but still at {_where(place)}: "
                f"FCC couldn't take it off there{reason}. "
                f"It is hidden there until it comes off, and FCC keeps trying.{_button(sid)}")
@@ -320,26 +376,43 @@ def _log_listed(rec, again=False):
 def _failed(sid, now, why, rev=None):
     """A try that didn't land: the next one is scheduled, and the spool is listed
     once it has failed LIST_AFTER_TRIES times; with `rev`, only while its record is
-    still that one."""
+    still that one. A store that can't be written keeps the next try in memory
+    (review round 2: the loop tried the spool on every tick)."""
     listed = None
-    with _LOCK:
-        data = _load_for_write()
-        rec = data.get(_key(sid))
-        if not isinstance(rec, dict) or (rev is not None and rec.get('rev') != rev):
-            return 'failed'
-        tries = int(rec.get('tries') or 0) + 1
-        rec['tries'] = tries
-        rec['last_error'] = str(why or '')[:400]
-        rec['next_at'] = now + (RETRY_DELAYS_S[tries] if tries < min(LIST_AFTER_TRIES, len(RETRY_DELAYS_S))
-                                else SLOW_RETRY_S)
-        if tries >= LIST_AFTER_TRIES and not rec.get('listed'):
-            rec['listed'] = True
-            listed = dict(rec)
-        data[_key(sid)] = rec
-        _save(data)
+    nxt = now + SLOW_RETRY_S
+    try:
+        with _LOCK:
+            data = _load_for_write()
+            rec = data.get(_key(sid))
+            if not isinstance(rec, dict) or (rev is not None and rec.get('rev') != rev):
+                return 'failed'
+            tries = int(rec.get('tries') or 0) + 1
+            rec['tries'] = tries
+            rec['last_error'] = str(why or '')[:400]
+            nxt = now + (RETRY_DELAYS_S[tries] if tries < min(LIST_AFTER_TRIES, len(RETRY_DELAYS_S))
+                         else SLOW_RETRY_S)
+            rec['next_at'] = nxt
+            if tries >= LIST_AFTER_TRIES and not rec.get('listed'):
+                rec['listed'] = True
+                listed = dict(rec)
+            data[_key(sid)] = rec
+            _save(data)
+            _NEXT_AT_MEM.pop(_key(sid), None)
+    except (OSError, ValueError, StoreUnreadable) as e:
+        _store_write_failed(sid, "its next try", e, nxt)
+        return 'failed'
     if listed:
         _log_listed(listed)
     return 'failed'
+
+
+def _drop_after(sid, rev, now):
+    """Forget a spool a try settled (review round 2: a store write that fails here
+    never escapes the try; its line is written already)."""
+    try:
+        drop(sid, rev)
+    except (OSError, ValueError, StoreUnreadable) as e:
+        _store_write_failed(sid, "forgetting it", e, now + SLOW_RETRY_S)
 
 
 def _claim(sid):
@@ -355,24 +428,25 @@ def _unclaim(sid):
         _CLAIMS.discard(_key(sid))
 
 
-def _try(rec, now, source):
+def _try(rec, now, source, target=None):
     """One try at taking a written-down spool off its place. Returns what happened:
     'landed', 'off' (it is Unassigned already), 'refilled', 'moved', 'gone' (each
     dropped), 'failed' (kept, its next try scheduled), 'busy' (another try is
     working on it now: K28) or 'none' (nothing is written down for it any more).
-    `rec` names the spool; the try works from its record as it is now."""
+    `rec` names the spool; the try works from its record as it is now. `target`:
+    the place a move is about to go onto (retry_at), for its log line's words."""
     sid = (rec or {}).get('sid')
     if sid is None:
         return 'none'
     if not _claim(sid):
         return 'busy'
     try:
-        return _try_claimed(sid, now, source)
+        return _try_claimed(sid, now, source, target)
     finally:
         _unclaim(sid)
 
 
-def _try_claimed(sid, now, source):
+def _try_claimed(sid, now, source, target=None):
     try:
         cur = get(sid)
     except StoreUnreadable as e:
@@ -389,11 +463,12 @@ def _try_claimed(sid, now, source):
     esc = _where(place)
 
     def forget(outcome, words):
-        if drop(sid, rev) is not None:
-            if quiet:
-                state.logger.info(f"63.2: #{sid} needs no take-off ({outcome})")
-            else:
-                state.add_log_entry(words, "INFO")
+        # The line first: a store write that fails after it can't lose it.
+        if quiet:
+            state.logger.info(f"63.2: #{sid} needs no take-off ({outcome})")
+        else:
+            state.add_log_entry(words, "INFO")
+        _drop_after(sid, rev, now)
         return outcome
 
     if not isinstance(got, dict) or str(got.get('id')) != str(sid):
@@ -408,10 +483,16 @@ def _try_claimed(sid, now, source):
                                f"so FCC left it there")
     landed, why = take_off(sid, got)
     if landed:
-        drop(sid, rev)
-        tail = {"move": " before a move onto it", "button": "", "retry": " on a later try"}.get(source, "")
+        if source == "move":
+            # Onto the place it came off, or a move somewhere else (a record with
+            # no place is tried before every move: review round 2's words).
+            onto = _place(target).upper() if target else ''
+            tail = " before a move onto it" if onto and onto == now_at.upper() else " before a move"
+        else:
+            tail = {"button": "", "retry": " on a later try"}.get(source, "")
         state.add_log_entry(f"📦 Took archived Spool #{sid} off {html.escape(now_at, quote=False)}{tail}: "
                             f"it is Unassigned now", "INFO", "00ccff")
+        _drop_after(sid, rev, now)
         return 'landed'
     return _failed(sid, now, why, rev)
 
@@ -423,7 +504,7 @@ def retry_due(now=None):
     try:
         for rec in pending():
             try:
-                if float(rec.get('next_at') or 0) <= now:
+                if _next_at(rec) <= now:
                     _try(rec, now, 'retry')
             except Exception as e:
                 state.logger.warning(f"63.2: a take-off retry for #{rec.get('sid')} skipped: {e}")
@@ -438,7 +519,7 @@ def start_retry_pass(now=None):
     last pass still runs. Returns whether it started one. Never raises."""
     try:
         when = time.time() if now is None else float(now)
-        if not any(float(r.get('next_at') or 0) <= when for r in pending()):
+        if not any(_next_at(r) <= when for r in pending()):
             return False
         with _LOCK:
             if _PASS["running"]:
@@ -464,12 +545,13 @@ def start_retry_pass(now=None):
         return False
 
 
-def retry_at(place, now=None):
+def retry_at(place, now=None, placeless=True):
     """Before a move onto `place` (logic.perform_smart_move, the auto-deploy
     chain's head too; Derek's hook): one try for every spool written down at that
-    place, whatever its slot, and for every one whose place couldn't be read (K26).
-    A Spoolman that can't take this write would refuse the move's too. Never
-    raises, never blocks the move."""
+    place, whatever its slot, and for every one whose place couldn't be read (K26;
+    `placeless=False` leaves those out: the chain's head, after the outer move tried
+    them a moment before, review round 2). A Spoolman that can't take this write
+    would refuse the move's too. Never raises, never blocks the move."""
     lid = _place(place).upper()
     if not lid:
         return
@@ -477,8 +559,8 @@ def retry_at(place, now=None):
     try:
         for rec in pending():
             at = _place(rec.get('place')).upper()
-            if at == lid or not at:
-                _try(rec, now, 'move')
+            if at == lid or (placeless and not at):
+                _try(rec, now, 'move', target=lid)
     except Exception as e:
         state.logger.warning(f"63.2: the take-off retry before a move onto {lid} skipped: {e}")
 
@@ -493,6 +575,17 @@ def take_off_now(sid):
         return False, (f"FCC couldn't read its list of archived spools to take off ({e}), "
                        f"so nothing was done for #{int(sid)}.")
     if rec is None:
+        # Nothing written down: the spool says whether that is the whole story
+        # (review round 2: after a store was set aside, a listed line's button
+        # answered "nothing left" while its spool stayed archived, hidden).
+        got, answered = spoolman_api.get_spool_answer(sid)
+        if not answered or got is None:
+            return False, (f"FCC has #{int(sid)} on no list to take off, and couldn't check it in Spoolman just "
+                           f"now: try again in a moment.")
+        at = _place(got.get('location')) if isinstance(got, dict) else ''
+        if isinstance(got, dict) and str(got.get('id')) == str(sid) and got.get('archived') and at:
+            return False, (f"#{int(sid)} is still archived at {at}, and FCC's list of spools to take off "
+                           f"doesn't hold it: set its Location to Unassigned in Edit Spool to take it off.")
         return True, f"FCC has nothing left to take off for #{int(sid)}."
     place = _place(rec.get('place'))
     where = place or "its place"

@@ -447,7 +447,10 @@ def test_the_offered_empty_weight_is_selected_and_one_as_heavy_as_the_spool_is_r
     later(page, 700)
     press(page, "1300", 150)
     err = page.locator("#fcc-missing-empty-weight-overlay-err").inner_text()
-    assert err == "An empty spool weighs less than the 1245 g on the scale: check the number.", err
+    # PIN UPDATED DELIBERATELY (review round 2: the first rule, "at or above the reading", refused an
+    # empty spool's own reading; a new spool's empty weight is now at most the reading less 85% of its net).
+    assert err == ("1300 g can't be its empty weight: a new spool's 1000 g of filament is in the 1245 g "
+                   "on the scale. Check the number."), err
     assert _updates(page) == []
     later(page, 700)
     press(page, "250", 150)

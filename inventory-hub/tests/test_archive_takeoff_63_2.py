@@ -281,7 +281,9 @@ def test_the_button_says_why_when_it_still_cant(http, client):
 @pytest.mark.parametrize("payload, status", [({"id": 57}, 200), ({}, 400), ({"id": True}, 400),
                                              ({"id": "x"}, 400), (None, 400)],
                          ids=["nothing-written-down", "no-id", "bool", "text", "no-body"])
-def test_the_button_route_reads_its_id_strictly(client, payload, status):
+def test_the_button_route_reads_its_id_strictly(http, client, payload, status):
+    # (`http`: since review round 2 a press with nothing written down reads the spool,
+    # here gone from Spoolman, before it says "nothing left".)
     resp = client.post("/api/spool/archive_takeoff", json=payload) if payload is not None \
         else client.post("/api/spool/archive_takeoff", data="x", content_type="text/plain")
     assert resp.status_code == status, resp.get_json()
@@ -620,3 +622,196 @@ def test_a_write_sets_an_unreadable_store_aside_before_starting_a_new_list(http)
         assert f.read().startswith('{"57"')
     assert [r["sid"] for r in archive_takeoff.pending()] == [58]
     assert _logs("is kept as pending_archive_takeoffs.json.unreadable-"), state.RECENT_LOGS
+
+
+# ---- Group 63 review, round 2 -----------------------------------------------------------------------------
+
+PM_ROWS = ROWS   # PM-DB-1: a single-slot dryer box bound to XL-1
+
+
+def _stuck_with_next_spool():
+    """#57 archived ON XL-1 from PM-DB-1 (63.2's stuck spool); #99, the next spool
+    from the same PolyDryer, in stock on XL-1 since."""
+    return _HidesArchived({
+        57: {"location": "XL-1", "initial_weight": 1000, "used_weight": 1000, "archived": True,
+             "filament": {"weight": 1000}, "extra": {"physical_source": "PM-DB-1", "physical_source_slot": "1"}},
+        99: {"location": "XL-1", "initial_weight": 1000, "used_weight": 100, "archived": False,
+             "filament": {"weight": 1000}, "extra": {"physical_source": "PM-DB-1", "physical_source_slot": "1"}},
+    })
+
+
+class _UnreadFirst(_HidesArchived):
+    """FCC's reads of #57 fail (the route's and update_spool's), as in K26's shape."""
+
+    def get_spool(self, sid):
+        return None if int(sid) == 57 else super().get_spool(sid)
+
+
+@pytest.mark.parametrize("updates, sm_class", [
+    ({"used_weight": 700}, _HidesArchived),
+    ({"used_weight": 1000, "archived": True}, _HidesArchived),
+    ({"used_weight": 1000, "archived": True}, _UnreadFirst),
+], ids=["refill", "re-weigh-to-0-read", "re-weigh-to-0-unread"])
+def test_the_weigh_route_keeps_the_box_the_next_spool_runs_from(client, updates, sm_class):
+    """Review round 2, K24 on the real door. #57 is stuck archived on XL-1 from
+    PM-DB-1, and #99 runs on XL-1 from the same box since. A refill, or a re-weigh
+    to 0 g (the stuck-spool words advise it), takes #57 off and must leave PM-DB-1
+    attached for #99. RED on 0f3162c: update_spool kept it, then the route's own
+    release (or the take-off it called "the same request") let it go."""
+    store = LocationsStore(PM_ROWS)
+    base = _stuck_with_next_spool()
+    sm = sm_class(copy.deepcopy(base.spools))
+    with patch.object(sm_api, "get_spool_answer",
+                      side_effect=lambda sid: ({"id": int(sid), **sm.spools[int(sid)]}, True)):
+        res = run_move(sm, probe=IDLE, store=store, printer_map=PRINTER_MAP,
+                       call=lambda: client.post("/api/spool/update", json={
+                           "id": 57, "updates": dict(updates), "auto_archive": True})).get_json()
+    assert res["status"] == "success", res
+    assert sm.spools[57]["location"] == "", sm.spools[57]
+    assert store.bound("PM-DB-1") == "XL-1", (store.row("PM-DB-1"), state.RECENT_LOGS)
+
+
+def test_control_the_weigh_route_lets_the_box_go_when_nothing_runs_from_it(client):
+    """Control: with XL-1 empty since, the refill's take-off lets PM-DB-1 go."""
+    store = LocationsStore(PM_ROWS)
+    sm = _HidesArchived({57: {"location": "XL-1", "initial_weight": 1000, "used_weight": 1000, "archived": True,
+                              "filament": {"weight": 1000},
+                              "extra": {"physical_source": "PM-DB-1", "physical_source_slot": "1"}}})
+    with patch.object(sm_api, "get_spool_answer",
+                      side_effect=lambda sid: ({"id": int(sid), **sm.spools[int(sid)]}, True)):
+        res = run_move(sm, probe=IDLE, store=store, printer_map=PRINTER_MAP,
+                       call=lambda: client.post("/api/spool/update", json={
+                           "id": 57, "updates": {"used_weight": 700}, "auto_archive": True})).get_json()
+    assert res["status"] == "success" and store.bound("PM-DB-1") == "", (res, store.row("PM-DB-1"))
+
+
+def test_a_lost_save_whose_patch_took_the_spool_off_writes_nothing_down(client, monkeypatch):
+    """Review round 2 (server-store-2). update_spool read #57 and its archive edge
+    blanked the location in the PATCH whose answer was lost: landed or not, the
+    spool was never left archived at its place, so nothing is written down. RED on
+    0f3162c: a quiet record naming XL-1 was written, later listed as fact."""
+    _lost(monkeypatch, pre={"id": 57, "location": "XL-1", "archived": False, "used_weight": 700,
+                            "initial_weight": 1000, "extra": {}})
+    monkeypatch.setattr(sm_api, "take_unanswered",
+                        lambda sid: {"record": None, "answered": False, "landed": None, "blanked": True})
+    body = client.post("/api/spool/update", json={
+        "id": 57, "updates": {"used_weight": 1000, "archived": True}, "auto_archive": True}).get_json()
+    assert body["may_have_saved"] is True and archive_takeoff.pending() == [], body
+
+
+def test_a_quiet_record_is_listed_in_hedged_words(http):
+    """Review round 2 (server-store-2): a lost save's guess, listed after 5 unread
+    tries, never says the spool "is archived but still at XL-1". RED on 0f3162c."""
+    http.add("spool", 57, {}, location="XL-1", initial_weight=1000.0, used_weight=700.0, archived=False)
+    archive_takeoff.note_stuck(57, "XL-1", "Read timed out. (read timeout=15)", now=1000.0, quiet=True)
+    http.down = True
+    for _ in range(5):
+        archive_takeoff.retry_due(now=archive_takeoff.get(57)["next_at"])
+    (line,) = _logs("Take it off")
+    assert "is archived but still at" not in line["msg"], line
+    assert ("Spool #57 was weighed empty while Spoolman wasn't answering, and FCC couldn't check whether it "
+            "came off XL-1") in line["msg"], line
+
+
+def test_a_store_that_cant_write_never_fails_a_take_off_that_landed(http, client, monkeypatch):
+    """Review round 2 (server-store-3). The button's take-off lands, then the store
+    refuses the write that forgets it: the answer is still words (the take-off is
+    said in the Activity Log), and the loop doesn't try the spool again on the next
+    tick. RED on 0f3162c: a 500 error page, no 📦 line, and a try on every tick."""
+    _stuck_on_xl1(http)
+
+    def refuse(data):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(archive_takeoff, "_save", refuse)
+    resp = client.post("/api/spool/archive_takeoff", json={"id": 57})
+    assert resp.status_code == 200, resp.data[:200]
+    body = resp.get_json()
+    assert body["success"] is True, body
+    assert http.records["spool"][57]["location"] == ""
+    assert _logs("Took archived Spool #57 off XL-1"), state.RECENT_LOGS
+    gets = len(http.gets)
+    archive_takeoff.retry_due(now=1031.0)
+    assert len(http.gets) == gets, http.gets[gets:]
+
+
+def test_after_a_set_aside_store_the_button_checks_the_spool(http, client):
+    """Review round 2 (server-store-4). The store was set aside (unreadable) and a
+    new list started: #57 has no record, but is still archived on XL-1. The button
+    says so, never "nothing left". RED on 0f3162c."""
+    http.add("spool", 57, {}, location="XL-1", initial_weight=1000.0, used_weight=1000.0, archived=True)
+    _garble_store()
+    archive_takeoff.note_stuck(58, "XL-2", "x", now=1.0)       # sets the old list aside
+    body = client.post("/api/spool/archive_takeoff", json={"id": 57}).get_json()
+    assert body["success"] is False, body
+    assert body["msg"] == ("#57 is still archived at XL-1, and FCC's list of spools to take off doesn't hold "
+                           "it: set its Location to Unassigned in Edit Spool to take it off."), body
+
+
+def test_a_move_into_a_bound_slot_tries_a_placeless_record_once():
+    """Review round 2 (server-store-6): the outer move's hook tries the records with
+    no place; the chain's hook tries only its head's. RED on 0f3162c: two tries, two
+    PATCHes, in one move."""
+    rows = ROWS + [{"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4", "parent_id": "LR",
+                    "extra": {"slot_targets": {"1": "XL-1"}}}]
+    sm = _HidesArchived({
+        57: {"location": "XL-2", "initial_weight": 1000, "used_weight": 1000, "archived": True, "extra": {}},
+        99: {"location": "CR-SHELF", "initial_weight": 1000, "used_weight": 100, "archived": False, "extra": {}},
+    })
+    archive_takeoff.note_stuck(57, "", "lost", now=0.0, quiet=True)
+    real_patch = sm._http_patch
+    tries = []
+
+    def refuse_57(url, json=None, **k):
+        if str(url).rstrip("/").endswith("/57"):
+            tries.append(url)
+            return MagicMock(ok=False, status_code=500, text='{"message": "database is locked"}',
+                             json=MagicMock(return_value={"message": "database is locked"}))
+        return real_patch(url, json=json, **k)
+    sm._http_patch = refuse_57
+    with patch.object(sm_api, "get_spool_answer", side_effect=lambda sid: (sm.get_spool(sid), True)):
+        res = run_move(sm, probe=IDLE, store=LocationsStore(rows), printer_map=PRINTER_MAP,
+                       target="LR-MDB-1", raw_spools=[99], target_slot="1")
+    assert res.get("auto_deployed_to") == "XL-1", res
+    assert archive_takeoff.get(57)["tries"] == 1 and len(tries) == 1, (archive_takeoff.get(57), tries)
+
+
+def test_a_placeless_records_take_off_before_another_move_says_so(http):
+    """Review round 2 (server-store-7, 1): tried before a move onto CR-SHELF, a
+    record with no place taken off XL-1 says "before a move", never "before a move
+    onto it". RED on 0f3162c."""
+    http.add("spool", 57, {}, location="XL-1", initial_weight=1000.0, used_weight=1000.0, archived=True)
+    archive_takeoff.note_stuck(57, "", "lost", now=1000.0, quiet=True)
+    archive_takeoff.retry_at("CR-SHELF", now=1001.0)
+    (line,) = _logs("Took archived Spool #57 off XL-1")
+    assert "before a move: it is Unassigned now" in line["msg"] and "onto it" not in line["msg"], line
+
+
+def test_a_ticked_spools_later_take_off_says_archived_not_empty(http):
+    """Review round 2 (server-store-7, 2): a spool archived by a tick (grams left)
+    and taken off later lets its box go as "archived", never "archived empty". RED
+    on 0f3162c."""
+    http.add("spool", 57, {"physical_source": '"PM-DB-1"', "physical_source_slot": '"1"'},
+             location="XL-1", initial_weight=1000.0, used_weight=300.0, archived=True)
+    archive_takeoff.note_stuck(57, "XL-1", "x", now=1000.0)
+    archive_takeoff.retry_due(now=1031.0)
+    (line,) = _logs("detached from XL-1")
+    assert line["msg"].endswith("its spool #57 was archived"), line
+
+
+def test_a_weigh_whose_write_down_failed_says_so_on_the_page(client, monkeypatch):
+    """Review round 2 (critic): when the store couldn't write the stuck spool down,
+    nothing retries it, so the answer says so (`still_at_unrecorded`), and the page
+    never tells the person FCC "keeps trying". RED on 0f3162c."""
+    sm = _TakeOffRefused({57: {"location": "XL-1", "initial_weight": 1000, "used_weight": 700, "archived": False,
+                               "extra": {}}})
+
+    def refuse(*a, **k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(archive_takeoff, "note_stuck", refuse)
+    with patch.object(sm_api, "get_spool_answer",
+                      side_effect=lambda sid: ({"id": int(sid), **sm.spools[int(sid)]}, True)):
+        res = run_move(sm, probe=IDLE, store=LocationsStore(ROWS), printer_map=PRINTER_MAP,
+                       call=lambda: client.post("/api/spool/update", json={
+                           "id": 57, "updates": {"remaining_weight": 0, "archived": True},
+                           "auto_archive": True})).get_json()
+    assert res.get("still_at") == "XL-1" and res.get("still_at_unrecorded") is True, res

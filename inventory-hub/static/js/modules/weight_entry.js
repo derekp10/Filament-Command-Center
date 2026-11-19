@@ -409,6 +409,8 @@
                 const offer = (mode === 'gross' && !allowUnknownInitial && Number(currentUsed) === 0
                                && Number(initial) > 0 && v > Number(initial))
                     ? Math.round((v - Number(initial)) * 10) / 10 : null;
+                const ceiling = (mode === 'gross' && typeof window.tareCeiling === 'function')
+                    ? window.tareCeiling(v, Number(initial), Number(currentUsed)) : null;
                 const tare = await window.promptMissingEmptyWeight({
                     vendor: promptCtx.vendor || '',
                     material: promptCtx.material || '',
@@ -417,8 +419,9 @@
                     allowSkip: !allowUnknownInitial,
                     prefill: offer,
                     offer: offer === null ? '' : window.newSpoolTareOfferWords(v, Number(initial), offer),
-                    // Group 63 review (K05): an empty spool can't weigh what the whole one does.
-                    maxTare: mode === 'gross' ? v : null,
+                    // Group 63 review (K05, round 2): the heaviest empty weight this reading allows.
+                    maxTare: ceiling ? ceiling.max : null,
+                    maxTareWhy: ceiling ? ceiling.why : '',
                 });
                 if (tare === null) { inputEl.focus(); return; }  // user cancelled: back to the reading
                 let effectiveMode = mode;

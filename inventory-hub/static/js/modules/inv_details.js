@@ -1017,7 +1017,14 @@ window.moveSpoolFromCard = (spoolId, from) => {
 // once, however it ends ('moved', 'failed', 'cancelled'), from fccForceMove.
 window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
     const fromCard = !!(opts && opts.fromCard);
-    const hostEl = (opts && opts.host && opts.host.classList && opts.host.classList.contains('show')) ? opts.host : null;
+    // Where it is drawn is decided as it opens, after the place list's read (review
+    // round 2: a window closed during that read got the list drawn inside it, out of
+    // sight, taking every Escape, and the weigh questions waiting behind it waited
+    // for good): the window it was asked over while that is still open, else the
+    // page body, a search panel over the page closed first (its focus trap took the
+    // keyboard, as moveSpoolFromCard closes it first).
+    const shownHost = () => ((opts && opts.host && opts.host.classList && opts.host.classList.contains('show'))
+        ? opts.host : null);
     const settled = (outcome) => {
         if (opts && typeof opts.onSettled === 'function') {
             try { opts.onSettled(outcome); } catch (e) { console.error(e); }
@@ -1030,9 +1037,16 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
     if (defaultLoc.startsWith("❓")) defaultLoc = "UNKNOWN";
     if (defaultLoc === "Unassigned") defaultLoc = "";
 
-    fetch('/api/locations')
+    (window.fetchT || fetch)('/api/locations')
         .then(r => r.json())
         .then(locs => {
+            const hostEl = fromCard ? shownHost() : null;
+            if (fromCard && !hostEl) {
+                const panel = document.querySelector('.offcanvas.show');
+                if (panel && window.bootstrap && window.bootstrap.Offcanvas) {
+                    try { window.bootstrap.Offcanvas.getOrCreateInstance(panel).hide(); } catch (_) { /* noop */ }
+                }
+            }
             const validLocs = [{id: "", name: "-- Unassigned --"}];
             if (Array.isArray(locs)) {
                 locs.forEach(l => {
@@ -1266,8 +1280,13 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
                         showConfirmOverlay();
                     };
                     window.addEventListener('keydown', escKeyHandler, true);
+                    // Drawn inside a window: it goes with that window (a Cancel, heard
+                    // as one), never left inside a closed window (review round 2).
+                    const onHostHidden = () => { try { Swal.close(); } catch (_) { /* noop */ } };
+                    if (hostEl) hostEl.addEventListener('hidden.bs.modal', onHostHidden);
                     popup.__fccEscCleanup = () => {
                         window.removeEventListener('keydown', escKeyHandler, true);
+                        if (hostEl) hostEl.removeEventListener('hidden.bs.modal', onHostHidden);
                         if (confirmHandle) {
                             try { confirmHandle.cleanup(); } catch (_) { /* noop */ }
                             confirmHandle = null;
@@ -1327,25 +1346,31 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
 // nobody was shown, Group 51.6) and `doneToast` (the words of a direct move's
 // success toast).
 // Group 63 review: `opts.host` hosts its questions from a card (the window it was
-// asked over: the weigh-out list, the wizard); `opts.onSettled(outcome)` is heard
-// once, however the move ends ('moved', 'failed', 'cancelled'), so a caller that
-// waits for it (the refill question's line) never opens over its questions; a
+// asked over: the weigh-out list, the wizard); `opts.onSettled(outcome, words)` is
+// heard once, however the move ends ('moved', 'failed' with the failure's words,
+// 'cancelled', or 'error': FCC's own code threw while handling the answer, so
+// whether it moved is unknown), so a caller that waits for it (the refill
+// question's line) never opens over its questions; a
 // place is found in the list whatever its case (a scanned label is read upper
 // case, K22) and sent as the list names it; and a list that can't be read moves
 // nothing (K22: a slotless move into a multi-slot box, its picker skipped).
 window.fccForceMove = (spoolId, newLoc, locs, opts = {}) => {
     let settledOnce = false;
+    // What the last failure said (review round 2: a caller that asks again, the
+    // refill question, shows it, since its own overlay covers the toast).
+    let failWords = '';
     const settle = (outcome) => {
         if (settledOnce) return;
         settledOnce = true;
         if (opts && typeof opts.onSettled === 'function') {
-            try { opts.onSettled(outcome); } catch (e) { console.error(e); }
+            try { opts.onSettled(outcome, outcome === 'failed' ? failWords : ''); } catch (e) { console.error(e); }
         }
     };
     if (!Array.isArray(locs) && newLoc !== '') {
         const unread = () => {
-            showToast(`Couldn't read the list of places, so #${spoolId} wasn't moved to ${newLoc}. `
-                + 'Try again in a moment.', 'warning', 7000);
+            failWords = `Couldn't read the list of places, so #${spoolId} wasn't moved to ${newLoc}. `
+                + 'Try again in a moment.';
+            showToast(failWords, 'warning', 7000);
             settle('failed');
         };
         (window.fetchT || fetch)('/api/locations')
@@ -1407,11 +1432,16 @@ window.fccForceMove = (spoolId, newLoc, locs, opts = {}) => {
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
             if (!fromCard) openSpoolDetails(spoolId, true);
             if (opts && typeof opts.onDone === 'function') {
-                try { opts.onDone(res, placement); } catch (e) { console.error(e); }
+                // `newLoc`, the place this move was for, as the place list names it
+                // ('' for Unassigned): a direct move has no placement, and its caller
+                // must still hear where the spool went (review round 2: the refill
+                // question's Pick a place… told the wizard '' for a shelf).
+                try { opts.onDone(res, placement, newLoc); } catch (e) { console.error(e); }
             }
             return true;
         }
-        showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
+        failWords = failedWhy ? `#${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed');
+        showToast(failedWhy ? `❌ ${failWords}` : failWords, 'error', 7000);
         // A spool the move had already handed to the buffer (a
         // Swap's old spool) is in the user's hand all the same.
         window.takeIntoBuffer(res);
@@ -1431,7 +1461,8 @@ window.fccForceMove = (spoolId, newLoc, locs, opts = {}) => {
         .then(r => r.json())
         .then(x => x, (e) => {
             if (typeof setProcessing === 'function') setProcessing(false);
-            showToast(`Override failed: ${(e && e.message) || 'network error'}`, 'error', 7000);
+            failWords = `Override failed: ${(e && e.message) || 'network error'}`;
+            showToast(failWords, 'error', 7000);
             if (typeof onFail === 'function') { try { onFail(); } catch (e2) { console.error(e2); } }
             settle('failed');
             return null;
@@ -1442,9 +1473,11 @@ window.fccForceMove = (spoolId, newLoc, locs, opts = {}) => {
             onAnswer(res || {});
         })
         .catch(e => {
+            // FCC's own code threw while handling the answer: whether the move
+            // landed is unknown, so it is no failure to ask again about.
             if (typeof setProcessing === 'function') setProcessing(false);
             console.error(e);
-            settle('failed');
+            settle('error');
         });
     };
     // The Swal has closed by now, so a question sits over the details
@@ -1560,7 +1593,7 @@ window.fccForceMove = (spoolId, newLoc, locs, opts = {}) => {
                         `ℹ️ Force Location of #${spoolId} into ${newLoc}: the picker was closed, nothing moved`, 'INFO');
                 }
                 settle(out && out.outcome === 'moved' ? 'moved' : (out && out.outcome === 'stopped' ? 'cancelled' : 'failed'));
-            }, (e) => { console.error(e); settle('failed'); });
+            }, (e) => { console.error(e); settle('error'); });
             return;
         }
         const original = {
@@ -1585,6 +1618,10 @@ window.fccForceMove = (spoolId, newLoc, locs, opts = {}) => {
 // as the question is up (or has decided not to open), so a caller never waits for
 // a person (a test's evaluate hung on one that did).
 let _weighQuestionTail = Promise.resolve();
+// When a person last answered a refill question (review round 2): the next one in
+// the line opens under the pointer and the keyboard at once, so the second press of
+// that double click, or a second Escape, must not answer it unread.
+let _weighAnsweredAt = 0;
 const _inWeighLine = (run) => {
     let shown = () => {};
     const up = new Promise((r) => { shown = r; });
@@ -1688,6 +1725,7 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
             ${help}
             <div id="fcc-refill-title" style="font-size:1.2em; font-weight:bold; margin-bottom:10px; padding-right:2rem;">
                 📤 #${esc(sid)} is back in stock: where does it go?</div>
+            ${opts.notice ? `<div id="fcc-refill-notice" role="alert" style="color:#ff9b9b; margin-bottom:10px; font-size:var(--fcc-fs-small);">⚠️ ${keepWhole(esc(opts.notice))}</div>` : ''}
             <p style="color:#ddd; margin-bottom:12px;">It came off <strong>${keepWhole(esc(place))}</strong>
                 when it was archived, and is Unassigned now.</p>
             <div class="fcc-refill-buttons" style="display:flex; flex-wrap:wrap; gap:8px;">
@@ -1749,9 +1787,19 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
         next.focus();
     };
     // `moving`: an answer that starts a move; the line goes on once that settles.
+    const openedAt = Date.now();
+    // Opened right after another was answered: a press or an Escape this soon is the
+    // second half of the one that answered it (review round 2).
+    const tooSoon = () => openedAt - _weighAnsweredAt < armMs && Date.now() - _weighAnsweredAt < armMs;
     const close = (how, moving = false) => {
         if (closed) return;
         closed = true;
+        if (how !== 'host') {
+            _weighAnsweredAt = Date.now();
+            // A pointer's press closed it: the second press of that double click
+            // reaches nothing behind it (Group 62.3's rule), the next question included.
+            if (typeof window.fccShieldNextPress === 'function') window.fccShieldNextPress();
+        }
         unregister();
         document.removeEventListener('keydown', onArrow, true);
         if (qr) { try { qr.cleanup(); } catch (_) { /* noop */ } qr = null; }
@@ -1769,7 +1817,21 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
             doneNow();
         }
     };
-    const settled = () => { giveBack(); doneNow(); };
+    // A move that failed asks again, its refusal's words on the question (review
+    // round 2: the next weigh question mounted over the failure's toast, and the
+    // spool, Unassigned with its note used up, was never asked about again). An
+    // 'error' (FCC's own code threw while handling the answer, the move maybe
+    // landed) asks nothing again.
+    const settled = (outcome, words) => {
+        if (outcome === 'failed') {
+            const again = { host: opts.host, onClosed: opts.onClosed, onMoved: opts.onMoved,
+                notice: words || `#${sid} wasn't moved: ask again, or Leave it Unassigned.` };
+            _askRefillPlace(spoolId, ask, again, () => {}).then(doneNow, doneNow);
+            return;
+        }
+        giveBack();
+        doneNow();
+    };
     // A move it made landed: out of the scan buffer (K23), and the caller hears where.
     const landed = (target, res, placement) => {
         if (typeof state !== 'undefined' && Array.isArray(state.heldSpools)
@@ -1803,7 +1865,7 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
         tier: 'standard',
         host: hostEl,
         initialFocus: '#fcc-refill-leave',
-        onEscape: () => leave('leave'),
+        onEscape: () => { if (!tooSoon()) leave('leave'); },
     });
     const ov = handle.element;
     // mountOverlay cleans the overlay up when its host closes; the question goes too.
@@ -1824,11 +1886,14 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
         close('pick', true);
         window.promptEditLocation(sid, '', {
             fromCard: true, host: hostEl,
-            onDone: (res, placement) => landed(placement ? placement.location : '', res, placement),
+            onDone: (res, placement, picked) => landed(placement ? placement.location : (picked || ''), res, placement),
             onSettled: settled,
         });
     });
-    if (leaveBtn) leaveBtn.onclick = () => leave('leave');
+    if (leaveBtn) leaveBtn.onclick = (e) => {
+        if (tooSoon() && !(e && e.type === 'click' && e.detail === 0)) return;   // a double click's second press
+        leave('leave');
+    };
     document.addEventListener('keydown', onArrow, true);
 
     // A refused scan says why on its own line, under the greyed-out reason (K20).

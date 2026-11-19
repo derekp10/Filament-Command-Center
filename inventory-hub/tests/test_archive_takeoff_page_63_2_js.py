@@ -67,7 +67,8 @@ def test_a_press_takes_it_off_and_says_so(tmp_path):
 
 @needs_node
 def test_a_press_that_still_cant_warns_for_7_s(tmp_path):
-    msg = "Couldn't take #57 off XL-1: Spoolman refused it: database is locked FCC keeps trying."
+    # (The server's words since the review's K27 / K32: two sentences.)
+    msg = "Couldn't take #57 off XL-1: Spoolman refused it: database is locked. FCC keeps trying."
     res = _press(tmp_path, {"success": False, "msg": msg})
     assert [(t["msg"], t["type"], t["duration"]) for t in res["toasts"]] == [(msg, "warning", 7000)], res
 
@@ -90,3 +91,27 @@ def test_a_second_press_asks_nothing(tmp_path, presses):
 def test_a_button_with_no_spool_asks_nothing(tmp_path):
     res = _press(tmp_path, {"success": True, "msg": "ok"}, sid="'x'")
     assert res["posts"] == [], res
+
+
+@needs_node
+def test_the_press_waits_long_enough_and_no_answer_never_says_it_failed(tmp_path):
+    """Review round 2 (server-store-5): one try can wait on several Spoolman
+    timeouts, so the press waits as Undo does (120 s), and no answer says the
+    take-off may still be going, never that it wasn't done. RED on 0f3162c: 15 s,
+    then "wasn't taken off" while the take-off went on and landed."""
+    res = run_js(tmp_path, ["inv_weigh_out.js"], """
+const waits = [];
+window.fetchT = (u, o, ms) => { waits.push(ms); return Promise.reject(new Error('timed out')); };
+const container = { id: 'live-logs' };
+const btn = {
+  getAttribute: (k) => (k === 'data-takeoff-spool' ? '57' : null),
+  closest: (sel) => (sel === '.fcc-takeoff-btn' ? btn : (sel === '#live-logs, #fcc-log-pill-overlay' ? container : null)),
+};
+window.fccArchiveTakeoffClick({ target: btn, detail: 1, preventDefault() {} });
+await __settle(80);
+return { waits, toasts: __rec.toasts.map((t) => t.msg) };
+""")
+    assert res["unhandled"] == [], res
+    assert res["waits"] and res["waits"][0] >= 60000, res
+    assert res["toasts"] == ["FCC didn't answer in time: it may still be taking #57 off. "
+                             "The Activity Log says when it is off."], res

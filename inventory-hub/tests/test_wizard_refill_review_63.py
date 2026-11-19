@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import archive_takeoff  # noqa: E402
 import spoolman_api  # noqa: E402
 import state  # noqa: E402
-from move_engine_harness import IDLE, LocationsStore, WeighedWireSpoolman, run_move  # noqa: E402
+from move_engine_harness import IDLE, LocationsStore, WeighedWireSpoolman, _probe_for, run_move  # noqa: E402
 
 PRINTER_MAP = {f"XL-{n}": {"printer_name": "XL", "position": n - 1} for n in (1, 2)}
 ROWS = [
@@ -205,3 +205,118 @@ def test_a_refused_filament_write_keeps_the_refill_question(client):
     assert body["success"] is False and body["spool_saved"] is True, body
     assert body["refill_ask"]["place"] == "XL-1" and body["archived_now"] is False, body
     assert sm.spools[57]["archived"] is False and sm.spools[57]["location"] == ""
+
+
+# ---- Group 63 review, round 2 -------------------------------------------------------------------------
+
+def _edit_with(client, sm, spool_data, probe=IDLE, inner=None, **body):
+    """_edit, with a probe and, inside the request, `inner` (a list of patches)."""
+    def call():
+        from contextlib import ExitStack
+        with ExitStack() as st:
+            for p in (inner or []):
+                st.enter_context(p)
+            return client.post("/api/edit_spool_wizard", json=dict(
+                {"spool_id": 57, "spool_data": spool_data}, **DOOR, **body))
+    return run_move(sm, probe=probe, store=LocationsStore(ROWS), printer_map=PRINTER_MAP, call=call).get_json()
+
+
+def _unreadable(shape):
+    import json as _json
+    import locations_db as _ldb
+    if shape == "corrupt":
+        def load(*a, **k):
+            raise _ldb.LocationsCorruptError("data/locations.json", _json.JSONDecodeError("Expecting value (test)", "{", 1))
+    else:
+        def load(*a, **k):
+            _ldb._LAST_READ.failed = True
+            return []
+    return patch.object(_ldb, "load_locations_list", side_effect=load)
+
+
+@pytest.mark.parametrize("shape", ["corrupt", "disk-refused"])
+def test_a_tick_on_a_head_fcc_cant_read_the_places_for_says_so(client, shape):
+    """Review round 2 (server-edges-1, the wizard): with locations.json unreadable
+    FCC can't tell whether XL-1 is a head, so a ticked spool stays where it is and
+    the Save says so. RED on 0f3162c: corrupt, the error escaped after the spool's
+    write landed (success false, nothing said about the spool); refused by the disk,
+    XL-1 read as no head, and the Save said nothing while #57 sat hidden on it."""
+    import locations_db as _ldb
+    sm = _Spoolman({57: _spool("XL-1", archived=False, used=300)})
+    try:
+        body = _edit_with(client, sm, {"location": "XL-1", "archived": True}, inner=[_unreadable(shape)])
+    finally:
+        _ldb._LAST_READ.failed = False
+    assert body["success"] is True, body
+    assert ("#57 is archived at XL-1, and FCC couldn't read its list of places to check whether that is a "
+            "toolhead") in body.get("warning", ""), body
+    assert sm.spools[57]["archived"] is True and sm.spools[57]["location"] == "XL-1"
+
+
+@pytest.mark.parametrize("spool_data", [
+    {"location": "CR-CT-2-R2", "used_weight": 600},
+    {"location": "CR-CT-2-R2", "archived": False},
+], ids=["refill-and-move", "untick-and-move"])
+def test_a_refill_with_a_move_never_brings_the_spool_back_on_its_head(client, spool_data):
+    """Review round 2 (server-edges-3). #57 is stuck archived ON XL-1 and #99 runs
+    there; the Save weighs it back (or unticks it) AND moves it to a cart, with XL
+    printing. The refill takes it off the head first, so the move asks nothing about
+    a print and it lands on the cart. RED on 0f3162c: the first write named XL-1, so
+    #57 came back in stock ON XL-1 beside #99, and the move asked about the print."""
+    sm = _Spoolman({57: _spool("XL-1", archived=True, used=1000),
+                    99: _spool("XL-1", archived=False, used=100)})
+    body = _edit_with(client, sm, spool_data, probe=_probe_for({"XL"}))
+    assert body["success"] is True, body
+    assert sm.spools[57]["location"] == "CR-CT-2-R2" and sm.spools[57]["archived"] is False, sm.spools[57]
+    assert sm.spools[99]["location"] == "XL-1"
+
+
+class _FilamentRefused:
+    def __init__(self):
+        self.p = patch.object(spoolman_api, "update_filament", side_effect=self.refuse)
+
+    @staticmethod
+    def refuse(fid, data):
+        spoolman_api.LAST_SPOOLMAN_ERROR = 'HTTP 500: {"message": "database is locked"}'
+        return None
+
+
+def test_a_tick_on_a_head_with_a_refused_filament_says_where_it_is(client):
+    """Review round 2 (server-edges-4). The tick took #57 off XL-1 (its no-move
+    take-off) and the filament write was refused: the failed answer says it is
+    Unassigned (location_now ''), so the page's field stops saying XL-1. RED on
+    0f3162c: no location_now, and the stale field's next Saves led to loading it
+    back onto XL-1."""
+    sm = _Spoolman({57: _spool("XL-1", archived=False, used=300)})
+    body = _edit_with(client, sm, {"location": "XL-1", "archived": True},
+                      inner=[_FilamentRefused().p], filament_id=7, filament_data={"comment": "x"})
+    assert body["success"] is False and body["spool_saved"] is True, body
+    assert body["location_now"] == "" and "location_moved" not in body, body
+    assert "so it was taken off XL-1: it is Unassigned." in body["msg"], body
+
+
+def test_a_refused_filament_after_a_failed_take_off_names_where_it_is_stuck(client):
+    """Review round 2 (server-edges-4, with C2): the take-off was refused too; the
+    failed answer's words say the spool is still at XL-1 and FCC keeps trying. RED
+    on 0f3162c: the words left it out."""
+    sm = _TakeOffRefused({57: _spool("XL-1", archived=False, used=300)})
+    body = _edit_with(client, sm, {"location": "XL-1", "archived": True},
+                      inner=[_FilamentRefused().p], filament_id=7, filament_data={"comment": "x"})
+    assert body["success"] is False, body
+    assert "#57 is archived but still at XL-1: FCC couldn't take it off there, and keeps trying." in body["msg"], body
+
+
+def test_a_take_off_that_couldnt_be_written_down_never_says_keeps_trying(client):
+    """Review round 2 (critic): the take-off was refused and the store couldn't write
+    it down either, so nothing retries it: the Save's words say what finishes it.
+    RED on 0f3162c: "and keeps trying"."""
+    sm = _TakeOffRefused({57: _spool("XL-1", archived=False, used=300)})
+
+    def refuse(*a, **k):
+        raise PermissionError(13, "Permission denied")
+    body = _edit_with(client, sm, {"location": "XL-1", "archived": True},
+                      inner=[patch.object(archive_takeoff, "note_stuck", side_effect=refuse)])
+    assert body["success"] is True, body
+    assert "keeps trying" not in body.get("warning", ""), body
+    assert ("#57 is archived but still at XL-1: FCC couldn't take it off there, and couldn't note it to try "
+            "again: set its Location to Unassigned to finish it.") in body.get("warning", ""), body

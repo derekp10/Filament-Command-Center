@@ -1764,14 +1764,24 @@ def release_box_after_direct_write(sid, pre, post):
     off its head released nothing and its single-slot box stayed attached there.
     Call after such a write landed; `pre` / `post` are the spool before and after
     (the archive edge releases inside update_spool, and a second release finds
-    nothing to do). Returns the released box id, or None; never raises."""
+    nothing to do). Returns the released box id, or None; never raises.
+
+    Group 63 review, round 2 (K24 on the real doors): a spool that was archived
+    BEFORE the write wasn't what ran on that head (63.2's stuck spool, hidden
+    there), so its box lets go only while no other spool runs on that head from it
+    (spoolman_api._box_runs_another: the next spool from the same PolyDryer, loaded
+    since, keeps the attachment)."""
     try:
         before = str((pre or {}).get('location') or '').strip().strip('"').upper()
         after = str((post or {}).get('location') or '').strip().strip('"').upper()
         if not before or before == after:
             return None
-        return _release_single_slot_box(sid, before, (pre or {}).get('extra') or {},
-                                        locations_db.get_active_printer_map())
+        pre_extra = (pre or {}).get('extra') or {}
+        if (pre or {}).get('archived'):
+            box = str(pre_extra.get('physical_source') or '').strip().strip('"').upper()
+            if box and box != before and spoolman_api._box_runs_another(box, before, sid):
+                return None
+        return _release_single_slot_box(sid, before, pre_extra, locations_db.get_active_printer_map())
     except Exception as e:
         state.logger.warning(f"single-slot box release after a direct edit of #{sid} skipped: {e}")
         return None
@@ -3282,7 +3292,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             # hook too (perform_smart_move runs it only for the outer move, whose
             # target is the box): a slot-label scan or a deposit into a bound slot
             # is the usual way a spool reaches a head. Never raises.
-            archive_takeoff.retry_at(th)
+            # (The records with no place were tried by the outer move a moment
+            # ago: review round 2, two take-off PATCHes and two counted tries.)
+            archive_takeoff.retry_at(th, placeless=False)
             chain_origin = f'auto_deploy_from_{origin or "smart_move"}'
             outer_sink = getattr(_chain_undo_sink, 'records', None)
             _chain_undo_sink.records = []

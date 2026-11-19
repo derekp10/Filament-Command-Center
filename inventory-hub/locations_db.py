@@ -176,9 +176,16 @@ def last_read_failed():
     """Whether this thread's last load_locations_list() answered [] because the
     file couldn't be read (the disk refusing it), not because it holds no rows
     (Group 63 review, K35: a refill read the [] as "no such head" and put a spool
-    back in stock on its head). A caller that must fail safe asks right after its
-    read; a stand-in for load_locations_list never sets it."""
+    back in stock on its head). A caller that must fail safe calls
+    forget_read_failure() just before its read and asks right after it; a
+    stand-in for load_locations_list never sets it."""
     return bool(getattr(_LAST_READ, 'failed', False))
+
+
+def forget_read_failure():
+    """Clears last_read_failed() before a read whose answer will be checked, so an
+    earlier failed read on this thread is never taken for this one's."""
+    _LAST_READ.failed = False
 
 
 def load_locations_list():

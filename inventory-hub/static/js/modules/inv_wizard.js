@@ -189,20 +189,24 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
                 if (msg) msg.innerHTML = '';
             }
         };
-        wizEl.addEventListener('input', _onDirty);
-        wizEl.addEventListener('change', _onDirty);
+        // A dialog drawn inside the wizard (Force Location's list, from the refill
+        // question's Pick a place…: Group 63 review, round 2) is no edit of the form:
+        // typing its search marked the wizard changed, and closing it asked.
+        const _inDialog = (e) => !!(e && e.target && e.target.closest && e.target.closest('.swal2-container'));
+        wizEl.addEventListener('input', (e) => { if (!_inDialog(e)) _onDirty(); });
+        wizEl.addEventListener('change', (e) => { if (!_inDialog(e)) _onDirty(); });
         // Which extras the user changed (window.wizardNoteExtraTouched). A chip's
         // own onclick removes it, so its click is read in the capture phase,
         // while the chip still sits in its box.
-        wizEl.addEventListener('input', (e) => window.wizardNoteExtraTouched(e.target));
-        wizEl.addEventListener('change', (e) => window.wizardNoteExtraTouched(e.target));
+        wizEl.addEventListener('input', (e) => { if (!_inDialog(e)) window.wizardNoteExtraTouched(e.target); });
+        wizEl.addEventListener('change', (e) => { if (!_inDialog(e)) window.wizardNoteExtraTouched(e.target); });
         // Which plain boxes the user changed (window.wizardNoteNativeTouched,
         // Group 54.5): `input` only. A number box fires `input` for every change a
         // person makes (a key, a paste, the spinner, the wheel); its `change` comes
         // at blur, and Chromium still fires it for an edit made before the wizard
         // was reset for the next spool when the box kept the focus (the open moves
         // the focus after the reset), which read as a touch of the new spool's box.
-        wizEl.addEventListener('input', (e) => window.wizardNoteNativeTouched(e.target));
+        wizEl.addEventListener('input', (e) => { if (!_inDialog(e)) window.wizardNoteNativeTouched(e.target); });
         // Group 54.8: a price typed over the filament's is the spool's own, so its
         // "↩ from filament" goes (after the line above has noted the touch).
         wizEl.addEventListener('input', (e) => {

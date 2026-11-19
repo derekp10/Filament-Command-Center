@@ -3338,7 +3338,13 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // routes to the dialog's callback instead of hitting the backend or the
     // generic CMD-routes below. Returns true on a matched session — fall
     // through to the rest of the dispatch otherwise.
-    if (window.routeConfirmScan && window.routeConfirmScan(text)) return;
+    // A dialog's own Cancel QR it answered closed a question too: a second read of
+    // it, or of a bare CMD:CANCEL, is the same press (Group 63 review, round 2).
+    const cancelQr = /CMD:CANCEL:[A-Z0-9_-]+$/.test(upper);
+    if (window.routeConfirmScan && window.routeConfirmScan(text)) {
+        if (cancelQr) _questionCancelledAt = Date.now();
+        return;
+    }
     // Group 40.3: a question on screen holds off every other scan until it is
     // answered: the three-way "Load it instead / Just store it / Cancel", and since
     // Group 62.2 the printing yes / no "Continue Anyway / Cancel" and the Quick-Swap
@@ -3357,9 +3363,28 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         window._fccOpenMoveQuestion = openQuestion;
     }
     if (openQuestion) {
+        // Group 63 review, round 2: questions now wait in a line (the refill
+        // question and the post-archive prompt), so the next one opens the moment
+        // one is answered. A session Cancel QR routeConfirmScan didn't answer is a
+        // closed dialog's, never this one's; and a bare CMD:CANCEL read within
+        // LOC_REPEAT_MS of the read that closed a question is that read again (a
+        // scanner's double read): either cancelled the next question unread.
+        if (cancelQr) {
+            const said = 'That cancel QR belongs to a dialog that has closed — ignored';
+            if (openQuestion.flash) openQuestion.flash(said);
+            if (window.logClientEvent) window.logClientEvent(`ℹ️ ${said} ("${escLog(text)}")`, 'INFO');
+            unread();
+            return;
+        }
+        if (/CMD:CANCEL$/.test(upper) && (capturedAt || Date.now()) - _questionCancelledAt < LOC_REPEAT_MS) {
+            if (window.logClientEvent) window.logClientEvent(
+                `ℹ️ A second read of CMD:CANCEL was ignored, so "${escLog(openQuestion.title)}" stays open: the first read answered the question before it`, 'INFO');
+            unread();
+            return;
+        }
         // At the end of the text, as routeConfirmScan reads its QRs: a stray
         // key in front refused the question's own Cancel (round 5).
-        if (/CMD:CANCEL(:[A-Z0-9_-]+)?$/.test(upper)) { openQuestion.cancel(); _questionCancelledAt = Date.now(); return; }
+        if (/CMD:CANCEL$/.test(upper)) { openQuestion.cancel(); _questionCancelledAt = Date.now(); return; }
         // A question whose answers are labels (Group 40.5's "Record it as coming
         // from…": a feed slot's label picks it) routes them itself; 'refused'
         // (a held slot, round 9) is no read of the label.

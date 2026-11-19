@@ -888,7 +888,12 @@ window.updateWeighRowPreview = (inputEl) => {
         return;
     }
     if (r.error) {
-        previewEl.innerHTML = `<span style="color:#f88;">Invalid input</span>`;
+        // A spool whose own total is 0 g (review round 2): "Invalid input" under a
+        // valid reading said the reading was wrong.
+        const cached = weighOutDetailsCache.get(Number(id));
+        previewEl.innerHTML = (r.error === 'invalid_initial' && cached && cached.zeroTotal)
+            ? `<span style="color:#f88;">Its total is 0 g: set it in Edit Spool first</span>`
+            : `<span style="color:#f88;">Invalid input</span>`;
         return;
     }
     if (r.requires_empty) {
@@ -1058,11 +1063,13 @@ window.saveWeighOutRow = async (idStr) => {
             const offer = (mode === 'gross' && Number(details.used) === 0 && Number(details.initial) > 0
                            && reading > Number(details.initial))
                 ? Math.round((reading - Number(details.initial)) * 10) / 10 : null;
+            // Group 63 review (K05, round 2): the heaviest empty weight this reading allows.
+            const ceiling = (mode === 'gross' && typeof window.tareCeiling === 'function')
+                ? window.tareCeiling(reading, Number(details.initial), Number(details.used)) : null;
             const tare = await window.promptMissingEmptyWeight(Object.assign({}, details.context || {},
                 { onScanDismiss: unsaved, scanPending: () => !!pendingScan, prefill: offer,
                   offer: offer === null ? '' : window.newSpoolTareOfferWords(reading, Number(details.initial), offer),
-                  // Group 63 review (K05): an empty spool can't weigh what the whole one does.
-                  maxTare: mode === 'gross' ? reading : null }));
+                  maxTare: ceiling ? ceiling.max : null, maxTareWhy: ceiling ? ceiling.why : '' }));
             // Cancelled: back to the target's box (round 7: the focus fell to
             // the page), where the person is: this spool's, unless the save
             // moved them on (round 10: it went back to this one, and the next
@@ -1128,11 +1135,18 @@ const logWeighFailure = (id, said) => {
 // take-off is the save's own (/api/spool/update), FCC writes the spool down and
 // keeps trying, and the one WARNING Activity Log line is the server's: the page
 // writes none of its own.
-const stillPlacedWords = (id, place) => (place
-    ? `Spool #${id} is archived but still at ${place}: FCC couldn't take it off there, and keeps trying.`
-    : `Spool #${id} is archived, but FCC couldn't take it off its place, and keeps trying.`);
-const warnStillPlaced = (id, place) => {
-    showToast(stillPlacedWords(id, place), 'warning', 7000);
+// `unrecorded` (Group 63 review, round 2): FCC couldn't write the spool down either,
+// so nothing retries it, and the words say what finishes it instead.
+const stillPlacedWords = (id, place, unrecorded = false) => {
+    const at = place ? `still at ${place}` : 'still at its place';
+    return unrecorded
+        ? `Spool #${id} is archived but ${at}: FCC couldn't take it off there, and couldn't note it to try `
+            + 'again: weigh it to 0 g again to take it off.'
+        : (place ? `Spool #${id} is archived but still at ${place}: FCC couldn't take it off there, and keeps trying.`
+            : `Spool #${id} is archived, but FCC couldn't take it off its place, and keeps trying.`);
+};
+const warnStillPlaced = (id, place, unrecorded = false) => {
+    showToast(stillPlacedWords(id, place, unrecorded), 'warning', 7000);
 };
 
 // `how` (Group 54.7; Derek, 2026-11-07, (a): "Auto-Archive 0g" off means off) is
@@ -1241,7 +1255,7 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 } else {
                     showToast(`Updated Spool #${id}`, 'success');
                 }
-                if (stillAt) warnStillPlaced(id, stillAt.place);
+                if (stillAt) warnStillPlaced(id, stillAt.place, stillAt.unrecorded);
                 // Group 42.3c: a used-up spool weighed back above 0 g whose old
                 // one-spool place holds another spool now went to Unassigned instead.
                 if (res && res.warning) showToast(res.warning, 'warning', 7000);
@@ -1262,8 +1276,14 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                                 + 'Scan it to where you put it.', 'info', 7000);
                             return;
                         }
+                        // Its host: the weigh-out list, else the window the Quick-Weigh was
+                        // opened over (a spool window, the Location Manager), so Pick a
+                        // place… draws Force Location's list inside it (review round 2);
+                        // over the search panel, none (the list closes the panel first).
+                        const shownModals = document.querySelectorAll('.modal.show');
                         window.askRefillPlace(id, askRefill, {
-                            host: weighOutShown() ? document.getElementById('weighOutModal') : null,
+                            host: weighOutShown() ? document.getElementById('weighOutModal')
+                                : (shownModals.length ? shownModals[shownModals.length - 1] : null),
                             settle: scanSettled, scanPending: () => !!pendingScan,
                             waitWhile: weighReadingBeingTyped,
                             skipIf: () => scansTaken !== takenAtSave,
@@ -1292,7 +1312,7 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                           scanPending: () => !!pendingScan,
                           // Group 63.8: not while the next reading is being typed.
                           waitWhile: weighReadingBeingTyped,
-                          notice: stillAt ? stillPlacedWords(id, stillAt.place) : null }), 400);
+                          notice: stillAt ? stillPlacedWords(id, stillAt.place, stillAt.unrecorded) : null }), 400);
                 }
 
                 // Visual feedback that it's done, on its row as it is now (a
@@ -1351,7 +1371,7 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             // sent. A take-off that failed comes back as `still_at`: FCC wrote the
             // spool down and keeps trying, and the page says so.
             const stillAt = (typeof res.still_at === 'string' && res.still_at.trim())
-                ? { place: res.still_at.trim() } : null;
+                ? { place: res.still_at.trim(), unrecorded: res.still_at_unrecorded === true } : null;
             finalize(stillAt);
             
         } else if (res.status === 'details_changed') {
@@ -1364,7 +1384,10 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             const fresh = (res && res.fresh) || {};
             const cached = weighOutDetailsCache.get(id);
             if (cached) {
-                if (Number.isFinite(Number(fresh.initial))) cached.initial = Number(fresh.initial);
+                if (Number.isFinite(Number(fresh.initial))) {
+                    cached.initial = Number(fresh.initial);
+                    cached.zeroTotal = cached.initial === 0;     // review round 2: its words
+                }
                 if (Number.isFinite(Number(fresh.used))) cached.used = Number(fresh.used);
                 if (typeof fresh.archived === 'boolean') cached.archived = fresh.archived;
                 cached.fetchedAt = Date.now();
@@ -1384,8 +1407,12 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                     // refused row's box takes the keyboard back, its reading selected,
                     // so the Enter the toast asks for saves it, not the next spool.
                     const now = document.activeElement;
+                    // (The same spool's box drawn again counts as the same place:
+                    // review round 2, a redraw meanwhile left the keyboard there.)
+                    const same = now === movedAt.el || (!!now && movedAt.id != null && !!now.classList
+                        && now.classList.contains('weigh-input') && now.dataset.id === movedAt.id);
                     const stayed = !now || now === document.body
-                        || (now === movedAt.el && !('value' in now && now.value !== movedAt.value));
+                        || (same && !('value' in now && now.value !== movedAt.value));
                     if (stayed) {
                         weighTargetId = String(id);
                         box.focus();
@@ -1425,7 +1452,8 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     // Move to the next input immediately so the user can keep working while it saves
     moveOn();
     const ae = document.activeElement;
-    movedAt = { el: ae, keys: keysTyped, value: ae && 'value' in ae ? ae.value : undefined };
+    movedAt = { el: ae, keys: keysTyped, value: ae && 'value' in ae ? ae.value : undefined,
+        id: ae && ae.classList && ae.classList.contains('weigh-input') ? ae.dataset.id : undefined };
 };
 
 // The focus on from box `inputEl` as it is saved, worked out before the box is
@@ -1584,15 +1612,19 @@ if (typeof window.registerShortcut === 'function') {
         out.add(sid);
         const fromPill = !!btn.closest('#fcc-log-pill-overlay');
         if (fromPill && typeof window.logPillNotice === 'function') window.logPillNotice('');
+        // A long wait, as Undo's (review round 2): one try can wait on several
+        // Spoolman timeouts, and a short one said "wasn't taken off" while the
+        // take-off went on and landed. No answer says it may still be going.
         (window.fetchT || fetch)('/api/spool/archive_takeoff', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: sid }),
-        })
+        }, 120000)
             .then((r) => r.json())
             .then((res) => say(String((res && res.msg) || `FCC couldn't take #${sid} off its place.`),
                                !!(res && res.success), fromPill),
-                  () => say(`FCC didn't answer, so #${sid} wasn't taken off. Try again in a moment.`, false, fromPill))
+                  () => say(`FCC didn't answer in time: it may still be taking #${sid} off. `
+                      + 'The Activity Log says when it is off.', false, fromPill))
             .catch((err) => console.error(err))
             .finally(() => out.delete(sid));
     };

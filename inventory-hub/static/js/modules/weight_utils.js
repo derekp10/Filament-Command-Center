@@ -269,6 +269,26 @@ const newSpoolTareOfferWords = (reading, net, offer) => {
 };
 window.newSpoolTareOfferWords = newSpoolTareOfferWords;
 
+// The heaviest empty weight a Gross reading allows (Group 63 review, round 2: the
+// first rule, "at or above the reading", refused an empty spool's own reading, the
+// one figure an empty spool on the scale has). A new spool (nothing used, its net
+// known, the reading above it) holds its net, often a little more and never much
+// less, so its empty spool is at most the reading less 85% of the net; any other
+// spool may be empty on the scale, its own reading or the maker's figure a little
+// above being its empty weight, so only a figure far above the reading is refused
+// (one typed onto the end of another, "250245"). {max, why}, or null.
+const tareCeiling = (reading, initial, used) => {
+    const r = Number(reading), net = Number(initial), u = Number(used);
+    if (!(r > 0)) return null;
+    const g = (n) => (typeof window.fmtGramsPrecise === 'function' ? window.fmtGramsPrecise(n) : n);
+    if (u === 0 && net > 0 && r > net) {
+        return { max: Math.round((r - 0.85 * net) * 10) / 10,
+                 why: `a new spool's ${g(net)} g of filament is in the ${g(r)} g on the scale` };
+    }
+    return { max: Math.round((r + 100) * 10) / 10, why: `the spool on the scale weighs ${g(r)} g` };
+};
+window.tareCeiling = tareCeiling;
+
 function promptMissingEmptyWeight({
     vendor = '',
     material = '',
@@ -290,8 +310,10 @@ function promptMissingEmptyWeight({
     // came from ("1245 g on the scale − 1000 g of filament = 245 g").
     prefill = null,
     offer = '',
-    // Group 63 review (K05): the Gross reading; an empty weight at or above it is refused.
+    // Group 63 review (K05, round 2): the heaviest empty weight the Gross reading
+    // allows (window.tareCeiling) and why, in words; a heavier one is refused.
     maxTare = null,
+    maxTareWhy = '',
 } = {}) {
     return new Promise((resolve) => {
         const swatch = color_hex
@@ -364,9 +386,11 @@ function promptMissingEmptyWeight({
             }
             if (!(v > 0)) { input.focus(); return; }
             const most = Number(maxTare);
-            if (maxTare !== null && Number.isFinite(most) && most > 0 && v >= most) {
+            if (maxTare !== null && Number.isFinite(most) && v > most) {
                 const g = (n) => `${typeof window.fmtGramsPrecise === 'function' ? window.fmtGramsPrecise(n) : n} g`;
-                if (errEl) errEl.textContent = `An empty spool weighs less than the ${g(most)} on the scale: check the number.`;
+                if (errEl) errEl.textContent = maxTareWhy
+                    ? `${g(v)} can't be its empty weight: ${maxTareWhy}. Check the number.`
+                    : `${g(v)} can't be its empty weight: check the number.`;
                 input.focus();
                 try { input.select(); } catch (_) { /* nothing to select */ }
                 return;
