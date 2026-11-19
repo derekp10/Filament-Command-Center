@@ -78,7 +78,9 @@ def test_the_question_asks_for_the_empty_spool_and_says_it_is_kept(entry):
     assert "FCC keeps it as this spool’s own empty weight, so it isn’t asked again." in text, text
     assert "Place the empty spool on the scale" not in text and "future weigh-ins" not in text, text
     skip = page.evaluate(f"() => document.getElementById('{PROMPT_ID}-skip').textContent.trim()")
-    assert skip == "Skip: save my number as the filament left (Net)", skip
+    # PIN UPDATED DELIBERATELY (Derek's picture walk, 2026-11-18: Skip on one line, "Skip: save as filament left";
+    # the offer worded as an estimate, "some brands aren't 100% exact on the 1kg filament").
+    assert skip == "Skip: save as filament left", skip
 
 
 def test_a_tare_typed_into_the_question_comes_back_as_the_spools_own(entry):
@@ -114,7 +116,9 @@ def test_a_new_spools_tare_is_offered_with_its_sum(entry):
     value = page.evaluate(f"() => document.getElementById('{PROMPT_ID}-input').value")
     offer = page.evaluate(f"() => (document.getElementById('{PROMPT_ID}-offer') || {{}}).textContent || ''")
     assert value == "245", value
-    assert offer == "A new spool: 1245g on the scale − 1000g of filament = 245g. Check it, then Save & Continue.", offer
+    # PIN UPDATED DELIBERATELY (Derek's picture walk, 2026-11-18: Skip on one line, "Skip: save as filament left";
+    # the offer worded as an estimate, "some brands aren't 100% exact on the 1kg filament").
+    assert offer == "About 245 g: 1245 g on the scale less the 1000 g of filament its label says. A spool often holds a little more than its label, so this can read high: weigh an empty one to be sure.", offer
     assert page.evaluate("() => window.__saved.length") == 0   # never saved unasked
     press(page, "", 150)   # the person's Enter on it
     page.wait_for_function("() => window.__saved.length === 1")

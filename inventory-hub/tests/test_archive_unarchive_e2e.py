@@ -49,12 +49,31 @@ def spool_with_location(require_spoolman: str):
     if not r.ok:
         pytest.skip(f"Spoolman returned {r.status_code} for spool list")
 
+    # Group 63.1 (and its review, K34): a refill after a toolhead moves the spool
+    # nowhere and asks where it goes, and Unknown is never noted as a home, so this
+    # round trip ("back where it was") holds only for a spool on a box, cart, shelf
+    # or room. The toolheads come from the run's copy of dev's locations.json
+    # (conftest's FCC_DATA_DIR copy), read the way the refill edge reads them.
+    import locations_db
+    try:
+        rows = {str(r_.get("LocationID", "")).strip().upper(): r_
+                for r_ in (locations_db.load_locations_list() or []) if isinstance(r_, dict)}
+        printer_map = locations_db.get_active_printer_map() or {}
+    except Exception:
+        rows, printer_map = None, None
+
+    def _round_trips(loc):
+        lid = loc.strip().strip('"').upper()
+        if lid == "UNKNOWN" or rows is None:
+            return False
+        return not locations_db.head_holds_one_spool(lid, printer_map, rows)
+
     candidate = None
     for s in r.json() or []:
         if s.get("archived"):
             continue
         loc = (s.get("location") or "").strip()
-        if not loc:
+        if not loc or not _round_trips(loc):
             continue
         try:
             initial = float(s.get("filament", {}).get("weight") or s.get("initial_weight") or 0)

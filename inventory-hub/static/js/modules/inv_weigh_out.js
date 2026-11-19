@@ -39,6 +39,20 @@ const MODE_INPUT_MODES = {
     set_used: 'decimal',
 };
 
+// A spool's net capacity by the server's rule (spoolman_api.effective_initial_weight):
+// its own initial weight unless it has none (null), else its filament's net weight
+// (Group 63 review, K38: an own 0 read as the filament's 1000 g here, and every save
+// was refused as "changed since", the server reading 0).
+const capacityOf = (d) => {
+    const own = d ? d.initial_weight : null;
+    if (own !== null && own !== undefined && own !== '' && Number.isFinite(Number(own))) return Number(own);
+    return Number(d && d.filament && d.filament.weight) || 0;
+};
+// A spool whose own total is 0 g can't be weighed until it has one: in words.
+const zeroTotalWords = (id) => `#${id}'s total weight is 0 g in Spoolman: set its total in Edit Spool first, then weigh it`;
+const ownTotalIsZero = (d) => !!d && d.initial_weight !== null && d.initial_weight !== undefined
+    && d.initial_weight !== '' && Number(d.initial_weight) === 0;
+
 // With a timeout (Group 57 review, round 10): a save waits on this read with
 // its row disabled, and a read that never answered kept it so.
 const fetchSpoolDetails = (id) => {
@@ -54,7 +68,8 @@ const fetchSpoolDetails = (id) => {
             };
             const { value: empty } = window.resolveEmptySpoolWeightSource(cascade);
             const entry = {
-                initial: Number(d.initial_weight) || Number(d.filament?.weight) || 0,
+                initial: capacityOf(d),
+                zeroTotal: ownTotalIsZero(d),
                 used: Number(d.used_weight) || 0,
                 // Group 54.7: a spool archived before its save stays archived
                 // at 0 g with the switch off, so it isn't "kept in stock".
@@ -411,17 +426,16 @@ const weighOutShown = () => {
 const weighOutIsUp = () => weighOutShown() && !document.querySelector('[data-overlay-mount="1"]');
 // Group 63.8: a reading is being typed in the list (its focused box holds one, or
 // the missing-tare question is up over it), so a prompt that would take the focus
-// waits: the post-archive empty-weight prompt and the refill question.
+// waits: the post-archive empty-weight prompt and the refill question. Group 63
+// review (K19): also while any other dialog is over the list (a move's question,
+// Force Location's list), so one never opens over another; the two weigh
+// questions themselves wait in one line (inv_details.js, _inWeighLine).
 const weighReadingBeingTyped = () => {
     if (!weighOutShown()) return false;
-    if (document.getElementById('fcc-missing-empty-weight-overlay')) return true;
+    if (document.querySelector('[data-overlay-mount="1"]')) return true;
+    if (window.Swal && typeof window.Swal.isVisible === 'function' && window.Swal.isVisible()) return true;
     const ae = document.activeElement;
     return !!(ae && ae.classList && ae.classList.contains('weigh-input') && String(ae.value || '').trim() !== '');
-};
-// `fn` once no reading is being typed, checked every 250 ms.
-const whenWeighPaused = (fn) => {
-    const tick = () => { if (weighReadingBeingTyped()) setTimeout(tick, 250); else fn(); };
-    tick();
 };
 
 // The focus back in the target's box after something over the window took
@@ -657,6 +671,20 @@ document.addEventListener('hidden.bs.modal', (e) => {
     const ae = document.activeElement;
     if (modalEl && ae && ae !== document.body && modalEl.contains(ae)) return;
     window.weighOutRefocus();
+});
+
+// A dialog over the list closed with the keyboard on the page (its focused button
+// went with it): the target's box takes it (Group 63 review, K04 / K06: after the
+// refill question, or a question a move it started asked, the next reading went to
+// the scan path as a spool id). A tick later, so a dialog that hands the keyboard
+// on itself (the empty-weight prompt, the refill question) has done so first, and
+// one opened in its place keeps it.
+document.addEventListener('fcc:overlay-closed', () => {
+    setTimeout(() => {
+        const ae = document.activeElement;
+        if (ae && ae !== document.body && ae.isConnected) return;
+        window.weighOutRefocus();
+    }, 0);
 });
 
 // The help window closed over the list by the person (Group 55 review, R1-1): the
@@ -989,6 +1017,10 @@ window.saveWeighOutRow = async (idStr) => {
 
         let r = computeRowResult(id, raw, mode);
         if (r && r.error === 'not_a_reading') { notAReading(); return; }
+        if (r && r.error === 'invalid_initial' && details.zeroTotal) {
+            showToast(zeroTotalWords(id), 'warning', 7000);
+            return;
+        }
         if (!r || r.error) {
             showToast('Could not compute used weight', 'error');
             return;
@@ -1026,11 +1058,11 @@ window.saveWeighOutRow = async (idStr) => {
             const offer = (mode === 'gross' && Number(details.used) === 0 && Number(details.initial) > 0
                            && reading > Number(details.initial))
                 ? Math.round((reading - Number(details.initial)) * 10) / 10 : null;
-            const fmt = (g) => (window.fmtGramsPrecise ? window.fmtGramsPrecise(g) : g);
             const tare = await window.promptMissingEmptyWeight(Object.assign({}, details.context || {},
                 { onScanDismiss: unsaved, scanPending: () => !!pendingScan, prefill: offer,
-                  offer: offer === null ? ''
-                      : `A new spool: ${fmt(reading)} g on the scale − ${fmt(Number(details.initial))} g of filament = ${fmt(offer)} g. Check it, then Save & Continue.` }));
+                  offer: offer === null ? '' : window.newSpoolTareOfferWords(reading, Number(details.initial), offer),
+                  // Group 63 review (K05): an empty spool can't weigh what the whole one does.
+                  maxTare: mode === 'gross' ? reading : null }));
             // Cancelled: back to the target's box (round 7: the focus fell to
             // the page), where the person is: this spool's, unless the save
             // moved them on (round 10: it went back to this one, and the next
@@ -1067,7 +1099,7 @@ window.saveWeighOutRow = async (idStr) => {
         window.saveSpoolWeight(id, null, rowUpdates, autoArchive, details.empty,
             { archiveSwitch: switchOn, empties: remainingAfter <= 0, wasArchived: details.archived === true,
               // Group 63.6: the figures this reading was worked out from.
-              basedOn: { mode, capacity: details.initial, used: details.used }, fromList: true });
+              basedOn: { mode, capacity: details.initial, used: details.used, screen: 'list' }, fromList: true });
     } finally {
         // Not saved after all, and scanned again while its details were read:
         // its box is open for the new reading, with what was typed for it.
@@ -1173,6 +1205,9 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     const inputEl = document.querySelector(`.weigh-input[data-id="${id}"]`);
     const moveOn = focusOnFrom(inputEl);
     markSaving(id, true);
+    // Where the focus went on, and what had been typed by then (K39's "hasn't
+    // typed or moved since").
+    let movedAt = null;
 
     fetch(`/api/spool/update`, {
         method: 'POST',
@@ -1217,16 +1252,23 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 // the one being weighed now): then a note says where it came off.
                 if (res && res.refill_ask && typeof res.refill_ask === 'object') {
                     const askRefill = res.refill_ask;
-                    // Group 63.8: not while the next reading is being typed.
-                    setTimeout(() => whenWeighPaused(() => {
-                        if (scansTaken !== takenAtSave || typeof window.askRefillPlace !== 'function') {
+                    // Group 63.8 and the review (K13 / K14 / K19): in the one line of
+                    // weigh questions, not while a scan is being answered or the next
+                    // reading is typed, and not once a spool has been scanned since
+                    // the save (askRefillPlace's own waits and note).
+                    setTimeout(() => {
+                        if (typeof window.askRefillPlace !== 'function') {
                             showToast(`#${id} is back in stock, Unassigned: it came off ${askRefill.place}. `
                                 + 'Scan it to where you put it.', 'info', 7000);
                             return;
                         }
                         window.askRefillPlace(id, askRefill, {
-                            host: weighOutShown() ? document.getElementById('weighOutModal') : null });
-                    }), 400);
+                            host: weighOutShown() ? document.getElementById('weighOutModal') : null,
+                            settle: scanSettled, scanPending: () => !!pendingScan,
+                            waitWhile: weighReadingBeingTyped,
+                            skipIf: () => scansTaken !== takenAtSave,
+                        });
+                    }, 400);
                 }
                 // Spool just auto-archived (weight hit 0) AND its filament
                 // has no empty_spool_weight yet — prompt the user to record
@@ -1332,9 +1374,24 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             const box = told.fromList ? boxFor(id) : null;
             if (box) {
                 window.updateWeighRowPreview(box);
-                showToast(res.msg || `#${id}'s weight changed since this was read: check its preview and press Enter again`,
+                showToast(res.msg || `#${id}'s weight changed since this was read: check its preview and press Enter in its box again`,
                     'warning', 7000);
-                refocusAfterFailedSave(id);
+                if (rescanAfterSave === id) {
+                    refocusAfterFailedSave(id);
+                } else if (movedAt && keysTyped === movedAt.keys && weighOutIsUp()) {
+                    // Group 63 review (K39): the person hasn't typed or moved since the
+                    // save (the focus is where it moved it, holding what it held): the
+                    // refused row's box takes the keyboard back, its reading selected,
+                    // so the Enter the toast asks for saves it, not the next spool.
+                    const now = document.activeElement;
+                    const stayed = !now || now === document.body
+                        || (now === movedAt.el && !('value' in now && now.value !== movedAt.value));
+                    if (stayed) {
+                        weighTargetId = String(id);
+                        box.focus();
+                        try { box.select(); } catch (_) { /* nothing to select */ }
+                    }
+                }
             } else {
                 showToast(`#${id}'s weight changed since this window read it, so nothing was saved: open it again to weigh it.`,
                     'warning', 7000);
@@ -1367,6 +1424,8 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
 
     // Move to the next input immediately so the user can keep working while it saves
     moveOn();
+    const ae = document.activeElement;
+    movedAt = { el: ae, keys: keysTyped, value: ae && 'value' in ae ? ae.value : undefined };
 };
 
 // The focus on from box `inputEl` as it is saved, worked out before the box is
@@ -1421,7 +1480,8 @@ window.openQuickWeigh = (spoolId) => {
             setProcessing(false);
             if (!d || !d.id) { showToast("Spool Not Found", "error"); return; }
 
-            const initial = Number(d.initial_weight) || Number(d.filament?.weight) || 0;
+            if (ownTotalIsZero(d)) { showToast(zeroTotalWords(d.id), 'warning', 7000); return; }
+            const initial = capacityOf(d);
             const used = Number(d.used_weight) || 0;
             const cascade = {
                 spoolWt: d.spool_weight,
@@ -1472,7 +1532,7 @@ window.openQuickWeigh = (spoolId) => {
                     window.saveSpoolWeight(d.id, null, updates, autoArchive, payload.empty_spool_weight,
                         { archiveSwitch: switchOn, empties, wasArchived: d.archived === true,
                           // Group 63.6: the figures this window read when it opened.
-                          basedOn: { mode: payload.mode, capacity: initial, used } });
+                          basedOn: { mode: payload.mode, capacity: initial, used, screen: 'quick' } });
                 },
             });
         })

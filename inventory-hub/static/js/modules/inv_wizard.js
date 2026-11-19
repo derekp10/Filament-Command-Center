@@ -104,6 +104,7 @@ window.wizardSetSpoolEmptyWeightInherited = (value, source) => {
     } else if (badge) {
         badge.style.display = 'none';
     }
+    if (window.wizardRecheckScale) window.wizardRecheckScale();
 };
 
 // The box holds a value of the spool's own from here on (or nothing): the badge
@@ -1019,6 +1020,7 @@ const wizardReset = () => {
     document.querySelectorAll('#wizardModal select').forEach(i => i.selectedIndex = 0);
     if (window.wizardClearSpoolEmptyWeightBadge) window.wizardClearSpoolEmptyWeightBadge();
     if (window.wizardRefreshSpoolPriceMark) window.wizardRefreshSpoolPriceMark();
+    if (window.wizardRecheckScale) window.wizardRecheckScale();
 
     // Reset Color UI
     document.getElementById('wiz-fil-color-extra-container').innerHTML = '';
@@ -1477,6 +1479,17 @@ window.wizardValidateSubmit = () => {
     }
 };
 
+// Group 63 review (K37): the Scale box's note follows the box: it goes with the
+// reading (reset, a weight worked out another way, Clear), and the used weight is
+// worked out again when the empty weight it waited for arrives (the filament's box,
+// a filament picked), as a keyup in those boxes does.
+window.wizardRecheckScale = () => {
+    const scale = document.getElementById('wiz-spool-scale');
+    if (scale && String(scale.value || '').trim() !== '') { window.wizardCalcUsedWeight(); return; }
+    const note = document.getElementById('wiz-spool-scale-note');
+    if (note) { note.textContent = ''; note.style.display = 'none'; }
+};
+
 window.wizardCalcUsedWeight = () => {
     const note = document.getElementById('wiz-spool-scale-note');
     const say = (words) => { if (note) { note.textContent = words; note.style.display = words ? '' : 'none'; } };
@@ -1536,6 +1549,7 @@ window.wizardCalcUsedFromRemaining = () => {
 
     document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(used);
     document.getElementById('wiz-spool-scale').value = '';
+    window.wizardRecheckScale();
 };
 
 window.wizardCalcRemainingFromUsed = () => {
@@ -1553,6 +1567,7 @@ window.wizardCalcRemainingFromUsed = () => {
 
     document.getElementById('wiz-spool-remaining').value = window.fmtGramsPrecise(remaining);
     document.getElementById('wiz-spool-scale').value = '';
+    window.wizardRecheckScale();
 };
 
 window.wizardCalcFromRecentUsage = () => {
@@ -1569,6 +1584,7 @@ window.wizardCalcFromRecentUsage = () => {
 
 window.wizardClearScaleWeight = () => {
     document.getElementById('wiz-spool-scale').value = '';
+    window.wizardRecheckScale();
     window.wizardCalcRemainingFromUsed();
 };
 
@@ -1648,6 +1664,7 @@ window.wizardOpenWeightEntry = () => {
             // Recompute remaining from the freshly-set net + used; clear the raw scale field.
             window.wizardCalcRemainingFromUsed();
             setVal('wiz-spool-scale', '');
+            window.wizardRecheckScale();
         },
     });
 };
@@ -2116,6 +2133,7 @@ window.wizardFilamentEmptyWeightChanged = (value) => {
     if (!spoolEmptyWt) return;
     if (wizardState.mode !== 'edit_spool') {
         spoolEmptyWt.value = value;
+        if (window.wizardRecheckScale) window.wizardRecheckScale();
         return;
     }
     if (wizardNativeTouched('spool', 'spool_weight')) return;
@@ -4489,18 +4507,8 @@ window.wizardSubmit = async () => {
             // Group 63.1: the Save weighed the spool back into stock (or unticked Archived)
             // after it left a toolhead, and the server moved it nowhere: ask where it goes,
             // over the wizard, and show where a move put it in the Location field, so the
-            // next Save moves nothing.
-            if (isWizardEdit && data.refill_ask && typeof data.refill_ask === 'object'
-                    && typeof window.askRefillPlace === 'function') {
-                window.askRefillPlace(editSid, data.refill_ask, {
-                    host: wizModal,
-                    onMoved: (target) => {
-                        if (String(wizardState.editSpoolId) !== String(editSid)) return;
-                        window.wizardShowLocation(target);
-                        wizardState.editSpoolLocation = _wizLocKey(target);
-                    },
-                });
-            }
+            // next Save moves nothing (wizardAfterOwnWrite, below).
+            if (isWizardEdit) wizardAfterOwnWrite(data, editSid, wizModal);
             if (isWizardEdit && data.location_moved) {
                 // Group 40.7: where the Location move put it, in short arrows.
                 const lr = data.location_result;
@@ -4670,11 +4678,43 @@ window.wizardSubmit = async () => {
         } else {
             msg.innerHTML = `<span class="text-danger">Error: ${data.msg}</span>`;
             document.getElementById('btn-wiz-submit').disabled = false;
+            // Group 63 review (C4): the spool's own write landed before the filament
+            // was refused: the Archived box, the Location field and a refill's
+            // question follow what it did (its note is used up: nobody asks later).
+            if (isWizardEdit && data.spool_saved === true) {
+                if (Object.prototype.hasOwnProperty.call(data, 'archived_now')) {
+                    const box = document.getElementById('wiz-spool-archived');
+                    if (box) box.checked = !!data.archived_now;
+                }
+                wizardAfterOwnWrite(data, editSid, wizModal);
+            }
         }
     } catch (e) {
         console.error("Wizard Submit Error:", e);
         msg.innerHTML = `<span class="text-danger">Frontend Error: ${e.message}</span>`;
         document.getElementById('btn-wiz-submit').disabled = false;
+    }
+};
+
+// Group 63 review (K01 / K02 / C4): what an Edit Spool Save's own write did to where
+// the spool is, shown in the Location field (`location_now`, sent when no Location
+// move was asked: a refill took the spool off the head it was archived on, or put it
+// back where its note says; an archive took it off its place), and a refill's
+// question asked over the wizard. The field kept the old place, and the next Save,
+// which sends the field, moved the spool back: onto its head, unloading the spool
+// loaded there since. Where a move the question made landed (the head a slot loaded,
+// the slot's box, the place) goes in the field too, so a second Save moves nothing.
+const wizardAfterOwnWrite = (data, editSid, wizModal) => {
+    const showHere = (where) => {
+        if (String(wizardState.editSpoolId) !== String(editSid)) return;
+        window.wizardShowLocation(where || '');
+        wizardState.editSpoolLocation = _wizLocKey(where || '');
+    };
+    if (!data.location_moved && Object.prototype.hasOwnProperty.call(data, 'location_now')) {
+        showHere(data.location_now);
+    }
+    if (data.refill_ask && typeof data.refill_ask === 'object' && typeof window.askRefillPlace === 'function') {
+        window.askRefillPlace(editSid, data.refill_ask, { host: wizModal, onMoved: (where) => showHere(where) });
     }
 };
 

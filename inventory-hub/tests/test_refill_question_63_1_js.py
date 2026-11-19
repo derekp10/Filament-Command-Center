@@ -58,7 +58,7 @@ ASK = {"place": "XL-3", "room": "LR", "held_by": []}
 @needs_node
 def test_it_offers_the_head_the_room_a_pick_and_leaving_it_and_opens_on_leaving_it(tmp_path):
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(ASK)});
+await window.askRefillPlace(57, {json.dumps(ASK)});
 const m = last();
 return {{ id: m.opts.id, focus: m.opts.initialFocus, tier: m.opts.tier, html: m.el.innerHTML,
           q: (window._fccOpenMoveQuestions || []).length }};
@@ -66,7 +66,9 @@ return {{ id: m.opts.id, focus: m.opts.initialFocus, tier: m.opts.tier, html: m.
     assert res["id"] == "fcc-refill-place" and res["focus"] == "#fcc-refill-leave", res
     for words in ("#57 is back in stock: where does it go?", "It came off <strong>", "XL-3",
                   "Back on ", "In ", "LR", " for now", "Pick a place…", "Leave it Unassigned",
-                  "Or scan the label of the place where it goes."):
+                  # PIN UPDATED DELIBERATELY (Group 63 review): Pick a place… now sits beside
+                  # these words, under the answers that have a QR (attachConfirmQRs' alignTo).
+                  "or scan the label of the place where it goes."):
         assert words in res["html"], (words, res["html"])
     assert 'id="fcc-refill-back" class="btn btn-success btn-sm fcc-refill-answer">' in res["html"], res["html"]
     assert res["q"] == 1, res
@@ -75,7 +77,7 @@ return {{ id: m.opts.id, focus: m.opts.initialFocus, tier: m.opts.tier, html: m.
 @needs_node
 def test_back_on_the_head_moves_it_there_and_says_what_it_was_shown(tmp_path):
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(ASK)});
+await window.askRefillPlace(57, {json.dumps(ASK)});
 el('#fcc-refill-back').onclick({{ type: 'click', detail: 1 }});
 await __settle(80);
 return {{ posts: posts(), toasts: __rec.toasts, q: (window._fccOpenMoveQuestions || []).length,
@@ -91,7 +93,7 @@ return {{ posts: posts(), toasts: __rec.toasts, q: (window._fccOpenMoveQuestions
 @needs_node
 def test_a_head_another_spool_is_on_now_is_greyed_out_with_the_reason(tmp_path):
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(dict(ASK, held_by=[99]))});
+await window.askRefillPlace(57, {json.dumps(dict(ASK, held_by=[99]))});
 return {{ html: last().el.innerHTML, back: typeof el('#fcc-refill-back').onclick }};
 """)
     assert 'fcc-refill-answer" disabled aria-disabled="true">Back on ' in res["html"], res["html"]
@@ -102,7 +104,7 @@ return {{ html: last().el.innerHTML, back: typeof el('#fcc-refill-back').onclick
 @needs_node
 def test_an_unread_head_is_offered_and_says_it_will_be_checked(tmp_path):
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(dict(ASK, held_by=None))});
+await window.askRefillPlace(57, {json.dumps(dict(ASK, held_by=None))});
 return {{ html: last().el.innerHTML, back: typeof el('#fcc-refill-back').onclick }};
 """)
     assert "FCC couldn&#39;t check XL-3 just now: it checks again if you pick it." in res["html"], res["html"]
@@ -112,7 +114,7 @@ return {{ html: last().el.innerHTML, back: typeof el('#fcc-refill-back').onclick
 @needs_node
 def test_in_the_room_for_now_moves_it_there(tmp_path):
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(ASK)});
+await window.askRefillPlace(57, {json.dumps(ASK)});
 el('#fcc-refill-room').onclick({{ type: 'click', detail: 1 }});
 await __settle(80);
 return {{ posts: posts() }};
@@ -125,7 +127,7 @@ return {{ posts: posts() }};
 @needs_node
 def test_with_no_room_there_is_no_room_answer(tmp_path):
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(dict(ASK, room=""))});
+await window.askRefillPlace(57, {json.dumps(dict(ASK, room=""))});
 return {{ html: last().el.innerHTML }};
 """)
     assert "fcc-refill-room" not in res["html"], res["html"]
@@ -134,7 +136,7 @@ return {{ html: last().el.innerHTML }};
 @needs_node
 def test_pick_a_place_opens_force_locations_list(tmp_path):
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(ASK)});
+await window.askRefillPlace(57, {json.dumps(ASK)});
 el('#fcc-refill-pick').onclick({{ type: 'click', detail: 1 }});
 await __settle(20);
 return {{ opened, posts: posts() }};
@@ -149,7 +151,7 @@ def test_leaving_it_unassigned_moves_nothing(tmp_path, how):
            "escape": "last().opts.onEscape();",
            "cancel-scan": "window._fccOpenMoveQuestion.cancel();"}[how]
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(ASK)});
+await window.askRefillPlace(57, {json.dumps(ASK)});
 {act}
 await __settle(20);
 return {{ posts: posts(), toasts: __rec.toasts, q: (window._fccOpenMoveQuestions || []).length }};
@@ -168,7 +170,7 @@ return {{ posts: posts(), toasts: __rec.toasts, q: (window._fccOpenMoveQuestions
 def test_a_scanned_place_label_puts_it_there(tmp_path, label, target, shown):
     # (`label`, not `scan`: conftest's `scan` fixture is a container one, which --offline skips.)
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(ASK)});
+await window.askRefillPlace(57, {json.dumps(ASK)});
 const answered = window._fccOpenMoveQuestion.route({json.dumps(label)}, 'barcode');
 await __settle(80);
 return {{ answered, posts: posts() }};
@@ -183,7 +185,7 @@ return {{ answered, posts: posts() }};
 @needs_node
 def test_any_other_scan_is_left_to_the_question_to_refuse(tmp_path):
     res = _run(tmp_path, f"""
-window.askRefillPlace(57, {json.dumps(ASK)});
+await window.askRefillPlace(57, {json.dumps(ASK)});
 return {{ answered: window._fccOpenMoveQuestion.route('ID:99', 'barcode'), posts: posts() }};
 """)
     assert res["answered"] is False and res["posts"] == [], res
@@ -196,7 +198,7 @@ def test_the_answers_that_move_wait_out_a_double_click(tmp_path):
     Unassigned don't wait."""
     res = _run(tmp_path, f"""
 delete window.fccQuestionArmMs;
-window.askRefillPlace(57, {json.dumps(ASK)});
+await window.askRefillPlace(57, {json.dumps(ASK)});
 el('#fcc-refill-back').onclick({{ type: 'click', detail: 1 }});
 el('#fcc-refill-room').onclick({{ type: 'click', detail: 1 }});
 const early = posts().length;

@@ -72,10 +72,18 @@ def test_quick_weigh_triggers_in_ui_builder():
 
 
 def test_inv_weigh_out_logic_exists():
-    """Ensures quick weigh and unassign logic exists in the weigh out module."""
+    """Ensures quick weigh exists in the weigh out module, and that a spool weighed
+    to 0 g is taken off its place by the save itself.
+
+    PIN UPDATED DELIBERATELY (Group 63.4; the Group 63 review, K09): the page no
+    longer posts a second request, force_unassign, after a weigh to empty: the save
+    takes the spool off its place (update_spool's archive edge, else the route's
+    own take-off, archive_takeoff.take_off), and one that failed comes back as
+    `still_at`, whose listed line's button is window.fccArchiveTakeoffClick."""
     content = _read("static", "js", "modules", "inv_weigh_out.js")
     assert "window.openQuickWeigh =" in content, "Missing openQuickWeigh function"
-    assert "action: 'force_unassign'" in content, "Missing auto-unassign logic for 0g spools"
+    assert "action: 'force_unassign'" not in content, "the weigh page posts force_unassign again (63.4)"
+    assert "window.fccArchiveTakeoffClick" in content, "Missing the stuck spool's Take it off button"
 
 
 def test_app_spools_by_filament_allow_archived():

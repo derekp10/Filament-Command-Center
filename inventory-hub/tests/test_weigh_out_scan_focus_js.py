@@ -1107,8 +1107,16 @@ def test_a_prompt_doesnt_open_while_a_scan_is_answered(wo, prompt):
     used = 475 if prompt == "tare" else 325
     assert ups[saved_before:] == [{"id": 57, "updates": {"used_weight": used}, "auto_archive": True}] and _filament_writes(page) == 0, ups
     if prompt == "empty":
-        # Skipped (#57 was scanned since the save) without ever reading its filament.
+        # Skipped (#57 was scanned since the save) without ever reading its filament,
+        # and it says so. PIN UPDATED DELIBERATELY (Group 63 review, K31): the skip is
+        # checked before the read since the review, so this holds by construction; it
+        # used to read the filament once the box was empty, and the pin held only
+        # because it sampled before that read.
+        page.wait_for_function("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                               ".some((t) => t.innerText.includes(\"Didn't ask for #8's empty spool weight\"))",
+                               timeout=5000)
         assert page.evaluate("() => window.__held.filament.length") == 0
+        assert page.locator("#fcc-archive-empty-overlay").count() == 0
 
 
 def test_a_save_that_reads_its_details_first_moves_the_focus_on_at_once(wo):
@@ -1283,7 +1291,8 @@ def test_a_key_typed_on_another_rows_save_button_while_a_scan_is_answered_goes_w
     assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
     # Group 63.6: the save says what its reading was worked out from (#57's 750 g
     # total and 100 g used, as the list read them).
-    assert _bases(page) == [{"mode": "net", "capacity": 750, "used": 100}], _bases(page)
+    # (`screen`: the Group 63 review, C3, updated deliberately.)
+    assert _bases(page) == [{"mode": "net", "capacity": 750, "used": 100, "screen": "list"}], _bases(page)
 
 
 def test_a_backspace_takes_back_a_key_held_for_a_scan(wo):

@@ -107,9 +107,12 @@ return { opened: opened() };
 # ---- the weigh-out list says when a reading is being typed ------------------------------------------
 
 LIST = r"""
-// The stub DOM finds an element for any id; a page has no missing-tare question up here.
+// The stub DOM finds an element for any id or selector; a page has no missing-tare
+// question, and no other dialog, up here.
 const __get = document.getElementById.bind(document);
 document.getElementById = (id) => (id === 'fcc-missing-empty-weight-overlay' ? null : __get(id));
+const __qs = document.querySelector.bind(document);
+document.querySelector = (sel) => (sel === '[data-overlay-mount="1"]' ? null : __qs(sel));
 const modal = document.getElementById('weighOutModal');
 modal.classList.add('show');
 const box = document.createElement('input');
@@ -119,17 +122,20 @@ document.activeElement = box;
 let got = null;
 window.showArchiveEmptyWeightPrompt = (sid, fid, pre, o) => { got = o; };
 const asked = [];
-window.askRefillPlace = (sid, ask) => asked.push(sid);
+let refillOpts = null;
+window.askRefillPlace = (sid, ask, o) => { asked.push(sid); refillOpts = o; };
 window.__respond = (url) => (url === '/api/spool/update'
     ? { body: { status: 'success', auto_archived: true, needs_empty_weight_prompt: true, filament_id: 7,
                 location_now: '', refill_ask: __REFILL__ } }
     : { body: {} });
 window.saveSpoolWeight(57, null, { used_weight: 1000 }, true, null, { archiveSwitch: true, empties: true, wasArchived: false });
 await __settle(600);
-const waiting = { prompt: got && typeof got.waitWhile === 'function' ? got.waitWhile() : 'none', asked: asked.slice() };
+const ww = (o) => (o && typeof o.waitWhile === 'function' ? o.waitWhile() : 'none');
+const waiting = { prompt: ww(got), asked: asked.slice(), refill: ww(refillOpts) };
 box.value = '';
 await __settle(400);
-return { waiting, prompt: got && typeof got.waitWhile === 'function' ? got.waitWhile() : 'none', asked };
+return { waiting, prompt: ww(got), asked, refill: ww(refillOpts),
+         refillHas: refillOpts ? ['settle', 'scanPending', 'skipIf'].filter((k) => typeof refillOpts[k] === 'function') : [] };
 """
 
 
@@ -142,7 +148,14 @@ def test_the_list_holds_the_prompt_while_its_box_holds_a_reading(tmp_path):
 
 @needs_node
 def test_the_refill_question_waits_for_the_typing_too(tmp_path):
-    """RED (the question is new): it opens once the box is empty again."""
+    """RED (the question is new): it opens once the box is empty again.
+    PIN UPDATED DELIBERATELY (Group 63 review, K13 / K14 / K19): the waits are the
+    question's own now (it waits its turn in one line with the empty-weight prompt,
+    window.askRefillPlace), so the list hands it the same `waitWhile` as the prompt,
+    with its scan waits and its skip; the real question's wait is pinned by
+    test_refill_question_63_1_js."""
     res = _run(tmp_path, ["inv_weigh_out.js"], LIST.replace("__TYPED__", "'42'").replace(
         "__REFILL__", "{ place: 'HEAD-1', room: '', held_by: [] }"))
-    assert res["waiting"]["asked"] == [] and res["asked"] == [57], res
+    assert res["asked"] == [57], res
+    assert res["waiting"]["refill"] is True and res["refill"] is False, res
+    assert res["refillHas"] == ["settle", "scanPending", "skipIf"], res

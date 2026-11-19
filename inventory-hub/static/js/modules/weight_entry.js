@@ -416,7 +416,9 @@
                     color_hex: promptCtx.color_hex || spool.color_hex || null,
                     allowSkip: !allowUnknownInitial,
                     prefill: offer,
-                    offer: offer === null ? '' : `A new spool: ${fmtG(v)} on the scale − ${fmtG(Number(initial))} of filament = ${fmtG(offer)}. Check it, then Save & Continue.`,
+                    offer: offer === null ? '' : window.newSpoolTareOfferWords(v, Number(initial), offer),
+                    // Group 63 review (K05): an empty spool can't weigh what the whole one does.
+                    maxTare: mode === 'gross' ? v : null,
                 });
                 if (tare === null) { inputEl.focus(); return; }  // user cancelled: back to the reading
                 let effectiveMode = mode;

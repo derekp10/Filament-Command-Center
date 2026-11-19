@@ -8,6 +8,8 @@ server answers `details_changed` (test_weigh_based_on_63_6), the row's cached
 figures become the fresh ones, its preview is drawn again, its reading stays in
 its box, a 7 s warning says so, and the next Enter saves against the new figures.
 
+PIN UPDATED DELIBERATELY (Group 63 review, C3): each save says which screen sent it
+(`screen`: 'list' or 'quick'), so the server's refusal line says what to do there.
 Every test is RED on e1b22f4 (no `based_on` was sent, and a `details_changed`
 answer read as a refusal). Harness: node's `vm` (test_core1_return_ejectall_js.run_js)
 with inv_core.js, weight_utils.js and inv_weigh_out.js loaded.
@@ -62,7 +64,7 @@ await __settle(80);
 return { updates: updates() };
 """)
     (body,) = res["updates"]
-    assert body["updates"] == {"used_weight": 750} and body["based_on"] == {"mode": "net", "capacity": 1000, "used": 700}, body
+    assert body["updates"] == {"used_weight": 750} and body["based_on"] == {"mode": "net", "capacity": 1000, "used": 700, "screen": "list"}, body
 
 
 @needs_node
@@ -88,7 +90,7 @@ return { afterRefusal, updates: updates() };
             "warning"] in after["toasts"], after
     first, second = res["updates"]
     assert first["based_on"]["capacity"] == 1000 and first["updates"] == {"used_weight": 750}, first
-    assert second["based_on"] == {"mode": "net", "capacity": 1200, "used": 700}, second
+    assert second["based_on"] == {"mode": "net", "capacity": 1200, "used": 700, "screen": "list"}, second
     assert second["updates"] == {"used_weight": 950}, second
 
 
@@ -107,6 +109,6 @@ await __settle(80);
 return { updates: updates(), toasts: toasts() };
 """)
     first = res["updates"][0]
-    assert first["based_on"] == {"mode": "additive", "capacity": 1000, "used": 700}, first
+    assert first["based_on"] == {"mode": "additive", "capacity": 1000, "used": 700, "screen": "quick"}, first
     assert ["#57's weight changed since this window read it, so nothing was saved: open it again to weigh it.",
             "warning"] in res["toasts"], res

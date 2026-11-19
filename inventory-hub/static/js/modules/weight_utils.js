@@ -249,7 +249,23 @@ window.computeUsedWeight = computeUsedWeight;
 // no unit conversion. `prefill` / `offer` (63.9(a)): a figure worked out for a new
 // spool (gross less its net), filled in and explained under the box, never saved
 // unasked.
+// Group 63 review: the figure filled in is selected once the box has the keyboard
+// (K05: a figure typed over it was joined to it, 250245 g, and saved); `maxTare`
+// (the Gross reading) refuses, in words, an empty spool as heavy as the whole spool
+// on the scale. Derek's picture walk (2026-11-18): Skip on one line ("Skip: save as
+// filament left", its longer words in its title), and the offer worded as an
+// estimate (newSpoolTareOfferWords: "some brands aren't 100% exact on the 1kg
+// filament (prusament will have more sometimes)").
 const PROMPT_SKIP_TARE = 'skip';
+
+// The words under a new spool's offered empty weight (Group 63.9(a)): the reading
+// less the net on its label, which a maker's extra filament makes read high.
+const newSpoolTareOfferWords = (reading, net, offer) => {
+    const g = (n) => `${typeof window.fmtGramsPrecise === 'function' ? window.fmtGramsPrecise(Number(n)) : n} g`;
+    return `About ${g(offer)}: ${g(reading)} on the scale less the ${g(net)} of filament its label says. `
+        + 'A spool often holds a little more than its label, so this can read high: weigh an empty one to be sure.';
+};
+window.newSpoolTareOfferWords = newSpoolTareOfferWords;
 
 function promptMissingEmptyWeight({
     vendor = '',
@@ -272,6 +288,8 @@ function promptMissingEmptyWeight({
     // came from ("1245 g on the scale − 1000 g of filament = 245 g").
     prefill = null,
     offer = '',
+    // Group 63 review (K05): the Gross reading; an empty weight at or above it is refused.
+    maxTare = null,
 } = {}) {
     return new Promise((resolve) => {
         const swatch = color_hex
@@ -315,8 +333,8 @@ function promptMissingEmptyWeight({
                 <div id="${overlayId}-err" role="alert" style="color:#ff8a8a;font-size:var(--fcc-fs-small);margin-top:4px;"></div>
                 <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
                     <button type="button" id="${overlayId}-cancel" class="btn btn-sm btn-secondary">Cancel</button>
-                    ${allowSkip ? `<button type="button" id="${overlayId}-skip" class="btn btn-sm btn-warning"
-                        title="No empty weight is kept: the number you typed is saved as the filament left on the spool, as Net does.">Skip: save my number as the filament left (Net)</button>` : ''}
+                    ${allowSkip ? `<button type="button" id="${overlayId}-skip" class="btn btn-sm btn-warning" style="white-space:nowrap;"
+                        title="No empty weight is kept: the number you typed is saved as the filament left on the spool, as Net does.">Skip: save as filament left</button>` : ''}
                     <button type="button" id="${overlayId}-save" class="btn btn-sm btn-primary">Save &amp; Continue</button>
                 </div>
             </div>
@@ -343,6 +361,14 @@ function promptMissingEmptyWeight({
                 return;
             }
             if (!(v > 0)) { input.focus(); return; }
+            const most = Number(maxTare);
+            if (maxTare !== null && Number.isFinite(most) && most > 0 && v >= most) {
+                const g = (n) => `${typeof window.fmtGramsPrecise === 'function' ? window.fmtGramsPrecise(n) : n} g`;
+                if (errEl) errEl.textContent = `An empty spool weighs less than the ${g(most)} on the scale: check the number.`;
+                input.focus();
+                try { input.select(); } catch (_) { /* nothing to select */ }
+                return;
+            }
             finish(v);
         };
         const cancel = () => finish(null);
@@ -390,6 +416,15 @@ function promptMissingEmptyWeight({
         cancelBtn.addEventListener('click', cancel);
         if (skipBtn) skipBtn.addEventListener('click', skip);
         document.addEventListener('keydown', onKey, true);
+        // A figure filled in is selected once the box has the keyboard (mountOverlay
+        // focuses it a tick later), so a figure typed over it replaces it (K05).
+        if (input && input.value) {
+            setTimeout(() => {
+                if (!resolved && document.activeElement === input) {
+                    try { input.select(); } catch (_) { /* nothing to select */ }
+                }
+            }, 0);
+        }
     });
 }
 window.promptMissingEmptyWeight = promptMissingEmptyWeight;
