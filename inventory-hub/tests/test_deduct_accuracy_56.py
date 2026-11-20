@@ -699,7 +699,9 @@ def test_every_deduct_path_asks_the_card_to_read_the_heads():
     tree = ast.parse(open(os.path.join(_HUB, "print_deduct.py"), encoding="utf-8").read())
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
              and ast.unparse(n.func) == "_record_applied_deduct"]
-    assert len(calls) == 3, len(calls)    # the cancel, completion and no_spool-confirm deducts
+    # The cancel and completion deducts (Group 64.3 (5) retired the no_spool-confirm
+    # deduct, _confirm_no_spool_review: a no_spool card is applied through its picks).
+    assert len(calls) == 2, len(calls)
     for call in calls:
         flag = {kw.arg: kw.value for kw in call.keywords}.get("read_heads")
         assert isinstance(flag, ast.Constant) and flag.value is True, call.lineno

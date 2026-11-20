@@ -431,12 +431,13 @@ def test_completed_ambiguous_skip_surfaces_shortfall(stores_tmp):
 # 22.4(5) — no_spool confirm probes info.mmu ONCE                              #
 # --------------------------------------------------------------------------- #
 
-def test_no_spool_confirm_probes_mmu_once(stores_tmp):
-    """_confirm_no_spool_review resolves active_locs once and threads it to BOTH the
-    preview resolve and the apply, so an MMU-aliased printer's info.mmu ordering probe
-    runs once (was twice). Needs an ALIASED printer_map (two entries sharing a
-    position) — else _resolve_active_locs_for_printer short-circuits with no probe and
-    the test would prove nothing."""
+def test_a_pickless_no_spool_confirm_probes_and_charges_nothing(stores_tmp):
+    """22.4(5) made the old no_spool Apply (_confirm_no_spool_review) probe an MMU
+    printer's info.mmu once instead of twice. Group 64.3 (5) retired that Apply: a
+    no_spool card is applied through its picks, so an Apply without them (an older
+    page) is told to reload and probes nothing, reads no head and charges nothing.
+    The ALIASED printer_map (two entries sharing a position) is the one the old test
+    needed for its probe to run at all. Red on fc2ba19."""
     printer_map = {"CORE1-M0": {"printer_name": "CORE1", "position": 0},
                    "CORE1-M1": {"printer_name": "CORE1", "position": 0}}
     spools = _Spools({100: {"used_weight": 100.0, "initial_weight": 1000.0}})
@@ -460,8 +461,11 @@ def test_no_spool_confirm_probes_mmu_once(stores_tmp):
         r = app_module.app.test_client().post(
             "/api/cancel_deduct/confirm",
             json={"printer_name": "CORE1", "job_id": "NS-1", "updates": {}})
-    assert r.get_json()["status"] == "confirmed"
-    assert mmu.call_count == 1, f"expected ONE info.mmu probe, got {mmu.call_count}"
+    body = r.get_json()
+    assert body["status"] == "error" and body.get("stale_page") is True, body
+    assert mmu.call_count == 0, f"expected no info.mmu probe, got {mmu.call_count}"
+    assert spools.get(100)["used_weight"] == 100.0
+    assert cancel_review_store.has_pending("CORE1", "NS-1")
 
 
 # --------------------------------------------------------------------------- #

@@ -4,8 +4,8 @@ Moved verbatim from app.py: _resolve_active_locs_for_printer (MMU M0/M1
 alias ordering — every deduct resolver depends on it), the deduct core
 (_apply_usage_to_printer, _record_applied_deduct, snapshot/swap helpers,
 _compute_cancel_usage, deduct_cancelled_print, deduct_completed_print,
-review routing/stash/enqueue/create), the /api/cancel_deduct/* routes +
-_confirm_no_spool_review, /api/smart_move, and the three adjacent read
+review routing/stash/enqueue/create), the /api/cancel_deduct/* routes,
+/api/smart_move, and the three adjacent read
 endpoints (multi-spool filaments, spools_by_filament, backfill weights).
 
 Contracts preserved verbatim (see the carve plan + CLAUDE.md):
@@ -4065,66 +4065,6 @@ def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
         f"{'; '.join(parts + clauses)} — weigh {who} to true up.", "WARNING", "ffaa00")
 
 
-def _confirm_no_spool_review(printer, job_id, rec):
-    """Apply a `no_spool` review (the record was already popped = the claim). The
-    usage was computed when the print ended but no spool was bound; RE-RESOLVE the
-    stored usage_map against whatever spool is bound to the toolhead NOW and apply
-    it additively (ONLY {used_weight}, archive-on-empty discipline, via the canonical
-    _apply_usage_to_printer loop). If still unbound, RE-STASH the record so it stays
-    recoverable and report `still_no_spool` — never a terminal 0g."""
-    _, fb_url = config_loader.get_api_urls()
-    # Resolve the printer's active toolheads ONCE and thread it to BOTH the preview
-    # resolve and the apply, so an MMU printer's info.mmu ordering probe runs once,
-    # not twice (22.4(5)). The apply returns the real toolhead positions (`known`)
-    # so the shortfall excludes orphan tool indices (22.4(3)).
-    printer_map = locations_db.get_active_printer_map()
-    active_locs = _resolve_active_locs_for_printer(printer_map, printer, fb_url)
-    # JSON stringified the int positions on save — coerce back so the resolve (which
-    # keys on int positions from printer_map) matches. Without this the re-resolve
-    # silently finds nothing and always says "still no spool".
-    umap = {}
-    for k, v in (rec.get("usage_map") or {}).items():
-        try:
-            umap[int(k)] = float(v)
-        except (TypeError, ValueError):
-            continue
-    rows = _resolve_usage_to_spools(printer, umap, fb_url, active_locs=active_locs) if umap else []
-    if not rows:
-        cancel_review_store.add_pending(rec)  # re-stash UNCHANGED — still recoverable
-        return jsonify({"status": "still_no_spool",
-                        "msg": "No spool is bound to this printer's toolhead yet — "
-                               "bind it in the Location Manager, then Apply."})
-    # A monitor retry could have settled this job between the pop and now.
-    if print_deduct_ledger.was_deducted(printer, job_id):
-        return jsonify({"status": "already_handled"})
-    failed = []
-    spools_updated, details, known = _apply_usage_to_printer(
-        printer, umap, fb_url, strategy_label="Cancel-review", active_locs=active_locs,
-        failed_out=failed)
-    if spools_updated == 0 and not failed:
-        cancel_review_store.add_pending(rec)
-        return jsonify({"status": "still_no_spool",
-                        "msg": "No spool is bound to this printer's toolhead yet."})
-    # (A write that reported failure goes on to the uncharged-grams card below,
-    # 43.2: it may have landed, so re-stashing this review to re-resolve on the
-    # next Apply could charge it twice.)
-    total = round(sum(d["grams"] for d in details), 2)
-    state.add_log_entry(
-        f"✔️ Cancel-review deduct {total:.2f}g across {spools_updated} spool(s) on "
-        f"{printer}{_toolheads_charged(details)} (toolhead now bound).", "SUCCESS")
-    # Record applied + surface any shortfall via the shared helper (records confirmed,
-    # 2dp warn matching the shortfall_g field, orphan-excluded — 22.4(2)/(3)/(4)). A
-    # shortfall of at least the threshold leaves an uncharged-grams card (43.2).
-    _, shortfall = _record_applied_deduct(
-        printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
-        details=details, usage_map=umap, known_positions=known, confirmed=True,
-        fb_url=fb_url, active_locs=active_locs, failed=failed, read_heads=True)
-    resp = {"status": "confirmed", "applied": details, "shortfall_g": shortfall}
-    if cancel_review_store.has_pending(printer, _shortfall_key(job_id)):
-        resp["shortfall_card"] = _shortfall_key(job_id)
-    return jsonify(resp)
-
-
 def _card_leftover(rec, applied, asked=None):
     """Group 43.2 — per head, what an Apply of a review left uncharged: each row's
     grams (as this Apply posted them, `asked` {sid: grams}; a row it left out asked
@@ -4219,14 +4159,19 @@ def api_cancel_deduct_confirm():
     # no_spool re-check against whatever is on the head now).
     charges = data.get('charges')
     set_left = 0.0
-    if kind == "no_spool" and charges is None and (rec.get("heads_source") or rec.get("unresolved_notes")):
-        # Hotfix 2026-11-11: a no_spool card built from the print-end read names
-        # its heads as they were then. The old Apply without picks re-reads the
-        # heads and charges whatever is loaded NOW: the spool loaded after the
-        # print, which this card exists to keep from being charged.
+    if kind == "no_spool" and charges is None:
+        # A no_spool Apply names the spool each head used (`charges`): today's page
+        # always sends its picks on such a card. The old Apply without them re-read
+        # the heads and charged whatever was loaded NOW, the spool loaded after the
+        # print (prod job 1141's mistake); the hotfix refused it on a card built from
+        # the print-end read, and Group 64.3 (5) retires it for every card: a request
+        # without picks is a page from before the 43.3 picker, told to reload. The
+        # card is kept (the pop was the claim).
         cancel_review_store.add_pending(rec)
-        return jsonify({"status": "error",
-                        "msg": "Pick the spool each head used on the card, then Apply."})
+        return jsonify({"status": "error", "stale_page": True,
+                        "msg": "Pick the spool each head used on the card, then Apply. If the "
+                               "card shows no spool picker, this page is out of date: reload "
+                               "it (Ctrl+F5) first."})
     if kind == "shortfall" and charges is None and not rec.get("spools"):
         # 43.2 — a shortfall card names no spool of its own, so an Apply has to
         # pick one (a retry row left by a failed write is the exception). Without
@@ -4289,22 +4234,6 @@ def api_cancel_deduct_confirm():
                                        if str(k) not in picked_tools}
         updates = {str(r["sid"]): r["grams"] for r in picked}
         kind = "partial"
-    if kind == "no_spool":
-        # Usage was computed earlier but no spool was bound. RE-RESOLVE the stored
-        # usage_map against whatever's bound NOW (Derek just bound the toolhead) and
-        # apply. The pop above is the claim; _confirm_no_spool_review re-stashes if
-        # still unbound so the review is never lost (no terminal 0g). Guard the whole
-        # call: an UNEXPECTED raise (corrupt local JSON, a probe error) between the
-        # pop and its controlled re-stash points would otherwise lose the popped
-        # review with no ledger entry — a silent loss. Re-stash + surface on any raise.
-        try:
-            return _confirm_no_spool_review(printer, job_id, rec)
-        except Exception as e:
-            cancel_review_store.add_pending(rec)
-            state.add_log_entry(
-                f"❌ Cancel-review apply failed for {printer} (job {job_id}): {_esc(e)} — "
-                f"review kept for retry.", "ERROR", "ff4444")
-            return jsonify({"status": "error", "msg": str(e)}), 500
     if kind == "progress_unknown":
         # No measured usage + no preview spools — nothing to auto-apply. Don't let
         # the partial loop below 0g-"confirm" it (that would re-lose it). Re-stash

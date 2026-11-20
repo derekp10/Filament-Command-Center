@@ -203,14 +203,18 @@ def test_a_partial_pick_warns_about_what_stayed_uncharged(logs):
     assert any("wasn't charged" in m for m, _ in logs), logs
 
 
-def test_apply_without_charges_keeps_the_old_recheck(logs):
-    """A cached page (or a caller) that sends no `charges` gets the old behaviour:
-    re-resolve against the head now. RCOI-1 is still empty, so: still no spool."""
+def test_apply_without_charges_is_told_to_reload(logs):
+    """A cached page (or a caller) that sends no `charges` used to get the old
+    behaviour, a re-resolve against the head at Apply time (which charged a spool
+    loaded after the print). Group 64.3 (5) retired it: the page is told to reload,
+    the card stays, nothing is charged."""
     sm = _sm()
     _no_spool_review(sm, {0: 10.0})
     body = _confirm(sm, {"printer_name": INDX, "job_id": "J-1105", "updates": {}})
-    assert body["status"] == "still_no_spool", body
+    assert body["status"] == "error" and body.get("stale_page") is True, body
+    assert "reload" in body["msg"], body
     assert _pending("J-1105") is not None
+    assert sm.patches == []
 
 
 def test_a_cancel_review_row_can_be_redirected_to_another_spool(logs):
