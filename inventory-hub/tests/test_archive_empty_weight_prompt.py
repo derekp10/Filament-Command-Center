@@ -411,7 +411,12 @@ def test_archive_empty_weight_prompt_keeps_a_place_id_whole_on_a_phone(page: Pag
                 lines = page.evaluate(_ID_LINES, place)
                 if lines != 1:
                     split.append((size, place, sid, lines))
-                page.locator("#fcc-archive-later").click()
+                # PIN UPDATED DELIBERATELY (Group 63 review, round 3): closed with Escape
+                # (Later's own key). A person's answer now shields the next press at its
+                # spot for 700 ms (window.fccShieldNextPress: a double click's second
+                # press reaches nothing behind it), and the next prompt's Later sits
+                # exactly there, so a click on it this soon is that second press.
+                page.keyboard.press("Escape")
                 page.wait_for_selector("#fcc-archive-empty-overlay", state="detached", timeout=3_000)
     assert split == [], split
 
