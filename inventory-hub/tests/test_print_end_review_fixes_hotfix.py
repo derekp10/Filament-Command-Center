@@ -356,19 +356,27 @@ def test_restart_recovery_says_a_queued_print_will_still_be_computed(logs):
         assert p.sm.used(42) == pytest.approx(750.0)
 
 
-def test_restart_recovery_with_nothing_queued_still_says_to_weigh(logs):
-    # Passes on d213cf7 by design: with nothing queued the line is main's.
-    with Indx(), patch.object(print_deduct, "_snapshot_active_spools", return_value={}):
+def test_restart_recovery_with_nothing_queued_opens_the_ambiguous_review(logs):
+    """Group 64.3 (6): with nothing queued, the old print goes to the ambiguous review
+    (the line used to tell Derek to weigh the spool, "not auto-deducted"), its heads
+    read at the restart and nothing charged. Red on 83aa20a."""
+    with Indx() as p, patch.object(print_deduct, "_snapshot_active_spools", return_value={}):
         _tick("PRINTING", _job(0.5))
         latch = copy.deepcopy(print_monitor._PRINT_TRACKER[INDX])
         with patch.object(print_tracker_store, "load", return_value={INDX: latch}), \
                 patch.object(print_monitor.prusalink_api, "get_printer_state",
                              return_value={"state": "PRINTING"}), \
                 patch.object(print_monitor.prusalink_api, "get_printer_job",
-                             return_value=_job(0.1, job_id=1142, filename="/usb/NEXT.BGC")):
+                             return_value=_job(0.1, job_id=1142, filename="/usb/NEXT.BGC")), \
+                _compute({4: 50.0}):
             print_monitor._recover_print_tracker_on_start()
     said = [m for m in logs if "different job is printing now" in m]
-    assert len(said) == 1 and "not auto-deducted" in said[0], logs
+    assert len(said) == 1 and "surfacing a review" in said[0] and "not auto-deducted" not in said[0], logs
+    rec = cancel_review_store.get_pending(INDX, str(JOB))
+    assert rec is not None and rec["ambiguous"] is True, rec
+    assert rec.get("heads_source") == "restart", rec
+    assert p.sm.patches == []
+    assert print_monitor._PRINT_TRACKER[INDX]["job_id"] == 1142
 
 
 # --------------------------------------------------------------------------- #

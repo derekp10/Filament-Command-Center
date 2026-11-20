@@ -1652,8 +1652,8 @@ def _held_for_restart(printer, job_id):
     spool, as before). Since scope C a live edge queues its print before the
     download, so a print whose end FCC saw before the restart (its reset latch not
     saved) may still be computed by the queue: "weigh the spool" would have the
-    print charged on top of the weighing. Routing the print itself is a follow-up
-    (D8)."""
+    print charged on top of the weighing. When it holds nothing, the print goes to
+    the ambiguous review (Group 64.3 (6), the hotfix's D8)."""
     try:
         if print_deduct_ledger._is_blank_job(job_id):
             return None
@@ -1720,7 +1720,13 @@ def _recover_one_print_latch(name, entry, fb_url):
                 _PRINT_TRACKER[name] = dict(entry)
             return True
         # A DIFFERENT job is printing → the old one ended during the outage and
-        # we can't tell cancel from completion → manual review; latch the new job.
+        # we can't tell cancel from completion → the AMBIGUOUS REVIEW, as the live
+        # job change routes its outgoing print (Group 64.3 (6); it used to be a
+        # WARNING telling Derek to weigh the spool). Its heads are read now, during
+        # the next print, and checked against the old print's start snapshot and
+        # swap log, so a head changed for the next print is held. Unless FCC already
+        # holds the print (its record queued before the restart, its review or its
+        # ledger entry): the line then says so. Latch the new job.
         held = _held_for_restart(name, job_id)
         if held:
             state.add_log_entry(
@@ -1728,10 +1734,14 @@ def _recover_one_print_latch(name, entry, fb_url):
                 f"FCC restarted and a different job is printing now. {held}", "WARNING", "ffaa00")
         else:
             state.add_log_entry(
-                f"⚠️ {name}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress when FCC "
-                f"restarted and a different job is printing now — its outcome is unknown, "
-                f"not auto-deducted. Weigh the spool if that print was cancelled.",
-                "WARNING", "ffaa00")
+                f"❓ {name}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress when FCC "
+                f"restarted and a different job is printing now — surfacing a review (couldn't "
+                f"confirm completed vs cancelled).", "WARNING", "ffaa00")
+            _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url,
+                                     progress_unknown=not progress_sampled,
+                                     **_edge_kwargs(print_deduct._validated_start_spools(entry, job_id),
+                                                    print_deduct._validated_swap_log(entry, job_id),
+                                                    "restart"))
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {
                 'state': cur, 'job_id': cur_jid, 'filename': job.get('filename'),
