@@ -1872,23 +1872,17 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
     # genuinely-ambiguous case falls through to the orphan warning instead.
     # Multi-head printers (XL / future INDX toolchanger) keep their per-tool map
     # untouched — there the tool index IS the toolhead position (1:1).
-    sole = None
-    try:
-        if len(usage_map) == 1:
-            pm = locations_db.get_active_printer_map()
-            positions = {info.get('position', 0) for info in pm.values()
-                         if info.get('printer_name') == printer_name}
-            if len(positions) == 1:
-                sole = next(iter(positions))
-                grams = next(iter(usage_map.values()))
-                usage_map = {sole: grams}
-    except Exception:
-        sole = None
+    # Group 64.1: the figures at the swaps are folded with the usage, onto the same
+    # position and read by the same tool (_fold_sole_tool), so a split charges the
+    # grams where the usage says they are, once.
+    figures = ({point: dict(cum) for point, cum in zip(swap_points, cums)}
+               if swap_points and len(cums) == len(swap_points) else None)
+    usage_map, figures, sole = _fold_sole_tool(printer_name, usage_map, figures)
 
     if measured:
         _warn_parse_gap(printer_name, filename, measured, sole_position=sole)
-    if cums_out is not None and swap_points and len(cums) == len(swap_points):
-        cums_out.update({point: dict(cum) for point, cum in zip(swap_points, cums)})
+    if cums_out is not None and figures:
+        cums_out.update(figures)
     return usage_map, None
 
 
@@ -1917,6 +1911,47 @@ def _sole_position(printer_name, tools):
         return next(iter(positions)) if len(positions) == 1 else None
     except Exception:
         return None
+
+
+def _grams_at(cum, key):
+    """The grams a per-tool or per-position dict holds for `key` (an int or a
+    string, compared as one form), 0.0 when it holds none. Never another key's."""
+    want = _norm_pos(key)
+    for k, v in (cum or {}).items():
+        if _norm_pos(k) == want:
+            try:
+                return float(v or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def _fold_sole_tool(printer_name, usage_map, swap_cums=None):
+    """Put a one-position printer's sole-tool usage on its position (Group 64.1).
+
+    An MMU-profile file can mark tool 1 on a printer with one head, so its usage
+    is {1: g}, and the figures at its swaps, measured in the same walk, are keyed
+    by tool 1 too. Re-keyed together here, the usage {P: g} and each swap's figure
+    {P: that tool's own figure} (absent = 0, never another tool's), every later
+    step reads one key: the split at the swaps used to charge the grams at P while
+    _uncharged_usage left the same grams on a T1 line, so an Apply recorded a false
+    shortfall and a spool picked on that line was charged them twice.
+
+    Unchanged when the printer has several positions or its map can't be read
+    (_sole_position fails closed), and when the usage names no tool or several (a
+    multi-material print through one head is never summed onto one spool).
+    Returns (usage_map, swap_cums, the position folded onto or None)."""
+    tools = [t for t, g in (usage_map or {}).items() if (g or 0) > 0]
+    if len(tools) != 1:
+        return usage_map, swap_cums, None
+    sole = _sole_position(printer_name, tools)
+    if sole is None:
+        return usage_map, swap_cums, None
+    tool = tools[0]
+    usage = {sole: usage_map[tool]}
+    if swap_cums:
+        swap_cums = {point: {sole: _grams_at(cum, tool)} for point, cum in swap_cums.items()}
+    return usage, swap_cums, sole
 
 
 def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charged=True):
@@ -2333,6 +2368,12 @@ def _tool_grams(cum, pos, allow_fold=True):
     you asked about" — folding there charges every position the one used tool's
     full grams. Mirrors the `len(positions) == 1` guard `_compute_cancel_usage`
     already applies to the same fold.
+
+    Group 64.1: nothing in the app calls this any more. The split reads each
+    figure by the one tool a one-position printer's usage names (_grams_at), the
+    usage and its figures folded onto the position together (_fold_sole_tool):
+    "any sole entry" read another tool's figure as this one's. Kept for its tests,
+    which pin the rule it describes.
     """
     if not cum:
         return 0.0
@@ -2369,7 +2410,18 @@ def _compute_swap_split(usage_map, swap_log, start_spools, swap_cums, path_filam
     `swap_cums` ({swap point: {tool: grams}}, _swap_point's keys) are the
     cumulative grams at each swap, measured in the same download and walk as the
     print's usage (_compute_cancel_usage's `cums_out`; hotfix 2026-11-11, D5): this
-    function downloads nothing. A swap with no figure there is no split."""
+    function downloads nothing. A swap with no figure there is no split.
+
+    `single_position` (a printer with one head; Group 64.1): the head stands for the
+    ONE tool its usage names, and the total and every swap's figure are read by
+    that tool (a figure it lacks is 0 g, never another tool's). The usage arrives
+    folded onto the position (_fold_sole_tool), its figures with it, so the split
+    charges the grams under the key the uncharged lines read. A usage naming
+    several tools (a multi-material print through one head), or swaps recorded at
+    several positions, can't be split: None, so the head asks. Before, any sole
+    entry was folded onto the position asked about, so a figure of another tool
+    could stand for this one's (the swap before T0 first printed, whose figure was
+    T1's)."""
     if not swap_log or not swap_cums:
         return None
     by_pos = {}
@@ -2379,6 +2431,12 @@ def _compute_swap_split(usage_map, swap_log, start_spools, swap_cums, path_filam
         by_pos.setdefault(_norm_pos(ev.get('position', 0)), []).append(ev)
 
     start_spools = start_spools or {}
+    sole_tool = None
+    if single_position:
+        tools = [t for t, g in (usage_map or {}).items() if (g or 0) > 0]
+        if len(tools) != 1 or len(by_pos) != 1:
+            return None
+        sole_tool = tools[0]
     result = {}
     for pos, evs in by_pos.items():
         points = [_swap_point(ev) for ev in evs]
@@ -2386,7 +2444,8 @@ def _compute_swap_split(usage_map, swap_log, start_spools, swap_cums, path_filam
             return None
         order = sorted(range(len(evs)), key=lambda i: points[i])
         evs, points = [evs[i] for i in order], [points[i] for i in order]
-        total = _tool_grams(usage_map, pos, allow_fold=single_position)
+        key = pos if sole_tool is None else sole_tool
+        total = _grams_at(usage_map, key)
         if total <= 0:
             return None  # no grams for a swapped position → don't guess
         seg_grams, prev = [], 0.0
@@ -2394,14 +2453,13 @@ def _compute_swap_split(usage_map, swap_log, start_spools, swap_cums, path_filam
             cum = swap_cums.get(point)
             if cum is None:
                 return None  # the walk didn't measure this swap
-            c = _tool_grams(cum, pos, allow_fold=single_position)
+            c = _grams_at(cum, key)
             # Cumulative must be monotonic and within the total; a bad remap/parse
             # that regresses or overshoots means we can't trust the split. Since
             # Group 56.2 each cumulative is the share of the tool's own walk reached,
             # times its footer, and never past it, so against a completion's footer
-            # an overshoot can only come from the single-position fold (another
-            # tool's figure); against a cancel's partial, from a swap recorded past
-            # the cancel. A swap captured late now splits as given instead of
+            # it can't overshoot; against a cancel's partial, a swap recorded past
+            # the cancel can. A swap captured late now splits as given instead of
             # falling back because the raw walk ran over its footer (the review
             # still shows both spools' grams before anything is charged).
             if c < prev - 0.01 or c > total + 0.01:
@@ -2597,6 +2655,11 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         return {"status": "skipped", "reason": "already processed", "job_id": job_id}
     if cancel_review_store.has_pending(printer_name, job_id):
         return {"status": "skipped", "reason": "already pending", "job_id": job_id}
+    # Group 64.1: a one-position printer's sole-tool usage and its swaps' figures on
+    # the position, together (a no-op when _compute_cancel_usage already folded
+    # them), so the split and the uncharged lines read one key and no gram is on
+    # a row and a line at once.
+    usage_map, swap_cums, _ = _fold_sole_tool(printer_name, usage_map, swap_cums)
     # 22.3(b) AUTO-SPLIT: when the print's download measured its swaps, charge EACH
     # spool that fed the toolhead only its OWN segment's grams (run-out spool
     # 0->swap, replacement swap->end) so both are shown + settled together. Degrades
@@ -3430,6 +3493,9 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
     grams box and nothing pre-filled (`unresolved_sets`)."""
     heads, source, read_at = mapping
     words = _heads_words(source)
+    # Group 64.1: as the completion's review (a no-op after _compute_cancel_usage's
+    # own fold), so a split head's grams are never also an uncharged line.
+    usage_map, swap_cums, _ = _fold_sole_tool(printer_name, usage_map, swap_cums)
     held = _held_heads(heads, start_spools, swap_log, usage_map)
     split = _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_cums,
                               reached_fraction)
