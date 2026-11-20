@@ -743,3 +743,142 @@ def test_prusaments_apply_weights_waits_for_a_charge_too(monkeypatch, stamps):
 def test_the_deducts_lock_is_the_one_the_saves_take():
     assert print_deduct._spool_lock(200) is spoolman_api.spool_lock(200)
     assert spoolman_api.spool_lock(200) is not spoolman_api.spool_lock(201)
+
+
+# --------------------------------------------------------------------------- #
+# 64.6: an MMU printer (Derek, 2026-11-20: each slot its own number)           #
+# --------------------------------------------------------------------------- #
+
+MMU = "MMU TEST"
+
+
+class MmuPrinter:
+    """A made-up printer with an MMU of five slots (MMU-1..MMU-5, Type "MMU Slot"),
+    each holding spool #401..#405 unless `loaded` says otherwise. `shared` puts every
+    slot on toolhead number 1 (position 0), the setup FCC can't tell apart; else
+    each slot has its own number (position = slot - 1), as Derek's model says."""
+
+    def __init__(self, shared=False, loaded=None):
+        self.slots = [f"MMU-{i + 1}" for i in range(5)]
+        self.pos = {slot: (0 if shared else i) for i, slot in enumerate(self.slots)}
+        loaded = loaded if loaded is not None else {slot: 401 + i for i, slot in enumerate(self.slots)}
+        self.sm = SpoolmanHTTPFake()
+        for i, slot in enumerate(self.slots):
+            sid = loaded.get(slot)
+            if sid is not None:
+                self.sm.add("spool", sid, location=slot, used_weight=10.0, initial_weight=1000.0,
+                            archived=False, filament={"weight": 1000.0})
+
+    def used(self, sid):
+        return self.sm.records["spool"][sid]["used_weight"]
+
+    def __enter__(self):
+        active = [(slot, {"position": self.pos[slot], "printer_name": MMU}) for slot in self.slots]
+        rows = [{"LocationID": slot, "Type": "MMU Slot"} for slot in self.slots]
+        self._ctx = [
+            patch.object(print_deduct.locations_db, "get_active_printer_map",
+                         return_value={slot: {"printer_name": MMU, "position": self.pos[slot]}
+                                       for slot in self.slots}),
+            patch.object(print_deduct.locations_db, "load_locations_list", return_value=rows),
+            patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=active),
+            patch.object(spoolman_api.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
+            patch.object(spoolman_api, "format_spool_display",
+                         return_value={"text": "#s", "color": "ff0000", "slot": "", "details": {}}),
+            patch.object(spoolman_api.requests, "get", side_effect=self.sm.get),
+            patch.object(spoolman_api.requests, "patch", side_effect=self.sm.patch),
+            patch.object(print_deduct.prusalink_api, "fetch_printer_credentials",
+                         return_value={"ip_address": "1.2.3.4", "api_key": "k"}),
+        ]
+        _start(self._ctx)
+        return self
+
+    def __exit__(self, *exc):
+        _stop(self._ctx)
+
+
+def _mmu_gcode(grams):
+    """A plain-text multi-material MMU print: each tool in `grams` prints in turn;
+    the footer lists every tool up to the last, 0 g for one that printed none."""
+    tools = max(grams) + 1
+    body = ["M83"]
+    for t in sorted(grams):
+        body += [f"T{t}"] + ["G1 X1 E1"] * 10
+    mm = ", ".join("10" if t in grams else "0" for t in range(tools))
+    g = ", ".join(str(grams.get(t, 0)) for t in range(tools))
+    return "\n".join(body) + f"\n; filament used [mm] = {mm}\n; filament used [g] = {g}\n"
+
+
+def _mmu_complete(rig, grams, end=True):
+    with rig:
+        end_heads = print_monitor._capture_end_heads(MMU, JOB, "http://fb") if end else None
+    with rig, _download(_mmu_gcode(grams)):
+        return print_deduct.deduct_completed_print(MMU, "m.gcode", JOB, fb_url="http://fb",
+                                                   **({"end_heads": end_heads} if end_heads else {}))
+
+
+def test_an_mmu_whose_slots_have_their_own_numbers_is_charged_slot_by_slot():
+    """Derek's model: a multi-color print charges each slot's spool its own tool's
+    grams, as a toolchanger's heads are charged. Passes on 6b76460 by design (FCC
+    already charges per toolhead number); pinned for MMU setups."""
+    rig = MmuPrinter()
+    out = _mmu_complete(rig, {0: 10.0, 2: 5.0})
+    assert out["status"] == "deducted", out
+    assert rig.used(401) == pytest.approx(20.0) and rig.used(403) == pytest.approx(15.0)
+    assert rig.used(402) == 10.0 and rig.used(404) == 10.0
+
+
+def test_a_one_color_print_on_slot_3_of_an_mmu_with_own_numbers_charges_slot_3():
+    """An MMU-profile file printing from slot 3 lists only T2. Passes on 6b76460 by
+    design (several numbers: no fold onto slot 1)."""
+    rig = MmuPrinter()
+    _mmu_complete(rig, {2: 5.0})
+    assert rig.used(403) == pytest.approx(15.0) and rig.used(401) == 10.0
+
+
+def test_mmu_slots_sharing_one_number_each_holding_a_spool_are_asked_about(warn_lines):
+    """Red on 6b76460: the print-end read stopped at the first slot holding a spool,
+    and slot 1's #401 was charged the print that slot 3 made."""
+    rig = MmuPrinter(shared=True)
+    out = _mmu_complete(rig, {2: 5.0})
+    assert [rig.used(s) for s in (401, 402, 403, 404, 405)] == [10.0] * 5, "a slot's spool was charged"
+    # Its only head held: the card to pick on, as for any head FCC can't vouch for.
+    assert out["status"] == "pending_unresolved" and out["kind"] == "no_spool", out
+    card = cancel_review_store.get_pending(MMU, str(JOB))
+    note = card["unresolved_notes"]["0"]
+    assert note.startswith("MMU slots MMU-1, MMU-2, MMU-3, MMU-4 and MMU-5 share one toolhead number"), note
+    assert "(#401, #402, #403, #404 and #405)" in note and "in Settings" in note, note
+    offered = {s for h in card["heads_at_end"] for s in (h.get("sids") or [h.get("sid")])}
+    assert {401, 402, 403, 404, 405} <= offered, card   # the card's picker offers every slot's spool
+
+
+def test_mmu_slots_sharing_one_number_with_no_print_end_read_charge_none(warn_lines):
+    """Red on 6b76460: with no print-end read the apply charged the first slot's
+    spool. It charges none now, and says how to set the MMU up."""
+    rig = MmuPrinter(shared=True)
+    _mmu_complete(rig, {2: 5.0}, end=False)
+    assert [rig.used(s) for s in (401, 402, 403)] == [10.0] * 3
+    said = [m for m, lvl in warn_lines if "share toolhead number 1" in m]
+    assert len(said) == 1 and "own toolhead number in Settings" in said[0], warn_lines
+
+
+def test_mmu_slots_sharing_one_number_with_one_spool_loaded_charge_it():
+    """Only one slot holds a spool: there's nothing to tell apart. Passes on
+    6b76460 by design."""
+    rig = MmuPrinter(shared=True, loaded={"MMU-3": 403})
+    _mmu_complete(rig, {2: 5.0})
+    assert rig.used(403) == pytest.approx(15.0)
+
+
+def test_a_cancel_on_mmu_slots_sharing_one_number_says_why_it_asks():
+    """Red on 6b76460 (its card blamed one slot for holding two spools)."""
+    rig = MmuPrinter(shared=True, loaded={"MMU-1": 401, "MMU-2": 402})
+    with rig:
+        end_heads = print_monitor._capture_end_heads(MMU, JOB, "http://fb")
+    with rig, _download(_mmu_gcode({1: 5.0})):
+        print_deduct._create_pending_cancel_review(MMU, "m.gcode", JOB, 0.5, fb_url="http://fb",
+                                                   end_heads=end_heads)
+    rec = cancel_review_store.get_pending(MMU, str(JOB))
+    note = (rec.get("unresolved_notes") or {}).get("0", "")
+    assert "MMU slots MMU-1 and MMU-2 share one toolhead number" in note, rec
+    assert "own toolhead number in Settings" in note, rec
+    assert rig.used(401) == 10.0 and rig.used(402) == 10.0

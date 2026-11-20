@@ -27,7 +27,6 @@ import functools
 import html
 import math
 import requests  # type: ignore
-import threading
 import time
 
 import state  # type: ignore
@@ -438,6 +437,7 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
     spools_updated = 0
     details = []
     processed_positions = set()
+    mmu_ids = None
     for loc_id, p_info in active_locs:
         toolhead_idx = p_info.get('position', 0)
         if toolhead_idx in processed_positions:
@@ -452,6 +452,20 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
         if not loc_spools:
             continue  # try the next alias for this position
         processed_positions.add(toolhead_idx)
+        if captured is None:
+            # Group 64.6: MMU slots sharing this toolhead number, each holding a
+            # spool: FCC can't tell which slot printed, so it charges none of them.
+            if mmu_ids is None:
+                mmu_ids = _mmu_slot_ids()
+            if str(loc_id).upper() in mmu_ids:
+                holders = _mmu_slot_holders(active_locs, toolhead_idx, mmu_ids)
+                if len(holders) > 1:
+                    state.add_log_entry(
+                        f"⚠️ {printer_name}: MMU slots {_and_list(h for h, _s in holders)} share toolhead "
+                        f"number {_head_number(toolhead_idx)} and each holds a spool, so FCC can't tell which "
+                        f"slot printed; {weight_used:.2f}g not deducted. Give each MMU slot its own toolhead "
+                        f"number in Settings, and weigh the spool to true up.", "WARNING", "ffaa00")
+                    continue
         # >1 spool at one toolhead = a stale GHOST + the current load (or two
         # mis-assignments). Resolve to the directly-loaded spool; only fetch the
         # detailed/ghost info in this rare case so the single-spool common path is
@@ -920,6 +934,8 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
                 if at_end is not None:
                     # Its entry already names both, which the card's picker offers.
                     cause["sids"] = [int(s) for s in at_end]
+                    if head.get('mmu_shared'):
+                        cause["mmu_shared"] = list(head['mmu_shared'])     # Group 64.6
                 else:
                     try:
                         loaded, _amb = spoolman_api.select_deduct_targets(head['toolhead'])
@@ -979,6 +995,8 @@ def _shortfall_reasons(card, skip=()):
                          else f"#{sid}'s record hit 0 g on {head}")
         elif c.get("why") == "no_spool":
             parts.append(f"no spool on {head}")
+        elif c.get("why") == "two_spools" and c.get("mmu_shared"):
+            parts.append(f"MMU slots {_and_list(c['mmu_shared'])} share one toolhead number")
         elif c.get("why") == "two_spools":
             ids = c.get("sids") or []
             both = ", ".join(f"#{s}" for s in ids)
@@ -1108,6 +1126,45 @@ def _say_where_heads_were_read(record, source, read_at):
         record["heads_read_at"] = read_at
 
 
+def _mmu_slot_ids():
+    """Group 64.6: the LocationIDs (upper case) whose Type is "MMU Slot"; an empty
+    set when the locations can't be read (then no MMU guard applies)."""
+    try:
+        return {str(r.get('LocationID', '')).strip().upper()
+                for r in locations_db.load_locations_list() or []
+                if isinstance(r, dict) and str(r.get('Type', '')).strip() == locations_db.MMU_SLOT_TYPE}
+    except Exception:
+        return set()
+
+
+def _mmu_slot_holders(active_locs, pos, mmu_ids):
+    """Group 64.6 (Derek, 2026-11-20: each MMU slot gets its own toolhead number):
+    [(slot id, its spools)] for each MMU slot at toolhead position `pos` holding a
+    spool now (the directly loaded one over a stale trail). Two or more mean the
+    printer's MMU slots share one toolhead number, so FCC can't tell which slot's
+    spool printed: the caller asks instead of charging the first slot's."""
+    out = []
+    for loc_id, p_info in active_locs or []:
+        if p_info.get('position', 0) != pos or str(loc_id).upper() not in mmu_ids:
+            continue
+        sids, _amb = spoolman_api.select_deduct_targets(loc_id)
+        if sids:
+            out.append((str(loc_id).upper(), list(sids)))
+    return out
+
+
+def _shared_mmu_head(loc_id, pos, holders):
+    """The head entry for MMU slots sharing one toolhead number, each holding a
+    spool: every spool they hold, no one spool named, the slots in `mmu_shared`."""
+    sids = []
+    for _slot, ss in holders:
+        for s in ss:
+            if s not in sids:
+                sids.append(s)
+    return {"toolhead": str(loc_id).upper(), "position": pos, "sid": None, "sids": sids,
+            "mmu_shared": [slot for slot, _ss in holders]}
+
+
 def _capture_print_heads(printer_name, fb_url):
     """The spool on each of `printer_name`'s heads now, picked exactly as the
     deduct picks (_apply_usage_to_printer): the printer's aliases in
@@ -1126,11 +1183,18 @@ def _capture_print_heads(printer_name, fb_url):
     every head empty. Each head entry also keeps `used`, {sid: used_weight} of its
     spools as the read had them, for Decision 1's check of a spool weighed between
     the print's end and its charge (a stand-in for the per-location read gives no
-    records, and no `used`)."""
+    records, and no `used`).
+
+    Group 64.6: an MMU's slots that share one toolhead number and each hold a spool
+    are one head holding all of those spools (`mmu_shared` names the slots), which
+    every caller asks about (two spools on a head), never the first slot's spool
+    charged: FCC can't tell which slot printed. Each slot with its own number is a
+    head of its own, as a toolchanger's are."""
     try:
         with spoolman_api.one_spool_list_read() as read:
             printer_map = locations_db.get_active_printer_map()
             active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+            mmu_ids = _mmu_slot_ids()
             by_pos, decided = {}, set()
             for loc_id, p_info in active_locs:
                 pos = p_info.get('position', 0)
@@ -1147,6 +1211,10 @@ def _capture_print_heads(printer_name, fb_url):
                 sids = list(sids or [])
                 by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos,
                                "sid": sids[0] if len(sids) == 1 else None, "sids": sids}
+                if str(loc_id).upper() in mmu_ids:
+                    holders = _mmu_slot_holders(active_locs, pos, mmu_ids)
+                    if len(holders) > 1:
+                        by_pos[pos] = _shared_mmu_head(loc_id, pos, holders)
             if read.why:
                 state.logger.warning(f"🔎 {printer_name}: couldn't read the spool list for its heads "
                                      f"({read.why}); this read of the heads isn't used.")
@@ -1194,6 +1262,8 @@ def _usable_heads(end_heads):
                  "sid": sids[0] if len(sids) == 1 else None, "sids": sids}
         if isinstance(h.get('used'), dict):
             entry["used"] = dict(h['used'])   # each spool's used weight at the read (64.3 (1))
+        if isinstance(h.get('mmu_shared'), list) and h['mmu_shared']:
+            entry["mmu_shared"] = list(h['mmu_shared'])   # MMU slots sharing its number (64.6)
         heads.append(entry)
     if not any(h['sids'] for h in heads):
         return None
@@ -1308,6 +1378,8 @@ def _held_heads(heads, start_spools, swap_log, usage_map):
         head = by_pos.get(pos) or {}
         sids = _head_sids(head)
         info = {"toolhead": head.get('toolhead') or f"T{pos}", "sids": sids, "start": start.get(pos)}
+        if head.get('mmu_shared'):
+            info["mmu_shared"] = list(head['mmu_shared'])      # Group 64.6
         if swaps.get(pos):
             held[pos] = dict(info, why="swapped", events=swaps[pos])
         elif len(sids) > 1:
@@ -1370,6 +1442,14 @@ def _g_words(grams):
         return ("%.2f" % float(grams)).rstrip("0").rstrip(".")
     except (TypeError, ValueError):
         return str(grams)
+
+
+def _head_number(pos):
+    """A toolhead position as Settings shows it: its number, position + 1."""
+    try:
+        return int(pos) + 1
+    except (TypeError, ValueError):
+        return pos
 
 
 def _and_list(items):
@@ -1631,6 +1711,14 @@ def _explain_unresolved_lines(unresolved, heads, held, start_spools, unread, wor
             phrases[line] = f"which had #{info['start']} {words['start']} and #{sids[0]} {words['end']}"
             notes[line] = (f"FCC saw #{info['start']} {words['start']} and #{sids[0]} {words['end']}, "
                            f"but not when it changed{tail}")
+        elif why == "two_spools" and info.get('mmu_shared'):
+            # Group 64.6: MMU slots sharing one toolhead number, each holding a spool.
+            slots = _and_list(info['mmu_shared'])
+            both = _and_list(f"#{s}" for s in sids)
+            notes[line] = (f"MMU slots {slots} share one toolhead number and each held a spool {words['end']} "
+                           f"({both}), so FCC can't tell which slot printed. Pick the spool it used; giving "
+                           f"each MMU slot its own toolhead number in Settings lets FCC tell next time.")
+            phrases[line] = f"whose MMU slots {slots} share one toolhead number ({both})"
         elif why == "two_spools":
             # Round 2 (R3): FCC's record can put more than two spools on a head.
             both = _and_list(f"#{s}" for s in sids)

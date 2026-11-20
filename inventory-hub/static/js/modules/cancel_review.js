@@ -869,6 +869,15 @@
             return `${who} hit 0 g on ${head}${c.archived ? ' (archived)' : ''}`;
         }
         if (c.why === 'no_spool') return `no spool was loaded on ${head}`;
+        if (c.why === 'two_spools' && Array.isArray(c.mmu_shared) && c.mmu_shared.length) {
+            // Group 64.6: MMU slots sharing one toolhead number, each holding a spool.
+            const slots = c.mmu_shared.length > 1
+                ? `${c.mmu_shared.slice(0, -1).join(', ')} and ${c.mmu_shared[c.mmu_shared.length - 1]}`
+                : c.mmu_shared.join('');
+            return `MMU slots ${slots} share one toolhead number and each held a spool `
+                + `(${spoolListWords(c.sids)}), so FCC charged none of them: give each MMU slot its own `
+                + `toolhead number in Settings so FCC can tell which printed`;
+        }
         if (c.why === 'two_spools') {
             // Round 2 (R3): counted, as FCC's record can put more than two on a head.
             const n = (c.sids || []).length;

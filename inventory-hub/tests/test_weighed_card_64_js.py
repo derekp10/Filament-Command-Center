@@ -136,3 +136,25 @@ def test_a_review_rows_spool_weighed_after_the_print_says_so_and_holds_0g(tmp_pa
     assert res["weighed"] == "1" and float(res["box"]) == 0.0, res
     assert res["note"].startswith("⚠️ Weighed after this print ended: 0 g filled in"), res
     assert res["otherNote"] is False and float(res["otherBox"]) == 3.6, res
+
+
+MMU_JS = r"""
+const c = cardOf('m#shortfall');
+return { why: (c.querySelector('.fcc-cr-why') || {}).textContent || null };
+"""
+
+
+def test_mmu_slots_sharing_one_number_say_so_on_the_uncharged_grams_card(tmp_path):
+    """Group 64.6: the card names the slots and how to set them up, never "MMU-1 had
+    two spools". RED on 6b76460."""
+    rec = _base("m#shortfall", "shortfall", rev=0, total_grams=5.0, unresolved_usage={"0": 5.0},
+                shortfall_causes={"0": {"why": "two_spools", "sid": None, "toolhead": "MMU-1",
+                                        "archived": False, "sids": [401, 402],
+                                        "mmu_shared": ["MMU-1", "MMU-2"]}},
+                heads_at_end=[{"toolhead": "MMU-1", "position": 0, "sid": None, "sids": [401, 402],
+                               "mmu_shared": ["MMU-1", "MMU-2"]}])
+    res = run(tmp_path, RESPOND_JS + MMU_JS, {"pending": [rec], "spools": SPOOLS})
+    why = " ".join((res["why"] or "").split())
+    assert why.startswith("MMU slots MMU-1 and MMU-2 share one toolhead number and each held a spool "
+                          "(#401 and #402), so FCC charged none of them"), why
+    assert "own toolhead number in Settings" in why, why
