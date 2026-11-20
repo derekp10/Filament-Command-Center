@@ -1964,3 +1964,61 @@ def test_review_yes_naming_a_plain_line_is_readable(page: Page, base_url: str, a
     assert all(w >= 600 for _, w in drawn), drawn
     assert scored.split(" | ").count("T6 · HEAD-7") == 2, scored
     page.keyboard.press("Escape")
+
+
+def test_the_weighed_spool_note_on_a_review_card_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 64, Decision 1 (Derek, 2026-11-20: "both should be heavily noted in the
+    UI"): a spool weighed (or changed) after its print ended says so in a loud note
+    (`.fcc-cr-weighed`) on the uncharged-grams card's held line and on a review
+    row, its two looks (FCC knows the weighing came after the print: 0 g filled in;
+    it can't tell: the print's grams filled in). Made-up reviews in this page only;
+    nothing is written. The offline check of the notes is test_weighed_card_64_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    known = ("#200 on HEAD-1 was weighed on the Quick-Weigh at 14:05, after this print ended (at 13:50), "
+             "so the scale already counted its 12.40 g")
+    unsure = ("#300 on HEAD-2 changed weight after this print ended (at 13:50) (50.00 g used then, "
+              "54.00 g now), and FCC can't tell whether the scale counted this print's 3.60 g")
+    held = {"printer_name": "ZZ Contrast XL", "job_id": "w1#shortfall", "shortfall_of": "w1",
+            "filename": "/usb/F.BGC", "progress": 1.0, "total_grams": 16.0, "spools": [], "ambiguous": False,
+            "kind": "shortfall", "rev": 0, "heads_source": "print_end", "heads_words": words,
+            "unresolved_usage": {"0": 12.4, "1": 3.6}, "shortfall_prefill": {"0": 0.0, "1": 3.6},
+            "shortfall_causes": {
+                "0": {"why": "weighed", "sid": 200, "toolhead": "HEAD-1", "archived": False,
+                      "known_order": True, "words": known},
+                "1": {"why": "weighed", "sid": 300, "toolhead": "HEAD-2", "archived": False,
+                      "known_order": False, "words": unsure}},
+            "heads_at_end": [{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                             {"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}]}
+    row = {"sid": 200, "toolhead": "HEAD-1", "position": 0, "grams": 12.4, "current_used": 100.0,
+           "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 887.6,
+           "display": "ZZ Contrast spool 200", "color": "ff0000", "ambiguous": False,
+           "prefill": 0.0, "weighed": {"words": known, "known_order": True}}
+    partial = {"printer_name": "ZZ Contrast XL", "job_id": "w2", "filename": "/usb/G.BGC", "progress": 0.5,
+               "total_grams": 12.4, "spools": [row], "ambiguous": False, "kind": "partial",
+               "heads_source": "print_end", "heads_words": words,
+               "heads_at_end": [{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}]}
+    def _score(rec, wants):
+        page.unroute("**/api/cancel_deduct/pending*")
+        page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+            status=200, content_type="application/json", body=_json.dumps({"pending": [rec]})))
+        page.goto(base_url)
+        page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+        page.evaluate("() => window.openCancelReview()")
+        card = f'#fcc-cancel-review-overlay .fcc-cr-card[data-job="{rec["job_id"]}"]'
+        page.wait_for_selector(f"{card} .fcc-cr-weighed", timeout=15000)
+        assert page.locator(f"{card} .fcc-cr-weighed").count() == len(wants)
+        notes = page.locator(card)
+        assert_contrast(notes)
+        scored = " | ".join(o["text"] for o in conftest.contrast_offenders(notes, min_ratio=100))
+        for want in wants:
+            assert want in scored, (want, scored)
+        page.keyboard.press("Escape")
+
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body="{}"))
+    # (the report cuts each element's text, so each note is found by its start)
+    _score(held, ["Weighed after this print ended: 0 g filled in",
+                  "Changed weight after this print ended: check before you Apply"])
+    _score(partial, ["Weighed after this print ended: 0 g filled in"])

@@ -55,44 +55,47 @@ def api_prusament_apply_weights():
         if not sid:
             return jsonify({"status": "error", "msg": "Missing spool_id"})
 
-        live = spoolman_api.get_spool(sid)
-        if not live:
-            return jsonify({"status": "error", "msg": f"Spool #{sid} not found"})
-        if live.get('archived'):
-            return jsonify({
-                "status": "blocked",
-                "msg": "Spool is archived — not changing its weights "
-                       "(that would return it to active inventory).",
-            })
-
-        live_used = _pm_num(live.get('used_weight')) or 0.0
-        updates = {}
-        new_initial = _pm_num(req.get('initial_weight'))
-        new_tare = _pm_num(req.get('spool_weight'))
-        if new_initial is not None and new_initial > 0:
-            # Hard floor against the live used — never let a correction zero out
-            # and auto-archive a still-loaded spool.
-            if new_initial <= live_used + _PM_WEIGHT_TOL:
+        # Group 64.2 (1): the spool's write lock from the live read to the write, as a
+        # print's charge holds it (its `initial_weight` is the charge's clamp).
+        with spoolman_api.spool_lock(sid):
+            live = spoolman_api.get_spool(sid)
+            if not live:
+                return jsonify({"status": "error", "msg": f"Spool #{sid} not found"})
+            if live.get('archived'):
                 return jsonify({
                     "status": "blocked",
-                    "msg": f"Total {new_initial:g}g would leave ~0g against the "
-                           f"{live_used:g}g already used — not applied "
-                           f"(it would archive/unassign the spool).",
+                    "msg": "Spool is archived — not changing its weights "
+                           "(that would return it to active inventory).",
                 })
-            updates['initial_weight'] = new_initial
-        if new_tare is not None and new_tare > 0:
-            updates['spool_weight'] = new_tare
-        if not updates:
-            return jsonify({"status": "noop", "msg": "Nothing to update"})
 
-        try:
-            spoolman_api.update_spool_or_raise(sid, updates)
-        except spoolman_api.SpoolmanRejection as e:
-            state.add_log_entry(
-                f"❌ Prusament weight apply failed for spool #{sid}: {e}",
-                "ERROR", "ff4444",
-            )
-            return jsonify({"status": "error", "msg": str(e)})
+            live_used = _pm_num(live.get('used_weight')) or 0.0
+            updates = {}
+            new_initial = _pm_num(req.get('initial_weight'))
+            new_tare = _pm_num(req.get('spool_weight'))
+            if new_initial is not None and new_initial > 0:
+                # Hard floor against the live used — never let a correction zero out
+                # and auto-archive a still-loaded spool.
+                if new_initial <= live_used + _PM_WEIGHT_TOL:
+                    return jsonify({
+                        "status": "blocked",
+                        "msg": f"Total {new_initial:g}g would leave ~0g against the "
+                               f"{live_used:g}g already used — not applied "
+                               f"(it would archive/unassign the spool).",
+                    })
+                updates['initial_weight'] = new_initial
+            if new_tare is not None and new_tare > 0:
+                updates['spool_weight'] = new_tare
+            if not updates:
+                return jsonify({"status": "noop", "msg": "Nothing to update"})
+
+            try:
+                spoolman_api.update_spool_or_raise(sid, updates)
+            except spoolman_api.SpoolmanRejection as e:
+                state.add_log_entry(
+                    f"❌ Prusament weight apply failed for spool #{sid}: {e}",
+                    "ERROR", "ff4444",
+                )
+                return jsonify({"status": "error", "msg": str(e)})
 
         summary = ", ".join(f"{k}={v:g}" for k, v in updates.items())
         state.add_log_entry(

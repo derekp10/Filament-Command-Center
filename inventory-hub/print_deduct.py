@@ -40,6 +40,7 @@ import print_deduct_ledger  # type: ignore
 import cancel_review_store  # type: ignore
 import cancel_fetch_store  # type: ignore
 import stock_report  # type: ignore  # Group 49.2b: the low-stock warning after a deduct
+import weigh_stamps  # type: ignore  # Group 64, Decision 1: when FCC weighed a spool
 
 from app_core import app
 
@@ -340,19 +341,15 @@ def _spool_read(sid):
 # one spool on two threads that both read the same weight lose one of them. Since
 # scope C each queued print is computed on a thread of its own, and a review's Apply
 # runs on a request thread. Held around one spool's read, compute and write, never
-# across spools, so no thread ever holds two of these.
-_SPOOL_LOCKS = {}
-_SPOOL_LOCKS_GUARD = threading.Lock()
+# across spools, so no thread ever holds two of these. Since Group 64.2 (1) it is
+# spoolman_api.spool_lock, which FCC's own weight saves take too (the weigh
+# screens, Edit Spool, Prusament's apply-weights), so a save never lands between a
+# charge's read and its write.
 
 
 def _spool_lock(sid):
     """The lock a deduct of spool `sid` holds from its read to its write."""
-    key = str(sid)
-    with _SPOOL_LOCKS_GUARD:
-        lock = _SPOOL_LOCKS.get(key)
-        if lock is None:
-            lock = _SPOOL_LOCKS[key] = threading.RLock()
-    return lock
+    return spoolman_api.spool_lock(sid)
 
 
 def _write_landed(sid, new_used):
@@ -584,7 +581,7 @@ def _toolheads_charged(details):
 def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                            usage_map, known_positions=None, confirmed=False,
                            fb_url=None, active_locs=None, failed=None, read_heads=False,
-                           heads=None, heads_source=None, heads_read_at=None):
+                           heads=None, heads_source=None, heads_read_at=None, held=None):
     """Single source of truth for the tail of an auto-applied deduct: record the
     ACTUALLY-applied grams in the exactly-once ledger, then surface any shortfall
     (requested-but-not-applied grams) as a 2dp WARNING so it's never silently lost.
@@ -619,6 +616,13 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
     job gets no card (its key couldn't be told apart from the next id-less one),
     only the WARNING.
 
+    `held` (Group 64, Decision 1; _weighed_since_end's {position: info}): heads whose
+    spool changed weight after the print ended and that the apply left uncharged.
+    Their grams always open the card (whatever `shortfall_review_min_g` says: a
+    held head is a question, not a rounding), each line filled in with 0 g when
+    FCC weighed the spool after the end, else with the print's grams, and each held
+    head gets its own loud WARNING line.
+
     NOT for the api_cancel_deduct_confirm per-sid loop — that deducts user-chosen
     grams (no requested/usage_map concept), so a shortfall is meaningless there."""
     applied = round(sum(d['grams'] for d in details), 2)
@@ -629,7 +633,7 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                               if t in known_positions), 2)
     shortfall = round(max(0.0, requested - applied), 2)
     card = None
-    if shortfall > 0.05 and shortfall >= _shortfall_review_min_g() \
+    if shortfall > 0.05 and (held or shortfall >= _shortfall_review_min_g()) \
             and not print_deduct_ledger._is_blank_job(job_id):
         uncharged = _uncharged_by_position(usage_map, details, known_positions)
         if uncharged:
@@ -638,7 +642,8 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                     printer_name, job_id, filename=filename, scale=scale, uncharged=uncharged,
                     details=details, failed=failed, fb_url=fb_url, active_locs=active_locs,
                     read_heads=read_heads,
-                    **_given(heads=heads, heads_source=heads_source, heads_read_at=heads_read_at))
+                    **_given(heads=heads, heads_source=heads_source, heads_read_at=heads_read_at,
+                             held=held or None))
             except Exception as e:
                 # The spools are already charged: the ledger write below must still
                 # happen, or the job is deducted again on the next retry.
@@ -652,12 +657,29 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
     print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                       scale=scale, grams=applied, **extra)
     if card is not None:
-        state.add_log_entry(
-            f"⚠️ {printer_name}: {shortfall:.2f}g of '{_esc(filename)}' wasn't deducted "
-            f"({_shortfall_reasons(card)}) — pick the spool that took it in 🛑 Review, "
-            f"or Discard.", "WARNING", "ffaa00",
-            meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
-                  "job_id": card["job_id"]})
+        held_lines = {str(_norm_pos(p)) for p in (held or {})}
+        lines_now = card.get("unresolved_usage") or {}
+        for pos, info in sorted((held or {}).items(), key=lambda kv: str(kv[0])):
+            # Decision 1: each held head says it loudly, with what FCC filled in.
+            grams = float(lines_now.get(str(_norm_pos(pos))) or 0)
+            if info.get("stamp"):
+                tail = ("FCC charged nothing to it and put 0 g on its 🛑 Review card: type the "
+                        "grams there only if that weighing came before the print.")
+            else:
+                tail = ("FCC charged nothing to it yet: the grams wait on its 🛑 Review card, "
+                        "filled in. Check them before you Apply, or this print may be counted twice.")
+            state.add_log_entry(
+                f"⚠️ {printer_name}: {_weighed_words(info, grams)} ('{_esc(filename)}'). {tail}",
+                "WARNING", "ffaa00",
+                meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
+                      "job_id": card["job_id"]})
+        if any(line not in held_lines for line in lines_now) or card.get("spools"):
+            state.add_log_entry(
+                f"⚠️ {printer_name}: {shortfall:.2f}g of '{_esc(filename)}' wasn't deducted "
+                f"({_shortfall_reasons(card, skip=held_lines)}) — pick the spool that took it in "
+                f"🛑 Review, or Discard.", "WARNING", "ffaa00",
+                meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
+                      "job_id": card["job_id"]})
     elif shortfall > 0.05:
         state.add_log_entry(
             f"⚠️ {printer_name}: {shortfall:.2f}g of '{_esc(filename)}' wasn't deducted "
@@ -747,7 +769,7 @@ def _uncharged_by_position(usage_map, details, known_positions=None):
 @_sharing_one_list_read
 def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged, details=(),
                             failed=(), fb_url=None, active_locs=None, heads=None,
-                            read_heads=False, heads_source=None, heads_read_at=None):
+                            read_heads=False, heads_source=None, heads_read_at=None, held=None):
     """Group 43.2 — stash a review card for grams a deduct couldn't charge (a
     spool's record ran out, a head had no spool or two, a write failed), so they
     can still be placed: job 1104's 27.12 g went to no spool after #99's record
@@ -765,6 +787,11 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     A head entry from the print-end read (hotfix 2026-11-11) carries `sids`, the
     spools it held then: a line's cause is read from them, with no read of the
     heads now, and `heads_source` / `heads_read_at` say where they were read.
+    `held` (Group 64, Decision 1): heads the deduct left uncharged because their
+    spool changed weight after the print ended. Each one's line has the cause
+    "weighed" (its spool pre-picked, the words in `words`) and a filled-in figure in
+    `shortfall_prefill`: 0 g when FCC weighed the spool after the end (the scale
+    counted the print already), else the print's grams.
     Returns the record, or None when the card exists, was settled, or would be
     empty."""
     key = _shortfall_key(job_id)
@@ -833,7 +860,20 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     def _emptied(d):
         return d.get('remaining') is not None and float(d.get('remaining') or 0) <= 0.0
     causes = {}
+    held_by_line = {str(_norm_pos(p)): info for p, info in (held or {}).items()}
+    prefill = {}
     for line in lines:
+        info = held_by_line.get(line)
+        if info is not None:
+            stamp = info.get("stamp") or {}
+            causes[line] = {"why": "weighed", "sid": info.get("sid"), "toolhead": info.get("toolhead"),
+                            "archived": False, "then": info.get("then"), "now": info.get("now"),
+                            "ended": info.get("ended"), "weighed_at": stamp.get("at"),
+                            "weighed_on": stamp.get("how"), "known_order": bool(stamp),
+                            "words": _weighed_words(info, float(lines[line] or 0))}
+            prefill[line] = 0.0 if stamp else round(float(lines[line] or 0), 2)
+            _mark(line, info.get("toolhead"), info.get("sid"), False)
+            continue
         d = charged.get(line)
         if d is not None:
             # The head's spool took what its record had left: the record hit 0 g,
@@ -910,22 +950,29 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
         "shortfall_causes": causes,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if prefill:
+        record["shortfall_prefill"] = prefill
     if heads_source:
         _say_where_heads_were_read(record, heads_source, heads_read_at)
     cancel_review_store.add_pending(record)
     return record
 
 
-def _shortfall_reasons(card):
+def _shortfall_reasons(card, skip=()):
     """Group 43.2 — the causes on a shortfall card, for its log line:
-    "#99's record hit 0 g on RCOI-1; no spool on RCOI-2"."""
+    "#99's record hit 0 g on RCOI-1; no spool on RCOI-2". `skip`: lines whose cause
+    a line of their own says (Decision 1's held heads)."""
     parts = [f"Spoolman didn't confirm #{r.get('sid')}'s write on {r.get('toolhead')}"
              for r in card.get("spools") or [] if r.get("unconfirmed_write")]
     for line, c in sorted((card.get("shortfall_causes") or {}).items(),
                           key=lambda kv: (0, int(kv[0])) if str(kv[0]).isdigit() else (1, str(kv[0]))):
+        if str(line) in {str(x) for x in skip}:
+            continue
         head = c.get("toolhead") or f"T{line}"
         sid = c.get("sid")
-        if c.get("why") == "ran_out":
+        if c.get("why") == "weighed":
+            parts.append(f"#{sid} on {head} changed weight after the print ended")
+        elif c.get("why") == "ran_out":
             # Round 2 (R3): every spool of the head whose record hit 0 g.
             ids = c.get("sids") if isinstance(c.get("sids"), list) and len(c.get("sids")) > 1 else None
             parts.append(f"the records of {_and_list(f'#{s}' for s in ids)} hit 0 g on {head}" if ids
@@ -1643,6 +1690,113 @@ def _changed_since_end(printer_name, fb_url, heads):
         return []
 
 
+def _end_epoch(end_heads):
+    """The print-end read's moment in epoch seconds (`at_s`, Group 64), else its `at`
+    words read back in this machine's time, else None (then no order can be told)."""
+    if not isinstance(end_heads, dict):
+        return None
+    try:
+        if end_heads.get('at_s') is not None:
+            return float(end_heads['at_s'])
+    except (TypeError, ValueError):
+        pass
+    try:
+        return time.mktime(time.strptime(str(end_heads.get('at')), "%Y-%m-%d %H:%M:%S"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _clock(t):
+    """A moment as the log's words: "14:05", or "Nov 19 14:05" on another day."""
+    try:
+        at = time.localtime(float(t))
+    except (TypeError, ValueError, OverflowError):
+        return "?"
+    same_day = time.strftime("%Y-%m-%d", at) == time.strftime("%Y-%m-%d", time.localtime())
+    return time.strftime("%H:%M" if same_day else "%b %d %H:%M", at)
+
+
+def _weighed_since_end(heads, end_at):
+    """Decision 1 (Group 64; Derek, 2026-11-20): {position: info} for each head
+    spool whose used weight changed between the print-end read (which kept it,
+    `used`, 64.3 (1)) and now: FCC charges a print on top of the used weight as
+    Spoolman has it at the charge, so a spool weighed after the print ended would
+    count the print twice. info is {sid, toolhead, then, now, stamp, ended}:
+    `stamp` is FCC's own weighing of the spool after the print ended
+    (weigh_stamps.weighed_after: then its grams default to 0, the scale having
+    counted them), or None when FCC can't tell the change's order (a weight typed
+    in Spoolman's own page, an edit FCC didn't stamp: the grams default to the
+    print's). One read of the spool list, a spool archived since read on its own;
+    a head whose end read kept no used weight, or a list FCC can't read, is not
+    checked (charged as before). Never raises."""
+    out = {}
+    if end_at is None:
+        return out          # no print-end moment (a read after the download): nothing to compare
+    try:
+        checked = [h for h in heads or [] if isinstance(h, dict) and isinstance(h.get('used'), dict)
+                   and h.get('sid') is not None and str(h.get('sid')) in h['used']]
+        if not checked:
+            return out
+        with spoolman_api.one_spool_list_read() as read:
+            if read.spools() is None:
+                return out
+            for h in checked:
+                sid = h['sid']
+                rec = read.record(sid)
+                if not isinstance(rec, dict):
+                    rec = spoolman_api.get_spool(sid)     # archived since: not in the list
+                if not (isinstance(rec, dict) and str(rec.get('id')) == str(sid)) \
+                        or rec.get('used_weight') is None:
+                    continue
+                try:
+                    then = float(h['used'][str(sid)])
+                    now = float(rec['used_weight'])
+                except (TypeError, ValueError):
+                    continue
+                if abs(now - then) <= _WRITE_EPS:
+                    continue
+                out[_norm_pos(h.get('position'))] = {
+                    "sid": sid, "toolhead": h.get('toolhead'), "then": round(then, 2),
+                    "now": round(now, 2), "stamp": weigh_stamps.weighed_after(sid, end_at),
+                    "ended": end_at}
+    except Exception as e:
+        state.logger.debug(f"Decision 1's check of the heads skipped: {e}")
+        return {}
+    return out
+
+
+def _weighed_words(info, grams):
+    """What a held spool's line and log line say (Decision 1), the person's words."""
+    sid, head = info.get('sid'), info.get('toolhead') or "its head"
+    ended = f" (at {_clock(info['ended'])})" if info.get('ended') else ""
+    stamp = info.get('stamp')
+    if stamp:
+        return (f"#{sid} on {head} was weighed on {stamp.get('how')} at {_clock(stamp.get('at'))}, "
+                f"after this print ended{ended}, so the scale already counted its {grams:.2f} g")
+    return (f"#{sid} on {head} changed weight after this print ended{ended} ({info.get('then'):.2f} g "
+            f"used then, {info.get('now'):.2f} g now), and FCC can't tell whether the scale counted "
+            f"this print's {grams:.2f} g")
+
+
+def _mark_weighed_rows(rows, heads, end_at):
+    """Decision 1 on a review card (Group 64): each row whose spool changed weight
+    since the print-end read (_weighed_since_end) carries `weighed` (the words, and
+    whether FCC knows the weighing came after the print) and `prefill`, what its
+    grams box is filled in with: 0 g when FCC weighed it after the end (the scale
+    counted the print), else the row's grams. The row's own `grams` stay the print's,
+    so the card's total and its shortfall still count them. Returns the rows."""
+    weighed = _weighed_since_end(heads, end_at) if rows else {}
+    for r in rows or []:
+        info = weighed.get(_norm_pos(r.get('position')))
+        if not info or str(info.get('sid')) != str(r.get('sid')):
+            continue
+        grams = round(float(r.get('grams') or 0), 2)
+        r["weighed"] = {"words": _weighed_words(info, grams), "known_order": bool(info.get("stamp")),
+                        "then": info.get("then"), "now": info.get("now")}
+        r["prefill"] = 0.0 if info.get("stamp") else grams
+    return rows
+
+
 @_sharing_one_list_read
 def _row_notes_after_end(printer_name, fb_url, heads, rows, words):
     """D1 on a card: {sid: note} for each row whose head holds another spool now
@@ -2136,7 +2290,7 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
             # from the print-end read; nothing is charged here.
             return _stash_cancel_review_from_heads(
                 printer_name, filename, job_id, reached_fraction, fb_url, False, usage_map,
-                mapping, start_spools, swap_log, swap_cums=swap_cums)
+                mapping, start_spools, swap_log, swap_cums=swap_cums, end_at=_end_epoch(end_heads))
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
     changes = _changed_since_end(printer_name, fb_url, heads) if heads is not None else []
     failed = []
@@ -2148,7 +2302,7 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
         # a spool FCC can't read now): the card from the same read says which.
         return _stash_cancel_review_from_heads(
             printer_name, filename, job_id, reached_fraction, fb_url, False, usage_map,
-            mapping, start_spools, swap_log, swap_cums=swap_cums)
+            mapping, start_spools, swap_log, swap_cums=swap_cums, end_at=_end_epoch(end_heads))
     if spools_updated == 0 and not failed:
         # Usage WAS computed but no spool is bound to the toolhead — don't burn a
         # terminal grams=0 ledger entry (it permanently blocks recovery). Stash a
@@ -2364,11 +2518,20 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             printer_name, filename, job_id, usage_map, fb_url, sorted(changed),
             active_locs=active_locs, swap_log=swap_log, start_spools=start_spools,
             **_given(heads=heads, heads_source=source, heads_read_at=read_at,
-                     swap_cums=swap_cums or None))
+                     swap_cums=swap_cums or None,
+                     end_at=_end_epoch(end_heads) if heads is not None else None))
 
     # D1: one read of the heads right before the apply, to say which spool changed
     # since the print ended. It never changes what is charged.
     changes = _changed_since_end(printer_name, fb_url, heads) if heads is not None else []
+    # Decision 1 (Group 64; Derek, 2026-11-20): a head spool whose used weight
+    # changed since the print ended is not charged now (the scale may have counted
+    # this print already): its grams wait on the uncharged-grams card, filled in
+    # with 0 g when FCC weighed it after the end, else with the print's grams, and
+    # loudly noted. The print's other heads charge as usual.
+    weighed = _weighed_since_end(heads, _end_epoch(end_heads)) if heads is not None else {}
+    charge_now = ({p: g for p, g in usage_map.items() if _norm_pos(p) not in weighed}
+                  if weighed else usage_map)
     if before_charge is not None:
         # The deferred-fetch loop's persistent claim (Group 56 review, round 4):
         # stamps its queue entry right before the first spool write. If the stamp
@@ -2377,7 +2540,7 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     failed = []
     try:
         spools_updated, details, known = _apply_usage_to_printer(
-            printer_name, usage_map, fb_url, strategy_label="Complete", active_locs=active_locs,
+            printer_name, charge_now, fb_url, strategy_label="Complete", active_locs=active_locs,
             failed_out=failed, **_given(heads=heads))
     except Exception as e:
         raise CompletionMayHaveCharged(
@@ -2387,7 +2550,7 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
         _say_changed_since_end(printer_name, changes, details, _heads_words(source))
         card = _given(heads=_card_heads(heads, start_spools, swap_log, usage_map),
                       heads_source=source, heads_read_at=read_at)
-    if spools_updated == 0 and not failed and heads is not None:
+    if spools_updated == 0 and not failed and heads is not None and not weighed:
         # Nothing charged from the print-end read: every used head was empty, held
         # two spools, or names a spool FCC can't read now. The card says which.
         by_pos = {h['position']: h for h in heads}
@@ -2400,7 +2563,7 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0, usage_map=usage_map,
                                         no_spool=True, notes=notes, phrases=phrases,
                                         **dict(card, **_given(sets=sets or None)))
-    if spools_updated == 0 and not failed:
+    if spools_updated == 0 and not failed and not weighed:
         # Footer had usage but NO spool is bound at the active toolhead(s). Don't
         # burn a terminal grams=0 ledger entry (it permanently blocks recovery —
         # the 2026-06-13 silent-loss bug); stash a RECOVERABLE review carrying the
@@ -2421,13 +2584,18 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     # to avoid a double-warn — 22.4(2)/(3)).
     try:
         applied = round(sum(d["grams"] for d in details), 2)
-        state.add_log_entry(
-            f"✅ Completed-print deduct on {printer_name}{_toolheads_charged(details)}: {applied:.1f}g across "
-            f"{spools_updated} spool(s) ('{_esc(filename)}').", "SUCCESS")
+        if spools_updated or not weighed:
+            state.add_log_entry(
+                f"✅ Completed-print deduct on {printer_name}{_toolheads_charged(details)}: {applied:.1f}g across "
+                f"{spools_updated} spool(s) ('{_esc(filename)}').", "SUCCESS")
         _record_applied_deduct(
             printer_name, job_id, filename=filename, scale=1.0, details=details,
-            usage_map=usage_map, known_positions=known, fb_url=fb_url, active_locs=active_locs,
-            failed=failed, read_heads=True, **card)
+            usage_map=usage_map,
+            # Decision 1: `known` is every real head of the printer (a held one too),
+            # so a held head's grams are counted, and go on the card.
+            known_positions=known,
+            fb_url=fb_url, active_locs=active_locs,
+            failed=failed, read_heads=True, **dict(card, **_given(held=weighed or None)))
     except Exception as e:
         raise CompletionMayHaveCharged(
             f"{e} (raised after the spools were charged, before the job was recorded)") from e
@@ -2721,7 +2889,7 @@ def _carry_uncharged(record, unresolved, printer_name, fb_url, active_locs=None,
 def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_url,
                                changed_positions, active_locs=None, swap_log=None,
                                start_spools=None, heads=None, heads_source=None,
-                               heads_read_at=None, swap_cums=None):
+                               heads_read_at=None, swap_cums=None, end_at=None):
     """22.3 minimum-viable: a COMPLETED print where a used toolhead's mapped spool
     CHANGED mid-print is NOT auto-applied (the full footer would dump the whole
     tool's usage on the replacement spool, zeroing the run-out spool). Stash a
@@ -2919,6 +3087,9 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 **_given(heads_read_at=heads_read_at, sets=card["sets"] or None))
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
                                         usage_map=usage_map, no_spool=True)
+    if heads is not None:
+        # Decision 1 (Group 64): as a cancel's card.
+        _mark_weighed_rows(rows, heads, end_at)
     total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
         "printer_name": printer_name,
@@ -3663,7 +3834,9 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     if mapping is not None:
         return _stash_cancel_review_from_heads(
             printer_name, filename, job_id, reached_fraction, fb_url, ambiguous, usage_map,
-            mapping, start_spools, swap_log, swap_cums=swap_cums)
+            mapping, start_spools, swap_log, swap_cums=swap_cums,
+            # Decision 1: only a print-end read says how much each spool had used then.
+            end_at=_end_epoch(end_heads) if mapping[1] != "late" else None)
 
     charged = set()
     rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url, charged_out=charged)
@@ -3718,7 +3891,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
 
 def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_fraction, fb_url,
                                     ambiguous, usage_map, mapping, start_spools, swap_log,
-                                    swap_cums=None):
+                                    swap_cums=None, end_at=None):
     """The cancel (or ambiguous) review from a read of the heads: the print-end
     read, or after a failed one the `late` read the start snapshot is checked
     against. Rows are the spools it names; each head FCC can't vouch for is a held
@@ -3763,6 +3936,9 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
     # in the meantime, don't stash a stale pending.
     if print_deduct_ledger.was_deducted(printer_name, job_id):
         return {"status": "skipped", "reason": "already processed", "job_id": job_id}
+    # Decision 1 (Group 64): a row whose spool changed weight after the print ended
+    # says so loudly, its grams filled in with 0 g when FCC weighed it after the end.
+    _mark_weighed_rows(rows, heads, end_at)
     total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
         "printer_name": printer_name,
@@ -4327,6 +4503,28 @@ def api_cancel_deduct_confirm():
                         "msg": "Pick the spool each head used on the card, then Apply. If the "
                                "card shows no spool picker, this page is out of date: reload "
                                "it (Ctrl+F5) first."})
+    if kind == "shortfall" and not charges and data.get("settle_held") is True:
+        # Decision 1 (Group 64; Derek, 2026-11-20): every line on the card is a spool
+        # that changed weight after its print ended, and the person left each at the
+        # 0 g FCC filled in (or typed 0): nothing is charged, and the card settles as a
+        # Discard would. Any other line still needs its pick (refused below).
+        causes = rec.get("shortfall_causes") or {}
+        lines = [str(l) for l in (rec.get("unresolved_usage") or {})]
+        if lines and not rec.get("spools") and all(
+                (causes.get(l) or {}).get("why") == "weighed" for l in lines):
+            print_deduct_ledger.record_deduct(
+                printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
+                grams=round(float(rec.get('applied_g') or 0), 2), dismissed=True)
+            who = _and_list(f"#{(causes.get(l) or {}).get('sid')}" for l in lines)
+            state.add_log_entry(
+                f"✔️ {printer}: left {float(rec.get('total_grams') or 0):.2f}g of "
+                f"'{_esc(rec.get('filename'))}' uncharged on {who} (job {_esc(rec.get('shortfall_of'))}): "
+                f"weighed after the print ended, the scale counted it.", "INFO")
+            return jsonify({"status": "confirmed", "applied": [], "settled_held": True,
+                            "shortfall_g": round(float(rec.get('total_grams') or 0), 2)})
+        cancel_review_store.add_pending(rec)    # the pop was the claim: keep the card
+        return jsonify({"status": "error",
+                        "msg": "Pick the spool that took each other line's grams, or Discard the review."})
     if kind == "shortfall" and charges is None and not rec.get("spools"):
         # 43.2 — a shortfall card names no spool of its own, so an Apply has to
         # pick one (a retry row left by a failed write is the exception). Without

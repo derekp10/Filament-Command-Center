@@ -435,7 +435,9 @@ def _capture_end_heads(printer_name, job_id, fb_url, heads_when=None):
         pass
     if not found:
         return None
-    return {"heads": heads, "source": source, "at": at}
+    # `at_s` (Group 64, Decision 1): the read's moment in epoch seconds, against which
+    # a spool weighed after the print ended is told apart (weigh_stamps).
+    return {"heads": heads, "source": source, "at": at, "at_s": started}
 
 
 def _edge_kwargs(start_spools=None, swap_log=None, heads_when=None, **more):

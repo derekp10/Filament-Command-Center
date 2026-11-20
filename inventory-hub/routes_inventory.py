@@ -22,6 +22,7 @@ Preserved quirks (do not 'fix' in a move — see the carve plan):
 
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
+import contextlib
 import html
 import re
 
@@ -38,6 +39,7 @@ import locations_db  # type: ignore  # Group 40.7: Printer-row / one-spool check
 import attr_migration  # type: ignore  # Group 36: hidden filament-attribute choices
 import stock_report  # type: ignore  # Group 49.2: the Low-stock list + the low-stock warning
 import archive_takeoff  # type: ignore  # Group 63.2: a spool a weigh archived in place, taken off
+import weigh_stamps  # type: ignore  # Group 64, Decision 1: when FCC weighed a spool
 
 from app_core import app
 
@@ -1416,7 +1418,9 @@ def api_edit_spool_wizard():
                 })
 
             if spool_data:
-                spool_res = spoolman_api.update_spool(spool_id, spool_data)
+                # Group 64.2 (1): a weight write waits for a print's charge of it.
+                with _weight_lock(spool_id, spool_data):
+                    spool_res = spoolman_api.update_spool(spool_id, spool_data)
                 if not spool_res:
                     err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
                     # Group 63 review (C4): a write whose answer was lost may have
@@ -1493,6 +1497,9 @@ def api_edit_spool_wizard():
                 # the pre snapshot — None when get_spool blipped, handled by helper).
                 if any(k in spool_data for k in ("used_weight", "initial_weight")):
                     _log_manual_weight_change(spool_id, original_spool, spool_res)
+                if "used_weight" in spool_data:
+                    # Group 64, Decision 1: when FCC weighed it, for a print charged later.
+                    weigh_stamps.note(spool_id, "Edit Spool")
                 if new_location is not None:
                     # Group 40.7 review: an archived spool leaves where it is
                     # before its move, even if a filament rejection stops below.
@@ -1809,6 +1816,16 @@ def _details_changed(pre, based_on, updates=None):
     return None
 
 
+def _weight_lock(spool_id, updates):
+    """Group 64.2 (1): the spool's write lock (spoolman_api.spool_lock, which a
+    print's charge holds from its read to its write) when `updates` writes a weight
+    the deduct reads, else nothing to hold."""
+    if isinstance(updates, dict) and any(
+            k in updates for k in ("used_weight", "initial_weight", "remaining_weight")):
+        return spoolman_api.spool_lock(spool_id)
+    return contextlib.nullcontext()
+
+
 @app.route('/api/spool/update', methods=['POST'])
 def api_spool_update():
     """Generic endpoint to partially update a spool from frontend modules.
@@ -1846,50 +1863,53 @@ def api_spool_update():
         if not spool_id or not updates:
             return jsonify({"status": "error", "msg": "Missing id or updates"})
 
-        pre = spoolman_api.get_spool(spool_id) or {}
-        pre_archived = bool(pre.get('archived', False))
+        # Group 64.2 (1): a weight save holds the spool's write lock from its read to
+        # its write, as a print's charge does, so neither lands inside the other.
+        with _weight_lock(spool_id, updates):
+            pre = spoolman_api.get_spool(spool_id) or {}
+            pre_archived = bool(pre.get('archived', False))
 
-        # Group 63.6: a weigh screen sends what its preview was worked out from
-        # (`based_on`); when what its mode depends on changed since (a print
-        # charged the spool, its total was corrected), the save writes nothing and
-        # answers the fresh figures, so a reading of 0 g can't be saved as the old
-        # total's used weight (it archived a spool with grams on its record; R5-4).
-        # Only against the spool's own record: a read that failed is no check, as
-        # is a request without `based_on` (a page from before 63.6).
-        based_on = data.get('based_on')
-        changed = (_details_changed(pre, based_on, updates)
-                   if _is_spool_record(pre, spool_id) else None)
-        if changed:
-            what, was_g, now_g = changed
-            words = ("its total" if what == 'capacity' else "its used weight")
-            # Group 63 review (C3): what to do next, for the screen that sent it
-            # (`based_on.screen`): the weigh-out list redraws the row's preview,
-            # the Quick-Weigh has closed and is opened again.
-            screen = str((based_on or {}).get('screen') or '').strip().lower()
-            then = ("Open its Quick-Weigh again to weigh it." if screen == 'quick'
-                    else "Its preview was redrawn; press Enter in its box again to save.")
-            state.add_log_entry(
-                f"⚖️ Spool #{spool_id}'s reading wasn't saved: {words} changed since it was read "
-                f"({was_g:g} g, now {now_g:g} g). {then}",
-                "WARNING", "ffaa00")
-            return jsonify({
-                "status": "details_changed", "changed": what,
-                "msg": (f"#{spool_id}'s weight changed since this was read: check its preview "
-                        f"and press Enter in its box again"),
-                "fresh": {"initial": spoolman_api.effective_initial_weight(pre) or 0,
-                          "used": float(pre.get('used_weight') or 0),
-                          "archived": bool(pre.get('archived'))},
-            })
+            # Group 63.6: a weigh screen sends what its preview was worked out from
+            # (`based_on`); when what its mode depends on changed since (a print
+            # charged the spool, its total was corrected), the save writes nothing and
+            # answers the fresh figures, so a reading of 0 g can't be saved as the old
+            # total's used weight (it archived a spool with grams on its record; R5-4).
+            # Only against the spool's own record: a read that failed is no check, as
+            # is a request without `based_on` (a page from before 63.6).
+            based_on = data.get('based_on')
+            changed = (_details_changed(pre, based_on, updates)
+                       if _is_spool_record(pre, spool_id) else None)
+            if changed:
+                what, was_g, now_g = changed
+                words = ("its total" if what == 'capacity' else "its used weight")
+                # Group 63 review (C3): what to do next, for the screen that sent it
+                # (`based_on.screen`): the weigh-out list redraws the row's preview,
+                # the Quick-Weigh has closed and is opened again.
+                screen = str((based_on or {}).get('screen') or '').strip().lower()
+                then = ("Open its Quick-Weigh again to weigh it." if screen == 'quick'
+                        else "Its preview was redrawn; press Enter in its box again to save.")
+                state.add_log_entry(
+                    f"⚖️ Spool #{spool_id}'s reading wasn't saved: {words} changed since it was read "
+                    f"({was_g:g} g, now {now_g:g} g). {then}",
+                    "WARNING", "ffaa00")
+                return jsonify({
+                    "status": "details_changed", "changed": what,
+                    "msg": (f"#{spool_id}'s weight changed since this was read: check its preview "
+                            f"and press Enter in its box again"),
+                    "fresh": {"initial": spoolman_api.effective_initial_weight(pre) or 0,
+                              "used": float(pre.get('used_weight') or 0),
+                              "archived": bool(pre.get('archived'))},
+                })
 
-        if isinstance(updates, dict) and 'location' in updates:
-            refusal, updates = _direct_location_write(spool_id, pre, updates)
-            if refusal:
-                return jsonify(refusal)
+            if isinstance(updates, dict) and 'location' in updates:
+                refusal, updates = _direct_location_write(spool_id, pre, updates)
+                if refusal:
+                    return jsonify(refusal)
 
-        if archive_on_empty:
-            res = spoolman_api.update_spool(spool_id, updates)
-        else:
-            res = spoolman_api.update_spool(spool_id, updates, archive_on_empty=False)
+            if archive_on_empty:
+                res = spoolman_api.update_spool(spool_id, updates)
+            else:
+                res = spoolman_api.update_spool(spool_id, updates, archive_on_empty=False)
         if not res:
             # Group 54 review R4-2: `msg` is the weigh screens' 7 s toast, so it is
             # put in words (refusal_words: no Spoolman address, no JSON, nothing
@@ -2026,6 +2046,14 @@ def api_spool_update():
         # Shared with the wizard edit-spool save via _log_manual_weight_change.
         if any(k in updates for k in ("used_weight", "initial_weight", "remaining_weight")):
             _log_manual_weight_change(spool_id, pre, res)
+        if any(k in updates for k in ("used_weight", "remaining_weight")):
+            # Group 64, Decision 1: when FCC weighed it and on which screen, so a print
+            # whose charge comes after it (a 20-minute download, a file locked behind
+            # the printer's screen) can tell the scale already counted the print.
+            screen = (data.get('based_on') or {}).get('screen') if isinstance(data.get('based_on'), dict) else None
+            weigh_stamps.note(spool_id, {"list": "the weigh-out list",
+                                         "quick": "the Quick-Weigh"}.get(str(screen or '').lower(),
+                                                                         "a weight save"))
 
         post_archived = bool(res.get('archived', False))
         auto_archived = (not pre_archived) and post_archived

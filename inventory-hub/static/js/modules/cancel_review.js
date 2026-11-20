@@ -63,6 +63,25 @@
         return `<div class="${cls}" style="flex-basis:100%;color:${color};font-size:var(--fcc-fs-small);line-height:1.4;">${icon || ''}${esc(text)}</div>`;
     }
 
+    // Group 64, Decision 1 (Derek, 2026-11-20): a spool that changed weight after its
+    // print ended. FCC fills in 0 g when it weighed the spool after the end (the scale
+    // counted the print already), else the print's grams; "both should be heavily
+    // noted in the UI so its very clear" that charging may count the print twice.
+    // The server writes the words (`words`: which spool, when, on which screen).
+    function weighedHtml(w) {
+        if (!w || !w.words) return '';
+        const head = w.known_order
+            ? '⚠️ Weighed after this print ended: 0 g filled in'
+            : '⚠️ Changed weight after this print ended: check before you Apply';
+        const tail = w.known_order
+            ? 'Charging these grams would count the print twice: type them only if that weighing came before the print.'
+            : 'Charging the grams filled in may count this print twice.';
+        return `<div class="fcc-cr-weighed" role="note"
+                     style="flex-basis:100%;margin:4px 0;padding:7px 10px;border:2px solid #ff7a59;border-radius:5px;
+                            background:#2a1410;color:#ffd6c9;font-size:var(--fcc-fs-small);line-height:1.45;">
+                    <b style="color:#ffb39e;">${esc(head)}</b><br>${esc(w.words)}. ${esc(tail)}</div>`;
+    }
+
     // ----- Scope B (hotfix 2026-11-11): a head's spools as a set -------------
     // A head whose spool changed during the print shows every spool it had, under
     // one header. Split at the swaps FCC recorded, each is a row pre-filled with
@@ -705,10 +724,13 @@
                      style="margin-left:6px;font-size:var(--fcc-fs-label);font-weight:bold;color:#ffae42;
                             border:1px solid #ffae42;border-radius:4px;padding:0 4px;white-space:nowrap;">⚠️ unconfirmed write</span>`
             : '';
+        // Decision 1: a spool weighed (or changed) after the print ended.
+        const weighed = s.weighed && s.weighed.words ? s.weighed : null;
+        const boxValue = weighed && s.prefill != null ? s.prefill : s.grams;
         return `
-            <div class="fcc-cr-row" data-sid="${s.sid}"
+            <div class="fcc-cr-row" data-sid="${s.sid}"${weighed ? ' data-weighed="1"' : ''}
                  style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;
-                        padding:6px 0;border-bottom:1px solid #2b2c30;${ambBorder}">
+                        padding:6px 0;border-bottom:1px solid #2b2c30;${ambBorder}${weighed ? 'border-left:3px solid #ff7a59;padding-left:6px;' : ''}">
                 <div style="min-width:0;flex:1;">
                     ${swatch}
                     <span style="color:#eee;">${esc(s.display)}</span>${seg}${ambBadge}${unconfirmed}${isRunout ? `<span title="Ran out mid-print (sensor tripped) — charged its own segment up to the swap, plus the sensor-to-nozzle remnant when a per-printer path value is configured."
@@ -722,7 +744,7 @@
                     <input type="number" class="fcc-cr-grams form-control bg-dark text-white border-secondary"
                            data-sid="${s.sid}" data-remaining="${known ? s.remaining_before : ''}"
                            data-own-remaining="${known ? s.remaining_before : ''}"
-                           value="${fmtG(s.grams)}" step="0.01" min="0" ${known ? `max="${fmt(s.remaining_before)}"` : ''}
+                           value="${fmtG(boxValue)}" step="0.01" min="0" ${known ? `max="${fmt(s.remaining_before)}"` : ''}
                            autocomplete="off" style="font-size:1.05rem;" />
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
                 </div>
@@ -734,6 +756,7 @@
                             padding-left:24px;color:#9aa;font-size:0.88rem;">
                     charge to: ${pickSelectHtml(s.sid, s.sid, `this spool (#${s.sid})`, rec && rec.heads_at_end, headsWords(rec))}
                 </div>
+                ${weighedHtml(weighed)}
                 ${noteHtml('fcc-cr-row-note', '#7ec8ff', ((rec && rec.row_notes) || {})[String(s.sid)], 'ℹ️ ')}
             </div>`;
     }
@@ -868,15 +891,23 @@
             const own = (c.sid != null && !c.archived) ? c.sid : null;
             const ownLabel = own != null ? `#${own} — on ${head || 'T' + pos} ${words.end}` : '';
             const line = `pos:${pos}`;
+            // Decision 1: a spool weighed (or changed) after the print ended: its
+            // grams filled in with what the server worked out (0 g, or the print's).
+            const weighed = c.why === 'weighed';
+            const fill = rec.shortfall_prefill || {};
+            const boxValue = weighed && fill[pos] != null ? fill[pos] : un[pos];
+            const why = weighed
+                ? weighedHtml({ words: c.words, known_order: !!c.known_order })
+                : `<div class="fcc-cr-why" style="color:#e6c074;font-size:0.9rem;margin-bottom:4px;">${esc(shortfallReason(c, pos))}</div>`;
             return `
-                <div class="fcc-cr-unline fcc-cr-shortline" data-pos="${esc(pos)}" data-line="${esc(line)}"
+                <div class="fcc-cr-unline fcc-cr-shortline" data-pos="${esc(pos)}" data-line="${esc(line)}"${weighed ? ' data-weighed="1"' : ''}
                      style="padding:6px 0;border-bottom:1px solid #2b2c30;">
-                    <div class="fcc-cr-why" style="color:#e6c074;font-size:0.9rem;margin-bottom:4px;">${esc(shortfallReason(c, pos))}</div>
+                    ${why}
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> uncharged</span>
                         <div class="input-group input-group-sm" style="width:120px;flex:none;">
                             <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
-                                   data-line="${esc(line)}" value="${fmtG(un[pos])}" step="0.01" min="0"
+                                   data-line="${esc(line)}" value="${fmtG(boxValue)}" step="0.01" min="0"
                                    autocomplete="off" style="font-size:1.05rem;" />
                             <span class="input-group-text bg-dark text-light border-secondary">g</span>
                         </div>
@@ -1691,12 +1722,24 @@
                     }
                     // 43.2: a shortfall card names no spool of its own, so an Apply
                     // with nothing picked would charge nothing (the server refuses it too).
-                    if (card.dataset.kind === 'shortfall' && !redirected && !Object.keys(updates).length) {
+                    // Decision 1 (Group 64): a card whose every line is a spool weighed
+                    // (or changed) after its print, each left at 0 g, settles with
+                    // nothing charged: the scale counted the print.
+                    const shortLines = Array.from(card.querySelectorAll('.fcc-cr-shortline'));
+                    const settleHeld = card.dataset.kind === 'shortfall' && !redirected
+                        && !Object.keys(updates).length && shortLines.length > 0
+                        && !card.querySelector('.fcc-cr-grams')
+                        && shortLines.every((ln) => ln.dataset.weighed === '1'
+                            && !(parseFloat((ln.querySelector('.fcc-cr-pgrams') || {}).value) > 0));
+                    if (settleHeld) {
+                        payload.settle_held = true;
+                        payload.charges = [];
+                    } else if (card.dataset.kind === 'shortfall' && !redirected && !Object.keys(updates).length) {
                         endSetAsk(card);
                         tell(card, 'Pick the spool that took these grams (or Discard).');
                         return;
                     }
-                    if (redirected) payload.charges = charges; else payload.updates = updates;
+                    if (!settleHeld) { if (redirected) payload.charges = charges; else payload.updates = updates; }
                     // 43.2: the card's revision, so an Apply from a view opened before
                     // another Apply changed it is refused instead of charging again.
                     if (card.dataset.kind === 'shortfall') payload.rev = Number(card.dataset.rev || 0);
@@ -1723,7 +1766,8 @@
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'confirmed') {
-                        if (took > 0) toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
+                        if (d.settled_held) toast(`Left ${fmtG(d.shortfall_g)}g uncharged: the spool was weighed after the print.`, 'success');
+                        else if (took > 0) toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
                         else toast('Nothing was charged: the spool picked has 0 g left on record.', 'warning', 7000);
                         if (d.shortfall_card) {
                             // 43.2: what the picked spools couldn't take is on a new card.

@@ -388,6 +388,33 @@ class SpoolListRead:
         return self._spools
 
 
+# Group 64.2 (1): one weight write of a spool at a time, in this process. A print's
+# charge reads the spool's used weight and writes used + grams, an absolute value;
+# a weigh screen's save, Edit Spool's weight fields and Prusament's apply-weights
+# write weights too. Without a shared lock a save landing between a charge's read
+# and its write was overwritten by the charge (the scale's reading lost); with it,
+# the second writer waits for the first: a save after a charge writes the scale's
+# reading over it, and a charge after a save reads it (Decision 1 then holds the
+# charge: the spool changed weight after the print ended). Spoolman has no
+# compare-and-set, so a write from Spoolman's own page, or another FCC process,
+# can't take this lock. Re-entrant; never held across two spools.
+_SPOOL_WRITE_LOCKS = {}
+_SPOOL_WRITE_LOCKS_GUARD = threading.Lock()
+
+
+def spool_lock(sid):
+    """The lock every FCC weight write of spool `sid` holds from its read to its
+    write (Group 64.2 (1)): the print deduct's charge (print_deduct._spool_lock),
+    /api/spool/update's weight saves, Edit Spool's weight fields and
+    /api/spool/prusament_apply_weights."""
+    key = str(sid)
+    with _SPOOL_WRITE_LOCKS_GUARD:
+        lock = _SPOOL_WRITE_LOCKS.get(key)
+        if lock is None:
+            lock = _SPOOL_WRITE_LOCKS[key] = threading.RLock()
+    return lock
+
+
 # Group 64.3 (1): one spool-list read shared by a print-end step's location reads.
 _ONE_LIST_READ = threading.local()
 
