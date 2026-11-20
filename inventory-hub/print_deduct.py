@@ -23,6 +23,7 @@ commit) so intra-module calls see the patches.
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
 from flask import request, jsonify  # type: ignore
+import functools
 import html
 import math
 import requests  # type: ignore
@@ -41,6 +42,18 @@ import cancel_fetch_store  # type: ignore
 import stock_report  # type: ignore  # Group 49.2b: the low-stock warning after a deduct
 
 from app_core import app
+
+
+def _sharing_one_list_read(fn):
+    """Run `fn` with every head it reads sharing ONE read of the spool list
+    (Group 64.3 (1), spoolman_api.one_spool_list_read): each of its
+    get_spools_at_location / select_deduct_targets calls was a whole-list GET of its
+    own, about 8 for an INDX step. A block inside another shares the outer read."""
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        with spoolman_api.one_spool_list_read():
+            return fn(*args, **kwargs)
+    return run
 
 
 def _esc(text):
@@ -368,6 +381,7 @@ def _deduct_payload(spool, new_used):
     return payload
 
 
+@_sharing_one_list_read
 def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                             active_locs=None, failed_out=None, heads=None):
     """Deduct per-toolhead grams from the spools currently mapped to
@@ -730,6 +744,7 @@ def _uncharged_by_position(usage_map, details, known_positions=None):
     return out
 
 
+@_sharing_one_list_read
 def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged, details=(),
                             failed=(), fb_url=None, active_locs=None, heads=None,
                             read_heads=False, heads_source=None, heads_read_at=None):
@@ -928,6 +943,7 @@ def _shortfall_reasons(card):
     return "; ".join(parts) or "no spool took it"
 
 
+@_sharing_one_list_read
 def _snapshot_active_spools(printer_name, fb_url, active_locs=None):
     """Resolve {toolhead_position: the single loaded sid, or None} for `printer_name`,
     using the SAME per-position alias-fallthrough + ghost-vs-current pick as
@@ -964,6 +980,7 @@ def _snapshot_active_spools(printer_name, fb_url, active_locs=None):
     return snap
 
 
+@_sharing_one_list_read
 def _heads_snapshot(printer_name, fb_url, active_locs=None):
     """Group 43.3 — every head of `printer_name` with the spool on it now:
     [{toolhead, position, sid}], `sid` None when the head is empty or ambiguous.
@@ -1054,26 +1071,50 @@ def _capture_print_heads(printer_name, fb_url):
     (select_deduct_targets). Returns [{toolhead, position, sid, sids}] sorted by
     position, every position of the printer, an empty one named by its first
     alias: `sid` is the head's one spool, None when it is empty (`sids` []) or holds
-    two (`sids` [a, b]). Reads only. None on any failure."""
+    two (`sids` [a, b]). Reads only. None on any failure.
+
+    Group 64.3 (1): every head is read from ONE read of the spool list
+    (spoolman_api.one_spool_list_read), where each head was a whole-list GET of
+    its own, and a list FCC couldn't read is no read (None, one hub.log line), never
+    every head empty. Each head entry also keeps `used`, {sid: used_weight} of its
+    spools as the read had them, for Decision 1's check of a spool weighed between
+    the print's end and its charge (a stand-in for the per-location read gives no
+    records, and no `used`)."""
     try:
-        printer_map = locations_db.get_active_printer_map()
-        active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
-        by_pos, decided = {}, set()
-        for loc_id, p_info in active_locs:
-            pos = p_info.get('position', 0)
-            if pos in decided:
-                continue
-            sids = spoolman_api.get_spools_at_location(loc_id)
-            if pos not in by_pos:
-                by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos, "sid": None, "sids": []}
-            if not sids:
-                continue  # the next alias for this position may hold it
-            decided.add(pos)
-            if len(sids) > 1:
-                sids, _amb = spoolman_api.select_deduct_targets(loc_id)
-            sids = list(sids or [])
-            by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos,
-                           "sid": sids[0] if len(sids) == 1 else None, "sids": sids}
+        with spoolman_api.one_spool_list_read() as read:
+            printer_map = locations_db.get_active_printer_map()
+            active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+            by_pos, decided = {}, set()
+            for loc_id, p_info in active_locs:
+                pos = p_info.get('position', 0)
+                if pos in decided:
+                    continue
+                sids = spoolman_api.get_spools_at_location(loc_id)
+                if pos not in by_pos:
+                    by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos, "sid": None, "sids": []}
+                if not sids:
+                    continue  # the next alias for this position may hold it
+                decided.add(pos)
+                if len(sids) > 1:
+                    sids, _amb = spoolman_api.select_deduct_targets(loc_id)
+                sids = list(sids or [])
+                by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos,
+                               "sid": sids[0] if len(sids) == 1 else None, "sids": sids}
+            if read.why:
+                state.logger.warning(f"🔎 {printer_name}: couldn't read the spool list for its heads "
+                                     f"({read.why}); this read of the heads isn't used.")
+                return None
+            for head in by_pos.values():
+                used = {}
+                for sid in head["sids"]:
+                    rec = read.record(sid)
+                    if isinstance(rec, dict) and rec.get('used_weight') is not None:
+                        try:
+                            used[str(sid)] = float(rec['used_weight'])
+                        except (TypeError, ValueError):
+                            continue
+                if used:
+                    head["used"] = used
         return [by_pos[p] for p in sorted(by_pos, key=lambda p: (0, p) if isinstance(p, int) else (1, str(p)))]
     except Exception:
         return None
@@ -1102,8 +1143,11 @@ def _usable_heads(end_heads):
         if not isinstance(h, dict) or not h.get('toolhead'):
             continue
         sids = _head_sids(h)
-        heads.append({"toolhead": str(h['toolhead']).upper(), "position": _norm_pos(h.get('position')),
-                      "sid": sids[0] if len(sids) == 1 else None, "sids": sids})
+        entry = {"toolhead": str(h['toolhead']).upper(), "position": _norm_pos(h.get('position')),
+                 "sid": sids[0] if len(sids) == 1 else None, "sids": sids}
+        if isinstance(h.get('used'), dict):
+            entry["used"] = dict(h['used'])   # each spool's used weight at the read (64.3 (1))
+        heads.append(entry)
     if not any(h['sids'] for h in heads):
         return None
     return heads, str(end_heads.get('source') or 'print_end'), end_heads.get('at')
@@ -1576,6 +1620,7 @@ def _uncharged_tail(unresolved, phrases=None, heads=None):
     return " — " + "; ".join(parts) + " (pick it in the review)"
 
 
+@_sharing_one_list_read
 def _changed_since_end(printer_name, fb_url, heads):
     """D1: the heads whose spool changed after the print-end read, [(head,
     sid now)] for each head that held one spool then and holds another now. One
@@ -1598,6 +1643,7 @@ def _changed_since_end(printer_name, fb_url, heads):
         return []
 
 
+@_sharing_one_list_read
 def _row_notes_after_end(printer_name, fb_url, heads, rows, words):
     """D1 on a card: {sid: note} for each row whose head holds another spool now
     than the one the print-end read named. The row keeps the print-end spool."""
@@ -2955,6 +3001,7 @@ def _preview_row(sid, spool, toolhead, pos, grams, ambiguous):
     }
 
 
+@_sharing_one_list_read
 def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None, charged_out=None,
                              heads=None, unread_out=None):
     """Read-only resolution of {toolhead_position: grams} → the per-spool rows a

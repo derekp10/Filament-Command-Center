@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -308,3 +309,132 @@ def test_the_one_shot_whose_print_end_spool_is_gone_asks_with_the_print_end_head
     rec = cancel_review_store.get_pending(XL, str(JOB))
     assert rec.get("heads_source") == "print_end", rec
     assert rig.sm.patches == []
+
+
+# --------------------------------------------------------------------------- #
+# 64.3 (1): one spool-list read per step                                       #
+# --------------------------------------------------------------------------- #
+
+from spoolman_extra_fake import SpoolmanHTTPFake  # noqa: E402
+
+EIGHT = [(f"RCOI-{i + 1}", i) for i in range(8)]
+INDX = "INDX TEST"
+
+
+class EightHeads:
+    """An INDX-like printer over Spoolman's HTTP: a spool on each of eight heads
+    (#101-#108, its used weight 10 g times its head number), and #200 on a shelf."""
+
+    def __init__(self):
+        self.sm = SpoolmanHTTPFake()
+        for loc, pos in EIGHT:
+            self.sm.add("spool", 101 + pos, location=loc, used_weight=10.0 * (pos + 1),
+                        initial_weight=1000.0, archived=False, filament={"weight": 1000.0})
+        self.sm.add("spool", 200, location="SHELF-1", used_weight=5.0, initial_weight=1000.0,
+                    archived=False, filament={"weight": 1000.0})
+
+    def list_gets(self):
+        return [p for p in self.sm.gets if p.split("?")[0].rstrip("/") == "/api/v1/spool"]
+
+    def __enter__(self):
+        active = [(loc, {"position": pos, "printer_name": INDX}) for loc, pos in EIGHT]
+        self._ctx = [
+            patch.object(print_deduct.locations_db, "get_active_printer_map",
+                         return_value={loc: {"printer_name": INDX, "position": pos} for loc, pos in EIGHT}),
+            patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=active),
+            patch.object(spoolman_api.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
+            patch.object(spoolman_api, "format_spool_display",
+                         return_value={"text": "#s", "color": "ff0000", "slot": "", "details": {}}),
+            patch.object(spoolman_api.requests, "get", side_effect=self.sm.get),
+            patch.object(spoolman_api.requests, "patch", side_effect=self.sm.patch),
+        ]
+        _start(self._ctx)
+        return self
+
+    def __exit__(self, *exc):
+        _stop(self._ctx)
+
+
+def test_the_heads_read_is_one_list_read_and_keeps_each_spools_used_weight():
+    """Red on e5fcac2: eight whole-list GETs, one per head, and no used weights."""
+    with EightHeads() as rig:
+        heads = print_deduct._capture_print_heads(INDX, "http://fb")
+    assert len(rig.list_gets()) == 1, rig.sm.gets
+    assert [(h["toolhead"], h["sid"]) for h in heads] == [(loc, 101 + pos) for loc, pos in EIGHT]
+    assert heads[2]["used"] == {"103": 30.0}, heads[2]
+
+
+def test_a_spool_list_fcc_couldnt_read_is_no_read_never_every_head_empty(caplog):
+    """Red on e5fcac2: every head came back empty (the blip rule caught only an
+    all-empty answer, and a read that failed part-way named empty heads)."""
+    with EightHeads() as rig:
+        rig.sm.list_reads_fail = True
+        with caplog.at_level("WARNING"):
+            heads = print_deduct._capture_print_heads(INDX, "http://fb")
+    assert heads is None
+    assert len(rig.list_gets()) == 1
+    assert any("couldn't read the spool list for its heads" in r.getMessage() for r in caplog.records)
+
+
+def test_the_print_end_read_carries_the_used_weights_onto_the_print():
+    """Red on e5fcac2. The read the edge keeps (_capture_end_heads) carries each
+    spool's used weight, and _usable_heads keeps it."""
+    with EightHeads():
+        end = print_monitor._capture_end_heads(INDX, 1141, "http://fb")
+    heads, source, _at = print_deduct._usable_heads(end)
+    assert source == "print_end"
+    assert heads[7]["used"] == {"108": 80.0}, heads[7]
+
+
+def test_the_start_snapshot_and_an_apply_read_the_list_once_each():
+    """Red on e5fcac2: one whole-list GET per head for each."""
+    with EightHeads() as rig:
+        snap = print_deduct._snapshot_active_spools(INDX, "http://fb")
+        assert len(rig.list_gets()) == 1
+        assert snap == {pos: 101 + pos for _loc, pos in EIGHT}, snap
+        before = len(rig.list_gets())
+        updated, details, _known = print_deduct._apply_usage_to_printer(
+            INDX, {0: 1.0, 3: 2.0, 7: 3.0}, "http://fb", strategy_label="Complete")
+    assert updated == 3, details
+    assert len(rig.list_gets()) - before == 1, rig.sm.gets
+
+
+def test_blocks_share_inside_one_thread_and_never_across_threads():
+    """A block inside another shares its read; another thread's block reads its
+    own; outside any block every location read is its own, as before."""
+    with EightHeads() as rig:
+        with spoolman_api.one_spool_list_read() as outer:
+            spoolman_api.get_spools_at_location("RCOI-1")
+            with spoolman_api.one_spool_list_read() as inner:
+                spoolman_api.get_spools_at_location("RCOI-2")
+            assert inner is outer
+            seen = []
+
+            def _other():
+                with spoolman_api.one_spool_list_read():
+                    seen.append(spoolman_api.get_spools_at_location("RCOI-3"))
+            t = threading.Thread(target=_other)
+            t.start()
+            t.join(5)
+        assert len(rig.list_gets()) == 2, rig.sm.gets     # this thread's one, the other's one
+        assert seen == [[103]]
+        spoolman_api.get_spools_at_location("RCOI-1")
+        spoolman_api.get_spools_at_location("RCOI-2")
+    assert len(rig.list_gets()) == 4
+
+
+@pytest.mark.parametrize("reader", ["heads_snapshot", "resolve_usage", "changed_since_end"])
+def test_every_other_heads_reader_reads_the_list_once(reader):
+    """Red on e5fcac2: one whole-list GET per head."""
+    with EightHeads() as rig:
+        if reader == "heads_snapshot":
+            out = print_deduct._heads_snapshot(INDX, "http://fb")
+            assert [h["sid"] for h in out] == [101 + pos for _loc, pos in EIGHT], out
+        elif reader == "resolve_usage":
+            rows = print_deduct._resolve_usage_to_spools(INDX, {0: 1.0, 5: 2.0, 7: 3.0}, "http://fb")
+            assert sorted(r["sid"] for r in rows) == [101, 106, 108], rows
+        else:
+            heads = [{"toolhead": loc, "position": pos, "sid": 101 + pos, "sids": [101 + pos]}
+                     for loc, pos in EIGHT]
+            assert print_deduct._changed_since_end(INDX, "http://fb", heads) == []
+    assert len(rig.list_gets()) == 1, rig.sm.gets
