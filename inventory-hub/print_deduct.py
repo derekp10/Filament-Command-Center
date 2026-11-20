@@ -1140,6 +1140,30 @@ def _swap_points(swap_log):
     return sorted({p for p in (_swap_point(ev) for ev in events if isinstance(ev, dict)) if p is not None})
 
 
+def _reached_at_least(progress, swap_log=None, pause_progress=None):
+    """How far a print got, at least (Group 64.2 (10)): its latched `progress`, and
+    no less than the frozen progress of a park it was in (`pause_progress`, sampled
+    at ATTENTION) or the point of its last recorded swap: the print reached both.
+    The latch's progress is the high-water of the job samples, which can lag them
+    by a poll (an ATTENTION park freezes the job past the last PRINTING sample), so
+    a cancel during the pause was computed short of the park, and a swap recorded
+    past it was refused as a split (its figure ran past the cancel's partial) and
+    held as a set to split by hand."""
+    try:
+        reached = float(progress or 0.0)
+    except (TypeError, ValueError):
+        reached = 0.0
+    try:
+        if pause_progress is not None:
+            reached = max(reached, float(pause_progress))
+    except (TypeError, ValueError):
+        pass
+    points = _swap_points(swap_log)
+    if points:
+        reached = max(reached, points[-1])
+    return max(0.0, min(1.0, reached))
+
+
 def _swaps_by_position(swap_log):
     """{position: [its recorded swaps, in order]} (22.3(b)'s `seq`). A swap log
     that isn't a list (a damaged queue record) has none."""
@@ -1291,14 +1315,9 @@ def _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_c
     path_g = _path_filament_g(printer_name)
     for pos, info in swapped.items():
         events = info.get('events') or []
-        sids = _head_sids(by_pos.get(pos))
-        last = events[-1].get('to_sid') if events else None
-        if not sids:
-            info['split'] = 'end_empty'
-        elif len(sids) > 1:
-            info['split'] = 'end_two'
-        elif str(sids[0]) != str(last):
-            info['split'] = 'end_differs'
+        refused = _split_end_check(by_pos.get(pos), events)
+        if refused:
+            info['split'] = refused
         else:
             try:
                 segs = _compute_swap_split(usage_map, events, start_spools, swap_cums or {},
@@ -1311,6 +1330,25 @@ def _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_c
             else:
                 info['split'] = 'unmeasured'
     return out
+
+
+def _split_end_check(head, events):
+    """Why the print-end read refuses a head's split at its recorded swaps, or None
+    (Group 64.2 (9): one rule for a cancel's split, _split_held_swaps, and a
+    completion's, _route_completion_to_review). "end_differs": the read names
+    another spool than the last swap loaded, one FCC never saw loaded during the
+    print, so part of the last segment may be that spool's; "end_empty": no spool;
+    "end_two": two or more. A refused head is held as a set of every spool it had,
+    nothing pre-filled (a change during the print always asks)."""
+    sids = _head_sids(head)
+    last = events[-1].get('to_sid') if events else None
+    if not sids:
+        return 'end_empty'
+    if len(sids) > 1:
+        return 'end_two'
+    if str(sids[0]) != str(last):
+        return 'end_differs'
+    return None
 
 
 def _accept_splits(printer_name, job_id, split, rows, held, heads):
@@ -1570,31 +1608,6 @@ def _row_notes_after_end(printer_name, fb_url, heads, rows, words):
             notes.setdefault(str(head['sid']), []).append(
                 f"#{now} is on {head.get('toolhead')} now; #{head['sid']} was on it {words['end']}.")
     return {k: " ".join(v) for k, v in notes.items()}
-
-
-def _split_disagreements(split, heads, swap_log, words):
-    """{sid: note} for a split head whose print-end read names another spool than
-    the last one FCC saw loaded there during the print (critique hole 1). The split
-    stands, since the start snapshot and the recorded swaps say which spools
-    printed it; the note goes under the last segment's row. Best-effort."""
-    notes = {}
-    try:
-        end = {_norm_pos(h.get('position')): h for h in heads}
-        swaps = _swaps_by_position(swap_log)
-        for pos in split or {}:
-            events = swaps.get(_norm_pos(pos)) or []
-            head = end.get(_norm_pos(pos)) or {}
-            sids = _head_sids(head)
-            if not events or len(sids) != 1:
-                continue
-            last = events[-1].get('to_sid')
-            if _is_sid_swap(last, sids[0]):
-                notes[str(last)] = (f"{head.get('toolhead')} had #{sids[0]} {words['end']}, but the last swap "
-                                    f"FCC recorded there loaded #{last}. The split charges the spools FCC saw "
-                                    f"printing: check it before you confirm.")
-    except Exception as e:
-        state.logger.debug(f"split notes skipped: {e}")
-    return notes
 
 
 def _merge_notes(*maps):
@@ -2705,6 +2718,31 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         covered = {_norm_pos(p) for p in (split or {})} if split_rows else set()
         all_held = _held_heads(heads, start_spools, swap_log, usage_map)
         held = {p: info for p, info in all_held.items() if p not in covered}
+        # Group 64.2 (9): one rule with the cancel's split (_split_held_swaps): a split
+        # head whose print-end read names another spool than its last recorded swap
+        # loaded (or no spool, or two) is held as a set, nothing pre-filled. The read
+        # names a spool FCC never saw loaded, so part of the last segment may be that
+        # spool's; the split used to stand with a note under its last row.
+        if covered:
+            by_pos = {_norm_pos(h.get('position')): h for h in heads}
+            swaps = _swaps_by_position(swap_log)
+            refused = {p: why for p, why in
+                       ((p, _split_end_check(by_pos.get(p), swaps.get(p) or [])) for p in covered)
+                       if why}
+            if refused:
+                for p, why in refused.items():
+                    covered.discard(p)
+                    held[p] = dict(all_held.get(p) or {"toolhead": f"T{p}", "sids": [], "start": None,
+                                                       "why": "swapped", "events": swaps.get(p) or []},
+                                   split=why)
+                split = {p: segs for p, segs in split.items() if _norm_pos(p) in covered} or None
+                split_rows = _split_to_review_rows(split, active_locs) if split else None
+                if split and not split_rows:
+                    # A spool of the rest of the split can't be read now: every swapped
+                    # head the split covered is asked about instead.
+                    for p in covered:
+                        held[p] = dict(all_held.get(p) or {}, split="unmeasured")
+                    covered, split = set(), None
         rest_usage = {p: g for p, g in (usage_map or {}).items()
                       if _norm_pos(p) not in covered and _norm_pos(p) not in held and (g or 0) > 0}
         rest_rows = _resolve_usage_to_spools(
@@ -2733,7 +2771,6 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 covered, split = set(), None
         charged.update(covered)
         rows = list(split_rows or []) + list(rest_rows or [])
-        row_notes = _split_disagreements(split if split_rows else None, heads, swap_log, words)
     elif split_rows:
         # The split only covers the positions that were SWAPPED. Every other
         # position still printed and still has to be charged — short-circuiting
@@ -3356,6 +3393,11 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
                                         reached_fraction, usage_map=None,
                                         progress_unknown=True, ambiguous=ambiguous,
                                         reason=unmeasured_reason)
+
+    # Group 64.2 (10): the print reached its last recorded swap, so the partial is
+    # computed at least that far (a fetch record queued before the live edge did
+    # this, and every other caller, get it here too).
+    reached_fraction = _reached_at_least(reached_fraction, swap_log)
 
     creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
     if not creds:

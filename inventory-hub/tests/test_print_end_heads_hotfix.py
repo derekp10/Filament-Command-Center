@@ -321,10 +321,12 @@ def test_a_completion_with_no_start_snapshot_never_charges_a_spool_loaded_after_
     assert print_deduct_ledger.was_deducted(INDX, JOB) and _rec() is None
 
 
-def test_a_completion_split_whose_print_end_read_disagrees_with_the_last_swap_keeps_the_split(logs):
+def test_a_completion_split_whose_print_end_read_disagrees_with_the_last_swap_holds_the_head(logs):
     """Critique hole 1: #42 ran out at 50% and #229 was loaded at the pause (a recorded
-    swap), then #77 turned up on RCOI-5 before FCC saw the end. The split charges #42
-    and #229, which printed it; #77 gets nothing, and the card says what it saw."""
+    swap), then #77 turned up on RCOI-5 before FCC saw the end. Group 64.2 (9): one rule
+    with the cancel: the head is held as a set of every spool it had, nothing
+    pre-filled, since #77 may have printed part of the last segment (the split used to
+    stand, #42 and #229 pre-filled, with a note under #229's row). Red on 6ad359f."""
     split = {4: [{"sid": 42, "grams": 20.0, "segment": 0, "runout": True},
                  {"sid": 229, "grams": 30.0, "segment": 1, "runout": False}]}
     with Indx() as p, _compute({4: 50.0}), \
@@ -337,9 +339,10 @@ def test_a_completion_split_whose_print_end_read_disagrees_with_the_last_swap_ke
         p.at["RCOI-5"] = [77]                   # unrecorded, before the edge
         _tick("FINISHED")
     rec = _rec()
-    assert rec["kind"] == "spool_changed" and rec["auto_split"] is True
-    assert sorted(r["sid"] for r in rec["spools"]) == [42, 229]
-    assert "#77" in rec["row_notes"]["229"], rec.get("row_notes")
+    assert rec["kind"] == "no_spool" and rec["spools"] == [], rec
+    assert [o["sid"] for o in rec["unresolved_sets"]["4"]] == [42, 229, 77], rec
+    assert "#77 was on it when the print ended" in rec["unresolved_notes"]["4"], rec
+    assert "row_notes" not in rec
     assert p.sm.patches == []
 
 

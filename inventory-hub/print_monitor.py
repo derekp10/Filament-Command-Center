@@ -763,7 +763,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         prev_job = {
                             'filename': entry.get('filename'),
                             'job_id': old_jid,
-                            'progress': float(entry.get('progress', 0.0)),
+                            # Group 64.2 (10): at least a park's frozen progress and
+                            # its last recorded swap's point, as at a live edge.
+                            'progress': print_deduct._reached_at_least(
+                                entry.get('progress', 0.0),
+                                print_deduct._validated_swap_log(entry, old_jid),
+                                entry.get('pause_progress')),
                             # `progress` is set (5854-ish) only from a REAL job sample,
                             # so its presence tells us whether we ever measured this
                             # job's progress. Absent ⇒ replaced before any sample ⇒
@@ -1017,7 +1022,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 'kind': edge_kind,
                 'filename': entry.get('filename'),
                 'job_id': entry.get('job_id', ''),
-                'progress': float(entry.get('progress', 0.0)),
+                # Group 64.2 (10): at least the frozen progress of a park it was in
+                # and its last recorded swap's point (the print reached both; the
+                # job samples' high-water can lag them by a poll).
+                'progress': print_deduct._reached_at_least(
+                    entry.get('progress', 0.0), entry.get('swap_log'),
+                    entry.get('pause_progress')),
                 # Whether we ever sampled a REAL progress for this job (entry sets
                 # 'progress' only from a job sample). Absent ⇒ a latched-but-unsampled
                 # job (e.g. caught at ATTENTION before any PRINTING tick) → route the
@@ -1671,7 +1681,10 @@ def _recover_one_print_latch(name, entry, fb_url):
     table). Returns True if it acted, False for a no-op (bare entry / completion)."""
     job_id = entry.get('job_id')
     filename = entry.get('filename')
-    progress = float(entry.get('progress', 0.0) or 0.0)
+    # Group 64.2 (10): at least a park's frozen progress and its last recorded swap's
+    # point, as at a live edge (the persisted latch keeps both).
+    progress = print_deduct._reached_at_least(entry.get('progress', 0.0) or 0.0,
+                                              entry.get('swap_log'), entry.get('pause_progress'))
     # Whether a REAL progress was ever sampled for this latched job (the latch sets
     # 'progress' only from a job sample; print_tracker_store round-trips it verbatim).
     # Absent ⇒ unsampled → the ambiguous-idle branch routes to a non-destructive
