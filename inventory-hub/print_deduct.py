@@ -1801,6 +1801,12 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
     extra = {"extra_fractions": list(swap_points)} if swap_points else {}
     prepared = prusalink_api.fetch_cancel_gcode(
         ip_address, api_key, filename, reached_fraction, **extra)
+    if isinstance(prepared, dict) and not prepared.get("gcode") and prepared.get("decode_error"):
+        # Group 64.4: the file downloaded, and FCC couldn't read it. Retryable, but
+        # not for 72 hours: the queue counts these on the print's record and gives
+        # the print up after a few (_enqueue_cancel_fetch's `decode_error`).
+        return None, {"status": "error", "reason": "undecodable", "job_id": job_id,
+                      "decode_error": str(prepared.get("decode_error"))}
     if not prepared or not prepared.get("gcode"):
         # Download failed. The dominant cause is NOT a permanent error: PrusaLink
         # 404s the raw-file download while the file is the SELECTED/active print
@@ -2154,10 +2160,12 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             # retries once the printer leaves FINISHED (→ IDLE, file unlocked).
             # Carry start_spools + swap_log so the retry still detects a mid-print
             # spool swap (the live latch is gone by then; 22.3 deferred-completion fix),
-            # and the print-end read, so the retry charges the spools it named.
+            # and the print-end read, so the retry charges the spools it named. A file
+            # that downloaded and couldn't be read is counted (Group 64.4).
             _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete",
                                   start_spools=start_spools, swap_log=swap_log,
-                                  **_given(end_heads=end_heads))
+                                  **_given(end_heads=end_heads,
+                                           decode_error=terminal.get("decode_error")))
             return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
                     "job_id": job_id}
         return terminal
@@ -2916,6 +2924,9 @@ _UNMEASURED_WHY = {
     "empty_footer": "its file's filament footer lists no filament",
     "unreadable_moves": "FCC couldn't read its file's moves",
     "no_download": "FCC couldn't download or read its file",
+    # Group 64.2 (3): the queue gave the print up after its compute raised
+    # _FETCH_MAX_TRIES times (print_monitor._give_up_fetch).
+    "compute_failed": "FCC's deduct of it failed 3 times",
 }
 
 
@@ -3088,8 +3099,17 @@ def _hold_fetch_in_flight(printer_name, filename, job_id, reached_fraction, kind
     return held[0] if held else None
 
 
+# Group 64.4 / 64.2 (3): how many times the queue tries a print whose file downloads
+# and can't be read (`decode_failures` on its record), or whose compute raises
+# (`raises`), before it gives the print up the way the 72-hour window does
+# (print_monitor._give_up_fetch). A plain failed download keeps the 72 hours: the
+# file is locked behind the printer's screen until someone clears it.
+_FETCH_MAX_TRIES = 3
+
+
 def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
-                          ambiguous=False, start_spools=None, swap_log=None, end_heads=None):
+                          ambiguous=False, start_spools=None, swap_log=None, end_heads=None,
+                          decode_error=None):
     """Queue a print whose gcode couldn't be fetched yet (the selected-file
     download LOCK, §9.10) for the monitor to retry. `kind` is 'cancel' (default)
     or 'complete' — a COMPLETED Connect-started print locks behind the FINISH
@@ -3117,8 +3137,15 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
     "in_flight", which logs nothing). The read and the write are one locked store
     step (cancel_fetch_store.update_pending), so two writers of one record never
     lose a bump. Returns True if newly queued (nudged), False if it was already
-    queued."""
+    queued.
+
+    `decode_error` (Group 64.4): the file downloaded and FCC couldn't read it
+    (_compute_cancel_usage's "undecodable"). The record counts it in
+    `decode_failures`, and the queue gives the print up after _FETCH_MAX_TRIES of
+    them; the first is said in one WARNING line instead of the "clear the screen"
+    nudge, since the file wasn't locked."""
     nudge = []
+    decodes = []
 
     def _queue(rec):
         if not isinstance(rec, dict) or not rec:
@@ -3132,6 +3159,10 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
             }
             if end_heads:
                 fresh["end_heads"] = end_heads
+            if decode_error:
+                fresh["decode_failures"] = 1
+                fresh["last_error"] = str(decode_error)
+                decodes.append(1)
             return fresh
         if rec.get("last_status") == FETCH_IN_FLIGHT:
             nudge.append(True)          # the first download of it that really failed
@@ -3148,9 +3179,24 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
             first_read = end_heads      # a stored read FCC can't use is no first read
         if first_read:
             rec["end_heads"] = first_read
+        if decode_error:
+            count = int(rec.get("decode_failures", 0) or 0) + 1
+            rec["decode_failures"] = count
+            rec["last_error"] = str(decode_error)
+            decodes.append(count)
         return rec
 
     cancel_fetch_store.update_pending(printer_name, job_id, _queue)
+    if decodes:
+        # The file downloaded and couldn't be read: no "clear the screen" nudge (the
+        # file wasn't locked); its first failure is said once, the give-up later.
+        if decodes[0] == 1:
+            state.add_log_entry(
+                f"⚠️ {printer_name}: FCC downloaded the file of job {_esc(job_id)} "
+                f"('{_esc(filename)}') but couldn't read it ({_esc(decode_error)}). It tries "
+                f"again when the printer is idle, {_FETCH_MAX_TRIES} times in all, then asks "
+                f"you to weigh the spool.", "WARNING", "ffaa00")
+        return bool(nudge)
     if not nudge:
         return False
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
@@ -3292,9 +3338,11 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
             # leaves STOPPED, then computes + pops the 🛑 Review automatically.
             # (For the ambiguous edge the file is already unlocked at IDLE, so
             # this is just a transient-blip safety net — but carry the flag so a
-            # retried review stays flagged "couldn't confirm".)
+            # retried review stays flagged "couldn't confirm".) A file that
+            # downloaded and couldn't be read is counted (Group 64.4).
             _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction,
-                                  ambiguous=ambiguous, **fetch_kw)
+                                  ambiguous=ambiguous, **fetch_kw,
+                                  **_given(decode_error=terminal.get("decode_error")))
             return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
                     "job_id": job_id}
         return terminal

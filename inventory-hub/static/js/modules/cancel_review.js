@@ -943,6 +943,10 @@
                 return `FCC couldn't measure how much filament this print used — <b>it couldn't
                    download or read the print's file</b> from the printer (it may have been deleted,
                    or stayed locked on the printer's screen), so nothing was deducted. ${weigh}`;
+            case 'compute_failed':
+                return `FCC couldn't measure how much filament this print used — <b>its deduct
+                   failed 3 times</b> (the Activity Log has the error), so nothing was deducted.
+                   ${weigh}`;
             case 'unsampled':
                 return `FCC couldn't measure how much filament this print used — <b>it ended before
                    FCC read its progress</b> (the printer reported none while FCC watched, or FCC

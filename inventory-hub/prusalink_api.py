@@ -137,6 +137,14 @@ def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
     in order as ``"fractions"``, so one download serves the print's usage and its
     split; the split used to download the file a second time (another 20 minutes
     on the INDX).
+
+    A file that downloaded but can't be read (Group 64.4) answers
+    ``{"gcode": None, "decode_error": "<why>"}``: a ``.bgcode`` that decodes to no
+    G-code, or a decode that raises. None means only that the download failed (the
+    file locked behind the printer's screen, a network blip), which the queue
+    retries for 72 hours; a file that never decodes used to be downloaded again on
+    every idle tick for those 72 hours too, and is given up after a few tries now.
+    An empty plain-text body is still a failed download, as before.
     """
     raw = _download_file_bytes(ip_address, api_key, filename)
     if raw is None:
@@ -145,7 +153,8 @@ def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
         if bgcode_decode.is_bgcode(raw):
             dec = bgcode_decode.decode_bgcode(raw)
             if not dec.get("gcode"):
-                return None
+                return {"gcode": None,
+                        "decode_error": "its binary G-code decoded to no G-code"}
 
             def _remap(p):
                 return bgcode_decode.progress_to_decoded_fraction(dec, p)
@@ -160,7 +169,8 @@ def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
         return out
     except Exception as e:
         print(f"fetch_cancel_gcode: failed for {filename}: {e}")
-        return None
+        return {"gcode": None,
+                "decode_error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__}
 
 
 _GCODE_G_RE = re.compile(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)')

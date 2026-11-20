@@ -1237,7 +1237,7 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
     import conftest
     pending = []
     for i, reason in enumerate(["no_footer", "empty_footer", "no_download", None,
-                                "unreadable_moves", "unsampled"]):
+                                "unreadable_moves", "unsampled", "compute_failed"]):
         rec = {"printer_name": "ZZ Contrast XL", "job_id": f"u{i}", "filename": "/usb/RACCOON~1.BGC",
                "progress": 1.0, "total_grams": 0.0, "spools": [], "ambiguous": False,
                "kind": "progress_unknown", "usage_map": None}
@@ -1255,7 +1255,8 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
     for words in ("filament footer couldn't be read", "filament footer lists no filament",
                   "download or read the print's file", "replaced", "read the moves",
-                  "ended before FCC read its progress", "/usb/RACCOON~1.BGC", "Discard"):
+                  "ended before FCC read its progress", "deduct failed 3 times",
+                  "/usb/RACCOON~1.BGC", "Discard"):
         assert words in scored, (words, scored)
     page.keyboard.press("Escape")
 
