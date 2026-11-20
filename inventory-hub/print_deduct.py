@@ -3068,9 +3068,9 @@ _UNMEASURED_WHY = {
     "empty_footer": "its file's filament footer lists no filament",
     "unreadable_moves": "FCC couldn't read its file's moves",
     "no_download": "FCC couldn't download or read its file",
-    # Group 64.2 (3): the queue gave the print up after its compute raised
-    # _FETCH_MAX_TRIES times (print_monitor._give_up_fetch).
-    "compute_failed": "FCC's deduct of it failed 3 times",
+    # Group 64.2 (3): the queue gave the print up at the end of its 72-hour window
+    # after its compute kept raising (print_monitor._give_up_fetch).
+    "compute_failed": "FCC's deduct of it kept failing",
 }
 
 
@@ -3243,12 +3243,50 @@ def _hold_fetch_in_flight(printer_name, filename, job_id, reached_fraction, kind
     return held[0] if held else None
 
 
-# Group 64.4 / 64.2 (3): how many times the queue tries a print whose file downloads
-# and can't be read (`decode_failures` on its record), or whose compute raises
-# (`raises`), before it gives the print up the way the 72-hour window does
-# (print_monitor._give_up_fetch). A plain failed download keeps the 72 hours: the
-# file is locked behind the printer's screen until someone clears it.
-_FETCH_MAX_TRIES = 3
+# Group 64.4 / 64.2 (3), as Derek revised it on 2026-11-20 ("I'd rather do that than
+# just stop because something isn't working"): a print whose file downloads and
+# can't be read (`decode_failures` on its record), or whose compute raises
+# (`raises`), is never given up before the 72-hour window. Its first
+# _FETCH_FAST_TRIES tries come at the queue's normal pace (each idle tick); after
+# that it waits _FETCH_SLOW_FIRST_S, doubling each time to at most _FETCH_SLOW_MAX_S
+# (`next_try_at`), so an 11 MB file isn't pulled off the printer's USB stick every
+# 30 seconds for 72 hours, and the printer's other queued prints go ahead between
+# tries (one download per printer at a time). A plain failed download (the file
+# locked behind the printer's screen) keeps the 30-second pace for the whole window,
+# so clearing the screen gets it at the next tick. The warning line's "Try again
+# now" button (retry_fetch_now) ends a wait at once.
+_FETCH_FAST_TRIES = 3
+_FETCH_SLOW_FIRST_S = 300
+_FETCH_SLOW_MAX_S = 3600
+
+
+def _fetch_next_try_at(count, now):
+    """When the queue may try a record again after its `count`-th failure of one kind
+    (a file that couldn't be read, or a compute that raised): None (the next idle
+    tick) for the first _FETCH_FAST_TRIES, then _FETCH_SLOW_FIRST_S later, doubling
+    each time, never more than _FETCH_SLOW_MAX_S."""
+    if count < _FETCH_FAST_TRIES:
+        return None
+    wait = _FETCH_SLOW_FIRST_S * (2 ** min(count - _FETCH_FAST_TRIES, 16))
+    return now + min(_FETCH_SLOW_MAX_S, wait)
+
+
+def _fetch_retry_button(printer_name, job_id):
+    """The "↻ Try again now" button a fetch's warning line carries (Group 64.4,
+    Derek: a way to recover once the cause is fixed): one delegated click in
+    cancel_review.js posts /api/cancel_deduct/retry_fetch with the print it names."""
+    return (' <button type="button" class="btn btn-sm btn-outline-warning ms-2 py-0 px-1 '
+            'fcc-fetch-retry-btn" '
+            f'data-fetch-printer="{html.escape(str(printer_name), quote=True)}" '
+            f'data-fetch-job="{html.escape(str(job_id), quote=True)}">↻ Try again now</button>')
+
+
+def _fetch_schedule_words(hours=72):
+    """How the queue keeps trying, in the warning lines' words. `hours` is
+    print_monitor._CANCEL_FETCH_MAX_AGE_S's (print_monitor passes it; this module
+    never imports print_monitor, the import runs one way)."""
+    return (f"It tries again when the printer is idle, {_FETCH_FAST_TRIES} times right away, "
+            f"then less often (at most once an hour) for up to {int(hours)} hours.")
 
 
 def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
@@ -3285,9 +3323,12 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
 
     `decode_error` (Group 64.4): the file downloaded and FCC couldn't read it
     (_compute_cancel_usage's "undecodable"). The record counts it in
-    `decode_failures`, and the queue gives the print up after _FETCH_MAX_TRIES of
-    them; the first is said in one WARNING line instead of the "clear the screen"
-    nudge, since the file wasn't locked."""
+    `decode_failures` and, after _FETCH_FAST_TRIES of them, waits longer each time
+    (`next_try_at`, _fetch_next_try_at) for the rest of the 72-hour window; the
+    first is said in one WARNING line, with a "Try again now" button, instead of the
+    "clear the screen" nudge, since the file wasn't locked. A plain failed download
+    (`last_failure` "download") ends any such wait: a locked file keeps the
+    queue's normal pace."""
     nudge = []
     decodes = []
 
@@ -3307,6 +3348,7 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
                 fresh["decode_failures"] = 1
                 fresh["last_error"] = str(decode_error)
                 decodes.append(1)
+            fresh["last_failure"] = "decode" if decode_error else "download"
             return fresh
         if rec.get("last_status") == FETCH_IN_FLIGHT:
             nudge.append(True)          # the first download of it that really failed
@@ -3324,22 +3366,36 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
         if first_read:
             rec["end_heads"] = first_read
         if decode_error:
-            count = int(rec.get("decode_failures", 0) or 0) + 1
+            try:
+                count = int(rec.get("decode_failures", 0) or 0) + 1
+            except (TypeError, ValueError):
+                count = 1
             rec["decode_failures"] = count
             rec["last_error"] = str(decode_error)
+            rec["last_failure"] = "decode"
+            due = _fetch_next_try_at(count, time.time())
+            if due is None:
+                rec.pop("next_try_at", None)
+            else:
+                rec["next_try_at"] = due
             decodes.append(count)
+        else:
+            # A plain failed download (a locked file): the queue's normal pace.
+            rec["last_failure"] = "download"
+            rec.pop("next_try_at", None)
         return rec
 
     cancel_fetch_store.update_pending(printer_name, job_id, _queue)
     if decodes:
         # The file downloaded and couldn't be read: no "clear the screen" nudge (the
-        # file wasn't locked); its first failure is said once, the give-up later.
+        # file wasn't locked); its first failure is said once, with the button.
         if decodes[0] == 1:
             state.add_log_entry(
                 f"⚠️ {printer_name}: FCC downloaded the file of job {_esc(job_id)} "
-                f"('{_esc(filename)}') but couldn't read it ({_esc(decode_error)}). It tries "
-                f"again when the printer is idle, {_FETCH_MAX_TRIES} times in all, then asks "
-                f"you to weigh the spool.", "WARNING", "ffaa00")
+                f"('{_esc(filename)}') but couldn't read it ({_esc(decode_error)}). "
+                f"{_fetch_schedule_words()}{_fetch_retry_button(printer_name, job_id)}",
+                "WARNING", "ffaa00",
+                meta={"type": "fetch_retry", "printer_name": printer_name, "job_id": str(job_id)})
         return bool(nudge)
     if not nudge:
         return False
@@ -3371,6 +3427,58 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
             meta={"type": "cancel_deduct_awaiting",
                   "printer_name": printer_name, "job_id": str(job_id)})
     return True
+
+
+def retry_fetch_now(printer_name, job_id):
+    """The warning line's "↻ Try again now" (Group 64.4; Derek, 2026-11-20: a way to
+    recover once he has fixed what kept the file from being read or the deduct from
+    working). Ends the record's wait and gives it _FETCH_FAST_TRIES quick tries
+    again: the queue tries it at the next tick the printer is idle. Writes nothing
+    to Spoolman. Returns (ok, msg) in words for the toast."""
+    printer_name = str(printer_name or "").strip()
+    job_id = str(job_id or "").strip()
+    if not printer_name or print_deduct_ledger._is_blank_job(job_id):
+        return False, "That line names no print FCC can look up."
+    if print_deduct_ledger.was_deducted(printer_name, job_id) or \
+            cancel_review_store.has_pending(printer_name, job_id):
+        return False, (f"Job {job_id} on {printer_name} is settled already: its deduct is "
+                       f"recorded, or its review is waiting in 🛑 Review.")
+    found = []
+
+    def _reset(rec):
+        if not isinstance(rec, dict) or not rec:
+            return None
+        kept = dict(rec)
+        kept.pop("next_try_at", None)
+        kept["decode_failures"] = 0
+        kept["raises"] = 0
+        found.append(kept)
+        return kept
+
+    cancel_fetch_store.update_pending(printer_name, job_id, _reset)
+    if not found:
+        return False, (f"Nothing is waiting for job {job_id} on {printer_name} any more: "
+                       f"FCC has finished with it.")
+    state.add_log_entry(
+        f"🔁 {printer_name}: job {_esc(job_id)} ('{_esc(found[0].get('filename'))}') will be "
+        f"tried again as soon as the printer is idle (Try again now).", "INFO")
+    return True, f"FCC tries job {job_id} on {printer_name} again as soon as the printer is idle."
+
+
+@app.route('/api/cancel_deduct/retry_fetch', methods=['POST'])
+def api_cancel_deduct_retry_fetch():
+    """POST {printer_name, job_id}: the warning line's "↻ Try again now"
+    (retry_fetch_now). Answers {success, msg}."""
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        ok, msg = retry_fetch_now(data.get("printer_name"), data.get("job_id"))
+    except Exception as e:
+        state.logger.warning(f"retry_fetch failed for {data!r}: {e}")
+        return jsonify({"success": False,
+                        "msg": "FCC couldn't reach its queue just now. Try again in a moment."}), 500
+    return jsonify({"success": bool(ok), "msg": msg})
 
 
 def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,

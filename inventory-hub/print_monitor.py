@@ -325,8 +325,8 @@ def _try_again(printer, job_id):
     spool and then has the print charged on top. '' when nothing is queued for it,
     when the ledger or a review already holds the job (the queue then only drops
     its record: nothing is computed again), or when its record says a charge may
-    have begun (that one is given up, not retried). It says how many tries the
-    queue makes (Group 64.2 (3)): the edge's own raise counts as the first."""
+    have begun (that one is given up, not retried). The edge's own raise counts as
+    the first of the queue's quick tries (Group 64.2 (3))."""
     try:
         if print_deduct_ledger._is_blank_job(job_id):
             return ""
@@ -336,31 +336,41 @@ def _try_again(printer, job_id):
         rec = cancel_fetch_store.get_pending(printer, job_id)
         if not isinstance(rec, dict) or rec.get("charging_since"):
             return ""
-        return (f" — FCC will try again when the printer is idle "
-                f"({print_deduct._FETCH_MAX_TRIES} tries in all).")
+        return " — FCC will try again when the printer is idle."
     except Exception:
         return ""
 
 
 def _note_compute_raise(printer, job_id, filename, error, say=True):
     """Count a raise of a queued print's compute on its record (`raises`; Group
-    64.2 (3)): the queue gives the print up after print_deduct._FETCH_MAX_TRIES of
-    them (_give_up_fetch), where it used to download the file again on every idle
-    tick for 72 hours with only a debug line. The first raise is said in one
-    WARNING line (`say`; a live edge's raise says it in its own ERROR line). A print
-    with no record (no job id, or already settled) counts nothing. Returns the new
-    count, or 0. Never raises."""
+    64.2 (3)), where it used to be retried on every idle tick for 72 hours with only
+    a debug line. After print_deduct._FETCH_FAST_TRIES raises the record waits
+    longer each time (`next_try_at`, print_deduct._fetch_next_try_at), never given
+    up before the 72-hour window (Derek, 2026-11-20). The first raise is said in one
+    WARNING line with a "Try again now" button (`say`; a live edge's raise says it
+    in its own ERROR line). A print with no record (no job id, or already settled)
+    counts nothing. Returns the new count, or 0. Never raises."""
     try:
         if print_deduct_ledger._is_blank_job(job_id):
             return 0
         counted = []
+        now = time.time()
 
         def _bump(rec):
             if not isinstance(rec, dict) or not rec:
                 return None
-            count = int(rec.get("raises", 0) or 0) + 1
+            try:
+                count = int(rec.get("raises", 0) or 0) + 1
+            except (TypeError, ValueError):
+                count = 1
             counted.append(count)
-            return dict(rec, raises=count, last_error=err)
+            kept = dict(rec, raises=count, last_error=err, last_failure="raise")
+            due = print_deduct._fetch_next_try_at(count, now)
+            if due is None:
+                kept.pop("next_try_at", None)
+            else:
+                kept["next_try_at"] = due
+            return kept
 
         # The exception's type too: a KeyError's own text is just the key.
         err = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
@@ -370,9 +380,10 @@ def _note_compute_raise(printer, job_id, filename, error, say=True):
             state.add_log_entry(
                 f"⚠️ {printer}: FCC couldn't work out the deduct of job "
                 f"{print_deduct._esc(job_id)} ('{print_deduct._esc(filename)}'): "
-                f"{print_deduct._esc(err)}. It tries again when the printer is idle, "
-                f"{print_deduct._FETCH_MAX_TRIES} times in all, then asks you to weigh the "
-                f"spool.", "WARNING", "ffaa00")
+                f"{print_deduct._esc(err)}. "
+                f"{print_deduct._fetch_schedule_words(_CANCEL_FETCH_MAX_AGE_S // 3600)}"
+                f"{print_deduct._fetch_retry_button(printer, job_id)}", "WARNING", "ffaa00",
+                meta={"type": "fetch_retry", "printer_name": printer, "job_id": str(job_id)})
         return count
     except Exception as e:
         try:
@@ -1271,9 +1282,10 @@ def _process_pending_cancel_fetches(states, fb_url):
     gcode couldn't be downloaded at the edge (selected-file LOCK), re-attempt the
     compute ONCE the printer has left STOPPED (the file un-locks → IDLE), then
     stash the 🛑 Review and drop the queue entry. Gives up after
-    _CANCEL_FETCH_MAX_AGE_S, or after print_deduct._FETCH_MAX_TRIES compute raises
-    or files that downloaded and couldn't be read (Group 64.4 / 64.2 (3)), with a
-    "weigh the spool" warning or the "couldn't measure" review (_give_up_fetch).
+    _CANCEL_FETCH_MAX_AGE_S, never sooner, with a "weigh the spool" warning or the
+    "couldn't measure" review (_give_up_fetch); a file that downloaded and couldn't
+    be read, or a compute that raised, is tried less often after a few failures
+    (Group 64.4 / 64.2 (3), _waiting).
 
     `states` maps printer_name -> the state dict get_printer_state returned this
     tick (or None when offline). Best-effort per entry; one bad record never
@@ -1339,16 +1351,12 @@ def _process_pending_cancel_fetches(states, fb_url):
                 continue
 
             # Give up after the max-age window so a deleted/abandoned file's
-            # entry can't linger forever, and after _FETCH_MAX_TRIES compute
-            # raises or files that downloaded and couldn't be read (Group 64.4 /
-            # 64.2 (3): those used to be downloaded again on every idle tick for
-            # the whole 72 hours, and held the printer's other queued prints
-            # behind them, one download per printer at a time). Checked BEFORE a
-            # download, so a print is downloaded _FETCH_MAX_TRIES times at most.
+            # entry can't linger forever: never sooner, whatever keeps failing
+            # (Derek, 2026-11-20: "I'd rather do that than just stop because
+            # something isn't working").
             first_seen = float(rec.get("first_seen", now) or now)
-            why = _give_up_why(rec, now - first_seen)
-            if why:
-                _give_up_fetch(rec, why)
+            if now - first_seen > _CANCEL_FETCH_MAX_AGE_S:
+                _give_up_fetch(rec)
                 continue
 
             # Gate on state: the selected file is reliably download-UNLOCKED only
@@ -1375,6 +1383,14 @@ def _process_pending_cancel_fetches(states, fb_url):
                     cancel_fetch_store.pop_pending(printer, job_id)
                     continue
 
+            # Group 64.4 / 64.2 (3): a file that downloaded and couldn't be read, or
+            # a compute that raised, more than print_deduct._FETCH_FAST_TRIES times
+            # waits longer each time (`next_try_at`), so a stuck 11 MB file isn't
+            # pulled off the printer's USB stick every 30 seconds, and the printer's
+            # other queued prints go ahead meanwhile. "Try again now" ends the wait.
+            if _waiting(rec, now):
+                continue
+
             # Due. One download per printer at a time (scope C): a printer with
             # one in flight (a live edge's, or an earlier tick's retry) waits for
             # a later tick. Then this print is claimed and computed on a thread of
@@ -1394,33 +1410,21 @@ def _process_pending_cancel_fetches(states, fb_url):
                 pass
 
 
-def _record_count(rec, key):
-    """A count a fetch record keeps (`raises`, `decode_failures`), 0 when absent or
-    unreadable."""
+def _waiting(rec, now):
+    """Whether a record waits out a slow retry now (Group 64.4 / 64.2 (3)): its
+    `next_try_at` (set after print_deduct._FETCH_FAST_TRIES failures of a file that
+    couldn't be read, or of a compute that raised) is still ahead. A record with
+    none, or one the queue can't read, is due."""
     try:
-        return int(rec.get(key, 0) or 0)
+        due = rec.get("next_try_at")
+        return due is not None and float(due) > now
     except (TypeError, ValueError):
-        return 0
+        return False
 
 
-def _give_up_why(rec, age_s):
-    """Why the queue gives a record up now, or None: "raises" (its compute raised
-    print_deduct._FETCH_MAX_TRIES times), "undecodable" (its file downloaded and
-    couldn't be read that many times), "max_age" (_CANCEL_FETCH_MAX_AGE_S since it
-    was first seen). A plain failed download counts toward none but the age."""
-    tries = print_deduct._FETCH_MAX_TRIES
-    if _record_count(rec, "raises") >= tries:
-        return "raises"
-    if _record_count(rec, "decode_failures") >= tries:
-        return "undecodable"
-    if age_s > _CANCEL_FETCH_MAX_AGE_S:
-        return "max_age"
-    return None
-
-
-def _give_up_fetch(rec, why):
-    """Give a queued print up for good (Group 64.4 / 64.2 (3) made this one helper
-    out of the 72-hour window's branch). `why` is _give_up_why's.
+def _give_up_fetch(rec):
+    """Give a queued print up for good, at the end of its 72-hour window (the
+    window's branch, made one helper by Group 64.4; Derek, 2026-11-20: never sooner).
 
     A completion FCC owns is never recorded at 0 g without a review (Group 56.3):
     the "couldn't measure" card writes no ledger entry and holds the job (a pending
@@ -1430,16 +1434,18 @@ def _give_up_fetch(rec, why):
     an unmeasured one. An ambiguous end may have been a completion (Group 56
     review, round 3): its queue line promised a review, so it gets the card too,
     and nothing auto-charges on that path. The card's reason is "compute_failed"
-    for a compute that kept raising, else "no_download" ("FCC couldn't download or
-    read its file"). A true cancel, and a completion FCC doesn't own, are recorded
-    at 0 g with one "weigh the spool" line, so they can't re-queue."""
+    when its last failure was a compute that raised (`last_failure` "raise"), else
+    "no_download" ("FCC couldn't download or read its file"). A true cancel, and a
+    completion FCC doesn't own, are recorded at 0 g with one "weigh the spool"
+    line, so they can't re-queue."""
     printer = rec.get("printer_name")
     job_id = rec.get("job_id")
     filename = rec.get("filename")
     progress = float(rec.get("progress", 0.0) or 0.0)
     kind = rec.get("kind", "cancel")
     ambiguous = bool(rec.get("ambiguous", False))
-    reason = "compute_failed" if why == "raises" else "no_download"
+    last = rec.get("last_failure")
+    reason = "compute_failed" if last == "raise" else "no_download"
     if kind == "complete" and _fcc_owns_completion_deduct():
         if not print_deduct._shortfall_card_exists(printer, job_id, filename, 1.0):
             print_deduct._stash_unresolved_review(
@@ -1455,26 +1461,20 @@ def _give_up_fetch(rec, why):
         return
     pct = max(0.0, min(1.0, progress)) * 100
     hrs = _CANCEL_FETCH_MAX_AGE_S // 3600
-    tries = print_deduct._FETCH_MAX_TRIES
     shown = print_deduct._esc(filename)
-    if why == "raises":
-        how = f"its deduct failed {tries} times"
-    elif why == "undecodable":
-        how = f"FCC downloaded its file {tries} times and couldn't read it"
+    if last == "raise":
+        how = " (its deduct kept failing)"
+    elif last == "decode":
+        how = " (its file downloaded but couldn't be read)"
     else:
         how = ""
     if kind == "complete":
-        line = (f"✅ Gave up on the completed print's deduct on {printer} ('{shown}'): {how} "
-                f"— no deduct recorded. Weigh the spool to true it up." if how else
-                f"✅ Gave up fetching the completed print's gcode on {printer} "
-                f"('{shown}') after {hrs}h — no deduct recorded. "
+        line = (f"✅ Gave up fetching the completed print's gcode on {printer} "
+                f"('{shown}') after {hrs}h{how} — no deduct recorded. "
                 f"Weigh the spool to true it up.")
     else:
-        line = (f"🛑 Gave up on the cancelled print's deduct on {printer} ('{shown}', "
-                f"~{pct:.0f}%): {how} — no partial deduct. Weigh the spool to true it up."
-                if how else
-                f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
-                f"('{shown}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
+        line = (f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
+                f"('{shown}', ~{pct:.0f}%) after {hrs}h{how} — no partial deduct. "
                 f"Weigh the spool to true it up.")
     state.add_log_entry(line, "WARNING", "ffaa00")
     print_deduct_ledger.record_deduct(printer, job_id, filename=filename,
@@ -1594,9 +1594,9 @@ def _run_fetch_retry(rec, fb_url, key):
     except Exception as e:
         # Anything else raised before a spool write (a review or queue store
         # that couldn't be written, a malformed record): nothing was charged,
-        # so the entry stays queued and the next tick tries again, up to
-        # print_deduct._FETCH_MAX_TRIES raises in all (Group 64.2 (3): one that
-        # always raised was downloaded again on every idle tick for 72 hours,
+        # so the entry stays queued and the next tick tries again; after
+        # print_deduct._FETCH_FAST_TRIES raises, less often (Group 64.2 (3): one
+        # that always raised was downloaded again on every idle tick for 72 hours,
         # with only this debug line). The first raise is said once at WARNING.
         try:
             state.logger.debug(f"cancel-fetch retry failed for {rec}: {e}")

@@ -1255,7 +1255,7 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
     for words in ("filament footer couldn't be read", "filament footer lists no filament",
                   "download or read the print's file", "replaced", "read the moves",
-                  "ended before FCC read its progress", "deduct failed 3 times",
+                  "ended before FCC read its progress", "deduct kept failing",
                   "/usb/RACCOON~1.BGC", "Discard"):
         assert words in scored, (words, scored)
     page.keyboard.press("Escape")

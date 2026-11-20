@@ -945,8 +945,8 @@
                    or stayed locked on the printer's screen), so nothing was deducted. ${weigh}`;
             case 'compute_failed':
                 return `FCC couldn't measure how much filament this print used — <b>its deduct
-                   failed 3 times</b> (the Activity Log has the error), so nothing was deducted.
-                   ${weigh}`;
+                   kept failing</b> for the whole time FCC kept trying (the Activity Log has the
+                   error), so nothing was deducted. ${weigh}`;
             case 'unsampled':
                 return `FCC couldn't measure how much filament this print used — <b>it ended before
                    FCC read its progress</b> (the printer reported none while FCC watched, or FCC
@@ -1823,4 +1823,50 @@
     } else {
         startBadge();
     }
+})();
+
+// Group 64.4 (Derek, 2026-11-20: a way to recover once he has fixed what kept a print
+// file from being read, or its deduct from working): the "↻ Try again now" button on
+// the Activity Log line FCC writes the first time a queued print's file downloads but
+// can't be read, or its deduct fails (print_deduct._fetch_retry_button). The line holds
+// the button itself, as the take-off's "Take it off" (inv_weigh_out.js), so it is in
+// #live-logs and in the 📡 pill's list alike: one delegated click posts
+// /api/cancel_deduct/retry_fetch {printer_name, job_id} and toasts the answer's words,
+// which the pill's list also shows on its own line (its overlay covers the toast layer).
+// A press while one is out for that print asks nothing, nor does a double click's
+// second (`detail` 2). The click is window.fccFetchRetryClick, so a hermetic harness
+// can press it (tests/test_fetch_backoff_64_4_js.py).
+(() => {
+    const out = new Set();
+    const say = (msg, ok, fromPill) => {
+        showToast(msg, ok ? 'success' : 'warning', ok ? 4000 : 7000);
+        if (fromPill && typeof window.logPillNotice === 'function') window.logPillNotice(msg);
+    };
+    window.fccFetchRetryClick = (e) => {
+        const t = e.target && e.target.closest ? e.target : null;
+        const btn = t ? t.closest('.fcc-fetch-retry-btn') : null;
+        if (!btn || !btn.closest('#live-logs, #fcc-log-pill-overlay')) return;
+        e.preventDefault();
+        if (e.detail > 1) return;
+        const printer = btn.getAttribute('data-fetch-printer') || '';
+        const job = btn.getAttribute('data-fetch-job') || '';
+        const key = `${printer}::${job}`;
+        if (!printer || !job || out.has(key)) return;
+        out.add(key);
+        const fromPill = !!btn.closest('#fcc-log-pill-overlay');
+        if (fromPill && typeof window.logPillNotice === 'function') window.logPillNotice('');
+        (window.fetchT || fetch)('/api/cancel_deduct/retry_fetch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ printer_name: printer, job_id: job }),
+        })
+            .then((r) => r.json())
+            .then((res) => say(String((res && res.msg) || `FCC couldn't queue job ${job} again.`),
+                               !!(res && res.success), fromPill),
+                  () => say("FCC didn't answer, so nothing changed. Try again in a moment.",
+                            false, fromPill))
+            .catch((err) => console.error(err))
+            .finally(() => out.delete(key));
+    };
+    document.addEventListener('click', (e) => window.fccFetchRetryClick(e));
 })();

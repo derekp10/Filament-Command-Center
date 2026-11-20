@@ -174,7 +174,7 @@ def test_unmeasured_reviews_say_why_and_offer_only_discard(page, require_server,
         "U-3": "download or read the print's file",
         "U-5": "read the moves in the print's file",
         "U-6": "it ended before FCC read its progress",
-        "U-7": "its deduct failed 3 times",
+        "U-7": "its deduct kept failing",
         "U-4": "replaced by a new print before a progress reading",
     }
     for job, words in want.items():
