@@ -41,20 +41,24 @@ import print_deduct  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# Cancelled-print detection — rides the dashboard-pulse printer-state probe
-# (FilaBridge absorption design §9.3 / build slice 2a).
+# Print-end detection — a daemon of its own (_cancel_monitor_loop) polls every
+# printer's PrusaLink state, 10 s while one is busy and 30 s when all are idle
+# (FilaBridge absorption design §9.3; it rode the dashboard pulse until 2026-06).
 #
-# _pulse_section_printer_status already probes every printer's PrusaLink state
-# on each heartbeat. We piggyback on that probe: while a print is IN PROGRESS we
-# latch its filename / job_id / monotonic byte-progress (PrusaLink tears the job
-# block down the instant the print STOPS, so we MUST capture it beforehand),
-# and on the →STOPPED/ERROR edge we fire deduct_cancelled_print with the latched
-# values on a background thread. The persistent print_deduct_ledger keeps the
-# deduct exactly-once across ticks and restarts.
-#
-# First ship is cancel-only (STOPPED/ERROR). FINISHED stays with FilaBridge
-# until the Phase-2 atomic cutover — firing on FINISHED here would
-# double-deduct prints FilaBridge already deducts.
+# While a print is IN PROGRESS the tracker latches its filename / job_id /
+# monotonic byte-progress (PrusaLink tears the job block down the instant the
+# print STOPS, so it must be captured beforehand), its start-spool snapshot and
+# the swaps its resumes record. On an end edge it reads the heads first, before
+# any download (the print-end read, hotfix 2026-11-11), then on a thread of its
+# own: a →STOPPED/ERROR cancel opens the 🛑 review (preview and confirm,
+# print_deduct._create_pending_cancel_review); a →FINISHED completion is charged
+# from the slicer's footer (print_deduct.deduct_completed_print), only while
+# `fcc_owns_completion_deduct` is on (FilaBridge was decommissioned 2026-06-13);
+# an in-progress print that reaches IDLE with no end FCC saw, or that a new job
+# replaces, opens the ambiguous review. Nothing here calls the one-shot cancel
+# deduct, print_deduct.deduct_cancelled_print (kept for a future auto mode; it
+# takes the print-end read too, Group 64.3 (8)). The persistent
+# print_deduct_ledger keeps each deduct exactly-once across ticks and restarts.
 # ---------------------------------------------------------------------------
 
 # {printer_name: {"state": str, "job_id", "filename", "progress", "file_meta"}}

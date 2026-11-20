@@ -225,3 +225,86 @@ def test_a_job_that_replaces_a_parked_one_reviews_it_at_the_parks_progress():
     edge.assert_called_once()
     assert edge.call_args.args[2] == JOB
     assert edge.call_args.args[3] == pytest.approx(0.45)
+
+
+# --------------------------------------------------------------------------- #
+# 64.3 (8): the one-shot cancel deduct takes the print-end read                #
+# --------------------------------------------------------------------------- #
+
+def _one_shot(rig, text, downloads=None, reached=0.5, **kw):
+    calls = downloads if downloads is not None else []
+
+    def _fetch(ip, key, filename, fraction, extra_fractions=None):
+        calls.append(filename)
+        out = {"gcode": text, "fraction": fraction}
+        if extra_fractions:
+            out["fractions"] = list(extra_fractions)
+        return out
+    with patch.object(prusalink_api, "fetch_cancel_gcode", side_effect=_fetch):
+        return print_deduct.deduct_cancelled_print(
+            XL, "x.gcode", JOB, reached, fb_url="http://fb", ip_address="1.2.3.4", api_key="k", **kw)
+
+
+def test_the_one_shot_charges_the_print_end_spool_never_one_loaded_after_it():
+    """#200 was on XL-1 when the print ended; #100 was loaded during the download.
+    Red on e4c0ae0 (no end_heads: the read after the download charged #100, the
+    job-1141 bug)."""
+    text = _gcode()
+    with TwoHeads() as rig:
+        rig.at["XL-1"] = [100]
+        out = _one_shot(rig, text, end_heads=END)
+    assert out["status"] == "deducted", out
+    want = prusalink_api.measure_filament_usage(text, [0.5])["partials"][0][0]
+    assert rig.sm.used(200) == pytest.approx(10.0 + want, abs=0.01)
+    assert rig.sm.used(100) == pytest.approx(100.0)
+    assert print_deduct_ledger.was_deducted(XL, str(JOB))
+
+
+def test_the_one_shot_sends_a_head_it_cant_vouch_for_to_the_review_from_one_download():
+    """A swap recorded on XL-1 during the print: a one-shot can't ask, so the whole
+    print goes to the review, split at the swap from the same download, and nothing
+    is charged. Red on e4c0ae0."""
+    text = _gcode()
+    downloads = []
+    with TwoHeads() as rig:
+        out = _one_shot(rig, text, downloads, reached=0.40, end_heads=END,
+                        start_spools={"0": 100, "1": 300}, swap_log=SWAP)
+    assert str(out["status"]).startswith("pending"), out
+    assert downloads == ["x.gcode"], "the review downloaded the file again"
+    rec = cancel_review_store.get_pending(XL, str(JOB))
+    assert rec["progress"] == pytest.approx(0.45), rec      # at least its last swap (64.2 (10))
+    assert {r["sid"] for r in rec["spools"] if str(r.get("position")) == "0"} == {100, 200}, rec
+    assert rig.sm.patches == []
+    assert not print_deduct_ledger.was_deducted(XL, str(JOB))
+
+
+def test_the_one_shot_sends_a_head_with_two_spools_at_the_end_to_the_review():
+    """Red on e4c0ae0: both spools on the head were charged its whole grams' share."""
+    two = {"heads": [dict(END["heads"][0], sid=None, sids=[200, 300])], "source": "print_end",
+           "at": END["at"]}
+    with TwoHeads() as rig:
+        out = _one_shot(rig, _gcode(), end_heads=two)
+    assert str(out["status"]).startswith("pending"), out
+    assert rig.sm.patches == []
+
+
+def test_the_one_shot_with_no_print_end_read_reads_the_heads_as_before():
+    """Passes on e4c0ae0 by design: no usable read, the heads are read after the
+    download, as the function always did."""
+    with TwoHeads() as rig:
+        out = _one_shot(rig, _gcode())
+    assert out["status"] == "deducted", out
+    assert rig.sm.used(200) > 10.0
+
+
+def test_the_one_shot_whose_print_end_spool_is_gone_asks_with_the_print_end_heads():
+    """The print-end read names #999, which Spoolman no longer has: nothing is
+    charged, and the card says what the read saw. Red on e4c0ae0."""
+    gone = {"heads": [dict(END["heads"][0], sid=999, sids=[999])], "source": "print_end",
+            "at": END["at"]}
+    with TwoHeads() as rig:
+        out = _one_shot(rig, _gcode(), end_heads=gone)
+    assert str(out["status"]).startswith("pending"), out
+    rec = cancel_review_store.get_pending(XL, str(JOB))
+    assert rec.get("heads_source") == "print_end", rec
+    assert rig.sm.patches == []

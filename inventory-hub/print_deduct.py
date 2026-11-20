@@ -2018,7 +2018,8 @@ def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charge
 
 
 def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
-                           fb_url=None, ip_address=None, api_key=None):
+                           fb_url=None, ip_address=None, api_key=None, start_spools=None,
+                           swap_log=None, end_heads=None):
     """Compute + AUTO-APPLY the PARTIAL filament deduct for a CANCELLED print
     (FilaBridge absorption design §9). Exactly-once via the (printer, job_id)
     ledger; NEVER deducts the full estimate (that's the ~10x over-charge a
@@ -2035,6 +2036,16 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
     remains the canonical "compute-and-apply-in-one-shot" primitive (a future
     opt-in auto-mode / recompute action can call it) and shares its compute half
     with the preview path via _compute_cancel_usage.
+
+    The heads (Group 64.3 (8), before anything calls it: the job-1141 bug, where a
+    read made after the 20-minute download named a spool loaded meanwhile): with a
+    usable print-end read (`end_heads`, {heads, source, at}) it charges those
+    heads, never a read after its download, as the completion does. A head FCC
+    can't vouch for there (a swap recorded or a change seen during the print, from
+    `start_spools` / `swap_log`, or two spools at the end; _held_heads) sends the
+    whole print to the review instead, built from this same download and its
+    figures at the swaps: a one-shot can't ask. Without a usable read it reads the
+    heads after the download, as before.
     """
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
@@ -2043,6 +2054,10 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
         return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
     if _shortfall_card_exists(printer_name, job_id, filename, reached_fraction):
         return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
+    if not print_deduct_ledger._is_blank_job(job_id) and \
+            cancel_review_store.has_pending(printer_name, job_id):
+        # A review already holds this job: never charge it behind the card.
+        return {"status": "skipped", "reason": "already pending", "job_id": job_id}
 
     if not (ip_address and api_key):
         creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
@@ -2050,8 +2065,12 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
             return {"status": "error", "reason": "no credentials", "job_id": job_id}
         ip_address, api_key = creds.get('ip_address'), creds.get('api_key')
 
+    reached_fraction = _reached_at_least(reached_fraction, swap_log)
+    points = _swap_points(swap_log)
+    swap_cums = {}
     usage_map, terminal = _compute_cancel_usage(
-        printer_name, filename, job_id, reached_fraction, ip_address, api_key)
+        printer_name, filename, job_id, reached_fraction, ip_address, api_key,
+        **({"swap_points": points, "cums_out": swap_cums} if points else {}))
     if terminal is not None:
         if terminal["status"] == "no_usage":
             print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
@@ -2062,10 +2081,28 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
             _log_cancel_uncomputable(printer_name, filename, reached_fraction, None)
         return terminal
 
+    mapping = _usable_heads(end_heads)
+    heads = source = read_at = None
+    if mapping is not None:
+        heads, source, read_at = mapping
+        if _held_heads(heads, start_spools, swap_log, usage_map):
+            # A head FCC can't vouch for: the review asks about it, its rows and lines
+            # from the print-end read; nothing is charged here.
+            return _stash_cancel_review_from_heads(
+                printer_name, filename, job_id, reached_fraction, fb_url, False, usage_map,
+                mapping, start_spools, swap_log, swap_cums=swap_cums)
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    changes = _changed_since_end(printer_name, fb_url, heads) if heads is not None else []
     failed = []
     spools_updated, details, known = _apply_usage_to_printer(
-        printer_name, usage_map, fb_url, strategy_label="Cancel", failed_out=failed)
+        printer_name, usage_map, fb_url, strategy_label="Cancel", failed_out=failed,
+        **_given(heads=heads))
+    if spools_updated == 0 and not failed and heads is not None:
+        # Nothing charged from the print-end read (every used head empty, or naming
+        # a spool FCC can't read now): the card from the same read says which.
+        return _stash_cancel_review_from_heads(
+            printer_name, filename, job_id, reached_fraction, fb_url, False, usage_map,
+            mapping, start_spools, swap_log, swap_cums=swap_cums)
     if spools_updated == 0 and not failed:
         # Usage WAS computed but no spool is bound to the toolhead — don't burn a
         # terminal grams=0 ledger entry (it permanently blocks recovery). Stash a
@@ -2083,13 +2120,20 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
         f"🛑 Cancelled-print partial deduct on {printer_name}{_toolheads_charged(details)}: {total:.1f}g across "
         f"{spools_updated} spool(s) at ~{pct:.0f}% progress ('{_esc(filename)}').",
         "WARNING")
+    card = {}
+    if heads is not None:
+        # As the completion: say which spool changed since the print ended (it was
+        # charged nothing), and an uncharged-grams card's heads are the end read's.
+        _say_changed_since_end(printer_name, changes, details, _heads_words(source))
+        card = _given(heads=_card_heads(heads, start_spools, swap_log, usage_map),
+                      heads_source=source, heads_read_at=read_at)
     # Record the APPLIED grams (was sum(usage_map) = the full requested — the drift
     # the completed/cancel-review paths didn't have; 22.4(2)) + surface any shortfall
     # over known positions (22.4(3)).
     _record_applied_deduct(
         printer_name, job_id, filename=filename, scale=reached_fraction,
         details=details, usage_map=usage_map, known_positions=known, fb_url=fb_url,
-        failed=failed, read_heads=True)
+        failed=failed, read_heads=True, **card)
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
