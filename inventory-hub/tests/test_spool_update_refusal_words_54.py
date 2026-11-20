@@ -255,15 +255,19 @@ def test_a_weigh_to_empty_that_landed_is_answered_archived(client, spoolman):
 def test_an_unread_spools_weigh_to_empty_that_landed_names_its_place(client, spoolman, monkeypatch):
     """RED on 2c4b6f6: FCC couldn't read #57 first (review R1-1: archived where it
     is by the page's own `archived: true`), the write landed at CR-SHELF and its
-    answer timed out; the read-back works. Answered as saved, archived, at
-    CR-SHELF, so the weigh page's unassign takes it off (review R4-1)."""
+    answer timed out; the read-back works. Answered as saved, archived; then the
+    route's own take-off (Group 63.2) takes it off CR-SHELF, its answer lost too, and
+    its one re-read shows it off, so the answer says it is Unassigned.
+
+    PIN UPDATED DELIBERATELY (Group 63.2): it answered CR-SHELF for the weigh page's
+    own unassign (review R4-1), a request a closed tab never sent. RED on e1b22f4."""
     monkeypatch.setattr(sm_api, "get_spool", lambda sid: None)
     spoolman.apply_then = requests.exceptions.ReadTimeout(TIMEOUT)
     body = _save(client, {"id": 57, "updates": {"remaining_weight": 0, "archived": True}})
     rec = spoolman.records["spool"][57]
-    assert rec["archived"] is True and rec["location"] == "CR-SHELF", rec
+    assert rec["archived"] is True and rec["location"] == "", rec
     assert body["status"] == "success" and body["auto_archived"] is True, body
-    assert body.get("location_now") == "CR-SHELF", body
+    assert body.get("location_now") == "" and "still_at" not in body, body
 
 
 @pytest.mark.parametrize("lost, words", [

@@ -19,6 +19,7 @@ import config_loader  # type: ignore
 import locations_db  # type: ignore
 import cancel_review_store  # type: ignore
 import attr_migration  # type: ignore  # Group 36: unfinished force_reset recovery
+import archive_takeoff  # type: ignore  # Group 63.2: a listed take-off, again after a restart
 
 
 # L347 follow-up — prune old locations.json.pre-*.bak migration backups.
@@ -272,6 +273,14 @@ def run_startup_migrations():
             state.logger.info(f"🧹 Pruned {len(_pruned)} old locations.json backup(s)")
     except Exception as _prune_err:
         state.logger.warning(f"locations.json backup prune skipped: {_prune_err}")
+
+
+def resurface_pending_archive_takeoffs():
+    """Group 63.2: the listed "Take it off" line again for every spool a weigh
+    archived in place that FCC still couldn't take off when it stopped, so the
+    button is there after a restart (the 🛑 review lines' pattern). Called from
+    app.py at import, as the cancel reviews are; it only logs. Never raises."""
+    archive_takeoff.resurface()
 
 
 def resurface_pending_cancel_reviews():

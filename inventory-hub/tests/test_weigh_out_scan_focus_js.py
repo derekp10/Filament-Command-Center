@@ -184,8 +184,20 @@ def _box(page, sid):
 def _updates(page):
     """Every weight posted, as sent. Since Group 54.7 each carries `auto_archive`,
     the list's "Auto-Archive 0g" switch (on unless a test turns it off), so the
-    exact bodies below say `"auto_archive": True` (updated deliberately)."""
-    return page.evaluate("() => window.__posts.filter((p) => p.url === '/api/spool/update').map((p) => p.body)")
+    exact bodies below say `"auto_archive": True` (updated deliberately). Since
+    Group 63.6 a row's save also carries `based_on`, the figures its reading was
+    worked out from: it is left out of the bodies here (updated deliberately) and
+    checked on its own (`_bases`; test_weigh_based_on_page_63_6_js)."""
+    bodies = page.evaluate("() => window.__posts.filter((p) => p.url === '/api/spool/update').map((p) => p.body)")
+    for body in bodies:
+        body.pop("based_on", None)
+    return bodies
+
+
+def _bases(page):
+    """The `based_on` of every weight posted (Group 63.6), as sent."""
+    return page.evaluate("() => window.__posts.filter((p) => p.url === '/api/spool/update')"
+                         ".map((p) => p.body.based_on)")
 
 
 def _scans(page):
@@ -250,7 +262,10 @@ def test_a_scanned_spools_box_takes_the_focus_and_its_reading(wo, reading, used)
     ups = _updates(page)
     assert [u["id"] for u in ups] == [57] and ups[0]["updates"]["used_weight"] == used, ups
     unassigned = page.evaluate("() => window.__posts.filter((p) => p.url === '/api/manage_contents').map((p) => p.body.spool_id)")
-    assert unassigned == ([57] if reading == "0" else []), unassigned
+    # PIN UPDATED DELIBERATELY (Groups 63.2 / 63.4): a 0 g reading's archive takes
+    # the spool off its place inside the save itself, so the page posts no
+    # force_unassign after it (it used to, for #57).
+    assert unassigned == [], unassigned
     assert page.evaluate("() => window.__errors") == []
 
 
@@ -1071,12 +1086,12 @@ def test_a_prompt_doesnt_open_while_a_scan_is_answered(wo, prompt):
         _release(page, "details")                 # #8's details are in: its prompt is due
         page.wait_for_timeout(300)
     else:
-        # The empty-weight prompt's first read, held: it is due once let go
-        # (round 11: a 1.3 s wait raced its read on a busy machine).
-        _held(page, "filament")
-        page.evaluate("() => { window.__holdFilament = false; }")
-        _release(page, "filament")
+        # PIN UPDATED DELIBERATELY (Group 63.8): the empty-weight prompt reads its
+        # filament only once it is its turn to open (after the scan's answer and any
+        # typing), so while the scan is held it has read nothing. It used to read
+        # first, and this test held that read (round 11: a 1.3 s wait raced it).
         page.wait_for_timeout(300)
+        assert page.evaluate("() => window.__held.filament.length") == 0
     assert page.locator("[data-overlay-mount='1']").count() == 0, prompt
     later(page, 700)
     press(page, "425", 150)                       # and Enter: held off until the answer
@@ -1091,6 +1106,17 @@ def test_a_prompt_doesnt_open_while_a_scan_is_answered(wo, prompt):
     ups = _updates(page)
     used = 475 if prompt == "tare" else 325
     assert ups[saved_before:] == [{"id": 57, "updates": {"used_weight": used}, "auto_archive": True}] and _filament_writes(page) == 0, ups
+    if prompt == "empty":
+        # Skipped (#57 was scanned since the save) without ever reading its filament,
+        # and it says so. PIN UPDATED DELIBERATELY (Group 63 review, K31): the skip is
+        # checked before the read since the review, so this holds by construction; it
+        # used to read the filament once the box was empty, and the pin held only
+        # because it sampled before that read.
+        page.wait_for_function("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                               ".some((t) => t.innerText.includes(\"Didn't ask for #8's empty spool weight\"))",
+                               timeout=5000)
+        assert page.evaluate("() => window.__held.filament.length") == 0
+        assert page.locator("#fcc-archive-empty-overlay").count() == 0
 
 
 def test_a_save_that_reads_its_details_first_moves_the_focus_on_at_once(wo):
@@ -1263,6 +1289,10 @@ def test_a_key_typed_on_another_rows_save_button_while_a_scan_is_answered_goes_w
     press(page, "25", 150)
     _saved(page)
     assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
+    # Group 63.6: the save says what its reading was worked out from (#57's 750 g
+    # total and 100 g used, as the list read them).
+    # (`screen`: the Group 63 review, C3, updated deliberately.)
+    assert _bases(page) == [{"mode": "net", "capacity": 750, "used": 100, "screen": "list"}], _bases(page)
 
 
 def test_a_backspace_takes_back_a_key_held_for_a_scan(wo):

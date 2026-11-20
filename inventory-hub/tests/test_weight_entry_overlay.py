@@ -67,7 +67,12 @@ def test_mode_tab_switch_updates_label_and_input_type(page: Page) -> None:
     page.click(".fcc-we-tab[data-mode='gross']")
     expect(page.locator("#fcc-we-input-label")).to_contain_text("Scale reading WITH spool")
     expect(page.locator("#fcc-we-hint")).to_contain_text("(gross − empty_tare)")
-    assert page.evaluate("() => document.getElementById('fcc-we-input').type") == "number"
+    # PIN UPDATED DELIBERATELY (Group 63.9(b); the Group 63 review, K10): Gross, Net and
+    # Set Used are text boxes read strictly as grams (window.parseGramsReading), so a
+    # reading typed in kg, lb or oz or with a decimal comma is refused in words; a
+    # number box kept only its digits.
+    assert page.evaluate("() => document.getElementById('fcc-we-input').type") == "text"
+    assert page.evaluate("() => document.getElementById('fcc-we-input').getAttribute('inputmode')") == "decimal"
 
     page.click(".fcc-we-tab[data-mode='additive']")
     assert page.evaluate("() => document.getElementById('fcc-we-input').type") == "text"

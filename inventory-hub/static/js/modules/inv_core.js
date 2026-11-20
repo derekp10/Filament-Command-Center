@@ -1421,6 +1421,10 @@ const installWeightScanCapture = ({ match, onScan }) => {
         if (e.key.length !== 1 || !WEIGHT_TYPED.test(e.key) || e.ctrlKey || e.altKey || e.metaKey) return null;
         if (!t.closest || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable
             || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return null;
+        // A dialog drawn inside the weight window (Force Location's list, opened over
+        // the weigh-out list from the refill question: Group 63 review, K03) keeps
+        // its own keys: a digit typed on its buttons is no reading for a spool.
+        if (t.closest('.swal2-container')) return null;
         if (scanBuf()) return null;                  // a scan's key: one is arriving
         const scope = t.closest('[data-fcc-weight-keys]');
         if (!scope) return null;
@@ -1452,6 +1456,7 @@ const installWeightScanCapture = ({ match, onScan }) => {
     const unholdLast = (e, t) => {
         if (e.ctrlKey || e.altKey || e.metaKey || !t.closest || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
             || t.isContentEditable || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return false;
+        if (t.closest('.swal2-container')) return false;    // a dialog of its own (see ownBox)
         const scope = t.closest('[data-fcc-weight-keys]');
         return !!(scope && typeof scope.fccWeightUnhold === 'function' && scope.fccWeightUnhold(1));
     };
@@ -2097,7 +2102,8 @@ let _fccConfirmSeq = 0;
  *     2026-10-21): 'warning' (amber, btn-warning), 'info' (cyan, btn-info),
  *     'secondary' (grey, btn-secondary), 'light' (btn-outline-light), 'dark'
  *     (btn-dark), 'danger', 'purple' (btn-purple, global.css: "No box" in
- *     "Record it as coming from…"). Defaults: confirm = theme, store 'info',
+ *     "Record it as coming from…"), 'success' (btn-success: the refill
+ *     question's "Back on <head>"). Defaults: confirm = theme, store 'info',
  *     cancel 'secondary'. Pass the tone of the button each QR mirrors.
  *   alignTo: optional (Derek, 2026-10-22: "align under the button they
  *     correspond to"): the element holding the buttons the QRs stand for,
@@ -2123,6 +2129,9 @@ let _fccConfirmSeq = 0;
 // (#a98eda, 6:1 on the dialog).
 const QR_TONES = {
     warning:   { border: '#ffc107', caption: '#ffc107', bg: '#1a1608' },
+    // Bootstrap's btn-success (the refill question's "Back on <head>", Group 63
+    // review); its caption a lighter green of the same family, 7:1 on the dialog.
+    success:   { border: '#198754', caption: '#75d69c', bg: '#0b1a12' },
     info:      { border: '#4fa2c9', caption: '#8fd3f0', bg: '#0d1a20' },
     secondary: { border: '#6c757d', caption: '#adb5bd', bg: '#0f1014' },
     light:     { border: '#dee2e6', caption: '#dee2e6', bg: '#0f1014' },

@@ -332,7 +332,9 @@ def test_force_location_forwards_what_the_picker_showed():
     the placement: it must forward both fields, and send the two "changed"
     refusals back to the picker as 'cancelled' (it opens again)."""
     src = (MODULES / "inv_details.js").read_text(encoding="utf-8")
-    start = src.index("window.promptEditLocation = ")
+    # Group 63.1: Force Location's move lives in window.fccForceMove, lifted out of
+    # window.promptEditLocation so the refill question shares it.
+    start = src.index("window.fccForceMove = ")
     body = src[start:src.index("\n};", start)]
     assert "original.expected_residents = pl.expected_residents" in body
     assert "original.expected_occupant = pl.expected_occupant" in body

@@ -154,6 +154,7 @@ import startup_migrations  # noqa: E402
 from startup_migrations import MAX_LOCATIONS_BACKUPS, _prune_locations_backups  # noqa: E402
 startup_migrations.run_startup_migrations()
 startup_migrations.resurface_pending_cancel_reviews()
+startup_migrations.resurface_pending_archive_takeoffs()
 startup_migrations.resurface_pending_attr_migrations()
 
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
@@ -231,6 +232,8 @@ from routes_inventory import (  # noqa: E402,F401
 # Group 49.2a: the Low-stock list's route (re-exported like the rest above),
 # and its "Excluded" mark (2026-10-20).
 from routes_inventory import api_stock_report, api_filament_stock_exclusion  # noqa: E402,F401
+# Group 63.2: the Activity Log line's "Take it off" for a spool a weigh archived in place.
+from routes_inventory import api_spool_archive_takeoff  # noqa: E402,F401
 
 # L316 step 6: the scan pipeline (identify_scan dispatcher, buffer/clear,
 # manage_contents, update_filament + edit-log formatter) and the Prusament

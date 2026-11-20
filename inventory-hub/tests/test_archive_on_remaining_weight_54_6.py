@@ -296,17 +296,18 @@ def _on_xl1_from_pm_db_1():
 
 
 @pytest.mark.parametrize("failure", READ_FAILURES, ids=READ_FAILURE_IDS)
-def test_the_fallback_row_on_a_spool_fcc_couldnt_read_archives_it_in_place_and_its_box_lets_go(client, failure):
+def test_the_fallback_row_on_a_spool_fcc_couldnt_read_is_taken_off_by_the_save_itself(client, failure):
     """#57 is on XL-1, loaded from the single-slot box PM-DB-1. The weigh-out row's
-    fallback, with Auto-Archive on, sends {remaining_weight: 0, archived: true} and
-    then force-unassigns, as the page does (inv_weigh_out.js). FCC's reads of #57
-    fail during the first call (the route's and update_spool's own); the pre-merge
-    extras read answers. The write goes out as the page sent it, so #57 is archived
-    where it is with its trail, and the force-unassign takes it off XL-1 and lets
-    PM-DB-1 go, as before 54.6. RED on d60c86e: the edge decided from the weight
-    alone, the PATCH blanked the location and the trail without knowing where #57
-    was (no note), so the edge saw no head, the route's `pre` was empty, the
-    force-unassign found the trail blank, and PM-DB-1 stayed bound to XL-1."""
+    fallback, with Auto-Archive on, sends {remaining_weight: 0, archived: true}.
+    FCC's reads of #57 fail during the call (the route's and update_spool's own);
+    the pre-merge extras read answers. The write goes out as the page sent it, so
+    #57 is archived where it is; then the route takes it off itself, in the same
+    request (Group 63.2), from the record Spoolman answered: Unassigned, its trail
+    cleared, a note saying XL-1, and PM-DB-1 lets go of XL-1.
+
+    PIN UPDATED DELIBERATELY (Group 63.2 / 63.4): it pinned the page's own
+    force-unassign as the second call that took the spool off, which a closed tab
+    never sent, leaving it archived on XL-1. RED on e1b22f4."""
     sm = _UnreadSpoolman(_on_xl1_from_pm_db_1(), failure=failure)
     store = LocationsStore(ROWS)
     sm.blind = True
@@ -314,23 +315,17 @@ def test_the_fallback_row_on_a_spool_fcc_couldnt_read_archives_it_in_place_and_i
                              "auto_archive": True}, store)
     sm.blind = False
     assert res["status"] == "success", res
-    (sid, first), = sm.patch_bodies
-    assert sid == 57 and first == {"remaining_weight": 0, "archived": True}, first
-    assert "location" not in first and "extra" not in first, first
-    spool = sm.spools[57]
-    assert spool["archived"] is True and spool["location"] == "XL-1", spool
-    assert spool["extra"]["physical_source"] == "PM-DB-1", spool
-    assert "fcc_pre_archive_location" not in spool["extra"], spool
-
-    out = run_move(sm, probe=IDLE, store=store, printer_map=PRINTER_MAP,
-                   call=lambda: client.post("/api/manage_contents", json={
-                       "action": "force_unassign", "spool_id": 57, "location": ""})).get_json()
-    assert out.get("success") is True, out
+    assert res.get("location_now") == "" and "still_at" not in res, res
+    (sid, first), (sid2, second) = sm.patch_bodies
+    assert sid == sid2 == 57 and first == {"remaining_weight": 0, "archived": True}, first
+    assert second["location"] == "" and "extra" in second, second
     spool = sm.spools[57]
     assert spool["archived"] is True and spool["location"] == "", spool
     assert all(spool["extra"].get(k) == "" for k in TRAIL), spool
+    assert spool["extra"]["fcc_pre_archive_location"] == "XL-1", spool
     assert store.bound("PM-DB-1") == "", store.row("PM-DB-1")
     assert _logs("PM-DB-1 detached from XL-1"), state.RECENT_LOGS
+    assert _logs("Took archived Spool #57 off XL-1"), state.RECENT_LOGS
 
 
 @pytest.mark.parametrize("failure", READ_FAILURES, ids=READ_FAILURE_IDS)
@@ -360,21 +355,22 @@ def test_update_spool_never_runs_the_edge_on_a_spool_it_couldnt_read(http, monke
 PRINTING = _probe_for({"XL"})
 
 
-@pytest.mark.parametrize("blind, where", [(False, ""), (True, "XL-1")], ids=["read", "unread"])
-def test_the_answer_says_where_the_spool_is_after_the_write(client, blind, where):
-    """RED: the save's answer carries `location_now`, where Spoolman's answer has
-    the spool once the write landed, so the weigh page knows whether the archive
-    already took it off its place: '' when FCC read #57 (the edge did), 'XL-1'
-    when it couldn't (R1-1: archived where it is, for the page's force-unassign to
-    take off). On the base the answer had no such key."""
+@pytest.mark.parametrize("blind", [False, True], ids=["read", "unread"])
+def test_the_answer_says_where_the_spool_is_after_the_write(client, blind):
+    """The save's answer carries `location_now`, where the spool is once the write
+    landed: '' whether FCC read #57 (the archive edge took it off) or couldn't (the
+    route's own take-off did, Group 63.2), and no `still_at`.
+
+    PIN UPDATED DELIBERATELY (Group 63.2): the unread case answered 'XL-1', for the
+    page's own force-unassign to take off. RED on e1b22f4 for "unread"."""
     sm = _UnreadSpoolman(_on_xl1_from_pm_db_1(), failure=None)
     sm.blind = blind
     res = _post(sm, client, {"id": 57, "updates": {"remaining_weight": 0, "archived": True},
                              "auto_archive": True}, LocationsStore(ROWS))
     sm.blind = False
     assert res["status"] == "success", res
-    assert res.get("location_now") == where, res
-    assert sm.spools[57]["location"] == where, sm.spools[57]
+    assert res.get("location_now") == "" and "still_at" not in res, res
+    assert sm.spools[57]["location"] == "", sm.spools[57]
 
 
 def test_the_answer_names_a_place_the_save_left_alone(client):
@@ -387,14 +383,15 @@ def test_the_answer_names_a_place_the_save_left_alone(client):
     assert res.get("location_now") == "CR-SHELF", res
 
 
-def test_the_archives_own_unassign_takes_an_unread_spool_off_a_printing_head(client):
-    """The server half of R4-1 (green on the base too: force_unassign has always
-    taken `confirm_active_print`). #57 is on XL-1 from PM-DB-1 and XL is printing.
-    FCC couldn't read #57, so the weigh-out fallback's write archives it in place
-    (R1-1); the page's own unassign, which answers the print question itself as
-    the archive edge never asks one, takes it off XL-1 and lets PM-DB-1 go. Without
-    `confirm_active_print` the same request asks instead and writes nothing: the
-    answer the page used to ignore, leaving an archived spool on a printing head."""
+def test_the_saves_own_take_off_takes_an_unread_spool_off_a_printing_head(client):
+    """#57 is on XL-1 from PM-DB-1 and XL is printing. FCC couldn't read #57, so the
+    weigh-out fallback's write archives it in place (R1-1); the route's own take-off
+    (Group 63.2) asks nothing about the print, as the archive edge never asks one (a
+    spool weighed empty is in the person's hand, not feeding the head), and takes it
+    off XL-1 in the same request, PM-DB-1 letting go.
+
+    PIN UPDATED DELIBERATELY (Group 63.2 / 63.4): it pinned the page's force-unassign,
+    whose request had to carry `confirm_active_print` (review R4-1). RED on e1b22f4."""
     sm = _UnreadSpoolman(_on_xl1_from_pm_db_1(), failure=None)
     store = LocationsStore(ROWS)
     sm.blind = True
@@ -403,20 +400,7 @@ def test_the_archives_own_unassign_takes_an_unread_spool_off_a_printing_head(cli
                        "id": 57, "updates": {"remaining_weight": 0, "archived": True},
                        "auto_archive": True})).get_json()
     sm.blind = False
-    assert res["status"] == "success", res
-    assert sm.spools[57]["archived"] is True and sm.spools[57]["location"] == "XL-1", sm.spools[57]
-
-    asked = run_move(sm, probe=PRINTING, store=store, printer_map=PRINTER_MAP,
-                     call=lambda: client.post("/api/manage_contents", json={
-                         "action": "force_unassign", "spool_id": 57, "location": ""})).get_json()
-    assert asked.get("success") is False and asked.get("require_confirm") is True, asked
-    assert sm.spools[57]["location"] == "XL-1" and store.bound("PM-DB-1") == "XL-1"
-
-    out = run_move(sm, probe=PRINTING, store=store, printer_map=PRINTER_MAP,
-                   call=lambda: client.post("/api/manage_contents", json={
-                       "action": "force_unassign", "spool_id": 57, "location": "",
-                       "confirm_active_print": True})).get_json()
-    assert out.get("success") is True, out
+    assert res["status"] == "success" and res.get("location_now") == "", res
     spool = sm.spools[57]
     assert spool["archived"] is True and spool["location"] == "", spool
     assert all(spool["extra"].get(k) == "" for k in TRAIL), spool

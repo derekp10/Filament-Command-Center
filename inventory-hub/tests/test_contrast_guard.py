@@ -1455,6 +1455,30 @@ def test_the_wizards_tare_from_the_filament_is_readable(page: Page, base_url: st
     conftest.close_wizard(page)
 
 
+def test_the_missing_tare_questions_offer_is_readable(page: Page, base_url: str):
+    """Group 63.9(a), Derek's option 2 (2026-11-19, the Group 63 review's round 4): a
+    new spool's offered empty weight is a "Use about 245 g" button beside its words,
+    on the missing-tare question's dark ground. Scored from the dialog (the guard
+    scores descendants only), both proved scored. Every write is answered in the
+    browser, and the question is cancelled: nothing is saved."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.promptMissingEmptyWeight === 'function'"
+                           " && typeof window.newSpoolTareOfferWords === 'function'", timeout=45_000)
+    page.evaluate("() => { window.promptMissingEmptyWeight({ prefill: 245,"
+                  " offer: window.newSpoolTareOfferWords(1245, 1000, 245) }); }")
+    expect(page.locator("#fcc-missing-empty-weight-overlay-use-offer")).to_be_visible()
+    dialog = page.locator("#fcc-missing-empty-weight-overlay [role=dialog]")
+    mine = ("Use about 245", "If this spool is new and full")   # the guard trims a text to ~80 characters
+    offenders = [o for o in conftest.contrast_offenders(dialog) if any(m in (o.get("text") or "") for m in mine)]
+    assert offenders == [], offenders
+    scored = [o.get("text") or "" for o in conftest.contrast_offenders(dialog, min_ratio=100)]
+    assert all(any(m in t for t in scored) for m in mine), scored
+    page.locator("#fcc-missing-empty-weight-overlay-cancel").click()
+
+
 def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
     """Group 54 review R5-1: the post-archive empty-weight prompt can carry a notice
     (the weigh page's "Spool #99 is archived but still at …", which the prompt
@@ -1480,6 +1504,28 @@ def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
     scored = [o.get("text") for o in conftest.contrast_offenders(dialog, min_ratio=100)]
     assert any("still at Shelf 1" in (t or "") for t in scored), scored
     page.locator("#fcc-archive-later").click()
+
+
+def test_the_refill_question_is_readable(page: Page, base_url: str):
+    """Group 63.1: the question a refill after a toolhead asks (window.askRefillPlace):
+    its title, words, answers (Back on the head greyed out, its reason line in yellow)
+    and the scan line, on its dark ground. Made-up names; every write is answered in
+    the browser, and Leave it Unassigned closes it, so nothing is moved. Scored from
+    the panel (the guard scores descendants only), and the reason line is proved
+    scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.askRefillPlace === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.askRefillPlace(42, { place: 'HEAD-1', room: 'ROOM-1', held_by: [99] }); }")
+    panel = page.locator("#fcc-refill-place .fcc-refill-panel")
+    expect(panel).to_be_visible()
+    assert conftest.contrast_offenders(panel) == [], conftest.contrast_offenders(panel)
+    scored = [o.get("text") for o in conftest.contrast_offenders(panel, min_ratio=100)]
+    assert any("HEAD-1 holds #99 now" in (t or "") for t in scored), scored
+    page.locator("#fcc-refill-leave").click()
 
 
 @pytest.mark.usefixtures("require_server")

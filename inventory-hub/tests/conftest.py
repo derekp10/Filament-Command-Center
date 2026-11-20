@@ -86,7 +86,8 @@ DEV_LOCATIONS_FILE = os.path.join(_HUB_DIR, "data", "locations.json")
 # spoolman_api and every route module import locations_db). A module that starts
 # reading it goes here too.
 _READS_FCC_DATA_DIR = ("locations_db", "cancel_fetch_store", "cancel_review_store",
-                       "print_deduct_ledger", "print_tracker_store", "attr_migration")
+                       "print_deduct_ledger", "print_tracker_store", "attr_migration",
+                       "archive_takeoff")
 _DATA_DIR_ROOT = os.path.join(tempfile.gettempdir(), "fcc-pytest-data")
 _DATA_DIR_MAX_AGE_S = 24 * 3600
 # What a dev locations.json that won't parse is copied as: JSON that won't parse
@@ -2385,6 +2386,24 @@ def _isolate_attr_migration_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         attr_migration, "_HIDDEN_PATH", str(tmp_path / "attr_hidden_choices.json")
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_archive_takeoff_store(tmp_path, monkeypatch):
+    """Group 63.2: each test gets its own store of spools a weigh archived in place
+    that FCC couldn't take off (archive_takeoff). A test that drives a failed
+    take-off writes one down, and logic.perform_smart_move tries every spool written
+    down at a move's target first, so a record left in the run's shared folder would
+    reach later tests' moves. Host-side only, as above."""
+    try:
+        import archive_takeoff  # type: ignore
+    except ImportError:  # pragma: no cover - backend not importable in this env
+        return
+    monkeypatch.setattr(archive_takeoff, "_STORE_PATH", str(tmp_path / "pending_archive_takeoffs.json"))
+    # Its in-memory next tries and said-once marks too (Group 63 review, round 3:
+    # module-level, they carried over from one test to the next).
+    monkeypatch.setattr(archive_takeoff, "_NEXT_AT_MEM", {})
+    monkeypatch.setattr(archive_takeoff, "_STORE_FAIL_SAID", set())
 
 
 # --- Group 38.7 — make `--offline` structurally airtight ---------------------

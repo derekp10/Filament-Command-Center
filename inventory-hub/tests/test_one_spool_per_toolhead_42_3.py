@@ -204,32 +204,40 @@ def _refill(sm, ctx, sid=77, used=960):
         return spoolman_api.update_spool(sid, {"used_weight": used})
 
 
-def test_an_empty_head_gets_its_spool_back_as_today(logs):
+# Group 63.1 (Derek, 2026-11-18: "I think if we ask on a spool correction that adds
+# weight back ... would probably be the best option instead of just auto assigning",
+# then "only after a tool head"): a refill whose note names a toolhead moves the
+# spool nowhere. It stays Unassigned, its note used up, and update_spool's answer
+# carries `fcc_refill_ask` (the head, its room, the spools on it now) for the page
+# to ask with. These three pinned 42.3c's old rule (back onto an empty head, else
+# Unassigned with a warning); rewritten deliberately.
+
+def test_a_refill_after_an_empty_head_asks_instead_of_putting_it_back(logs):
     sm = WeightWireSpoolman(_archived("XL-1"))
     ctx, reads = _wire(sm)
     out = _refill(sm, ctx)
     assert out and not out.get("fcc_warning"), out
-    assert sm.spools[77]["archived"] is False and sm.spools[77]["location"] == "XL-1"
-    assert sm.spools[77]["extra"]["fcc_pre_archive_location"] == "", "the note is used up (call 22)"
+    assert out["fcc_refill_ask"] == {"place": "XL-1", "room": "LR", "held_by": []}, out
+    assert sm.spools[77]["archived"] is False and sm.spools[77]["location"] == ""
+    assert sm.spools[77]["extra"]["fcc_pre_archive_location"] == "", "the note is used up (call 3)"
     assert reads == ["XL-1"]
 
 
-def test_a_head_that_holds_another_spool_now_sends_it_to_unassigned(logs):
-    """Derek, 2026-10-13 (A): Unassigned, with a warning naming the spool there."""
+def test_a_refill_after_a_head_that_holds_another_spool_asks_and_names_it(logs):
     sm = WeightWireSpoolman(_archived("RCOI-1", sid=99))
     ctx, _ = _wire(sm, residents={"RCOI-1": [299]})
     out = _refill(sm, ctx, sid=99)
-    warning = "#99 is back in stock (40 g), but RCOI-1 now holds #299, so it is Unassigned — scan it to where you put it."
-    assert out.get("fcc_warning") == warning, out
+    assert not out.get("fcc_warning"), out
+    assert out["fcc_refill_ask"] == {"place": "RCOI-1", "room": "", "held_by": [299]}, out
     assert sm.spools[99]["archived"] is False and sm.spools[99]["location"] == ""
-    assert (f"⚠️ {warning}", ("WARNING", "ffaa00")) in logs, logs
+    assert any("it came off RCOI-1, and FCC asks where it goes" in m for m, _a in logs), logs
 
 
-def test_a_head_fcc_cant_read_counts_as_taken(logs):
+def test_a_refill_after_a_head_fcc_cant_read_asks_without_naming_who_is_there(logs):
     sm = WeightWireSpoolman(_archived("XL-1"))
     ctx, _ = _wire(sm, read_fails=True)
     out = _refill(sm, ctx)
-    assert "FCC couldn't read XL-1 from Spoolman, so it is Unassigned" in out.get("fcc_warning", ""), out
+    assert out["fcc_refill_ask"] == {"place": "XL-1", "room": "LR", "held_by": None}, out
     assert sm.spools[77]["location"] == ""
 
 
@@ -264,7 +272,9 @@ def test_a_deduct_to_an_archived_spool_still_unarchives_nothing(logs):
     assert sm.spools[77]["archived"] is True and sm.spools[77]["location"] == "" and reads == []
 
 
-def test_spool_update_hands_the_warning_to_the_weigh_screen(client, logs):
+def test_spool_update_hands_the_question_to_the_weigh_screen(client, logs):
+    """Group 63.1: /api/spool/update passes update_spool's `fcc_refill_ask` on as
+    `refill_ask` (the weigh screens ask with it). Was the 42.3c warning test."""
     sm = WeightWireSpoolman(_archived("XL-1"))
     ctx, _ = _wire(sm, residents={"XL-1": [42]})
     with ExitStack() as st:
@@ -272,4 +282,21 @@ def test_spool_update_hands_the_warning_to_the_weigh_screen(client, logs):
             st.enter_context(p)
         body = client.post("/api/spool/update", json={"id": 77, "updates": {"used_weight": 960}}).get_json()
     assert body["status"] == "success", body
-    assert body["warning"].startswith("#77 is back in stock (40 g), but XL-1 now holds #42"), body
+    assert body["refill_ask"] == {"place": "XL-1", "room": "LR", "held_by": [42]}, body
+    assert "warning" not in body, body
+
+
+def test_spool_update_hands_the_warning_to_the_weigh_screen(client, logs):
+    """The 42.3c warning still reaches the weigh screen, now from a one-spool place
+    that isn't a head (Group 63.2): PM-DB-2, a single-slot dryer box, holds #42 now.
+    RED on e1b22f4: a dryer box was restored with no read, so #77 went back into
+    PM-DB-2 beside #42."""
+    sm = WeightWireSpoolman(_archived("PM-DB-2"))
+    ctx, reads = _wire(sm, residents={"PM-DB-2": [42]})
+    with ExitStack() as st:
+        for p in ctx:
+            st.enter_context(p)
+        body = client.post("/api/spool/update", json={"id": 77, "updates": {"used_weight": 960}}).get_json()
+    assert body["status"] == "success", body
+    assert body["warning"].startswith("#77 is back in stock (40 g), but PM-DB-2 now holds #42"), body
+    assert sm.spools[77]["location"] == "" and reads == ["PM-DB-2"]

@@ -56,7 +56,10 @@
             label: 'Gross',
             inputLabel: 'Scale reading WITH spool',
             placeholder: 'e.g. 645',
-            inputType: 'number',
+            // Group 63.9(b): a text box read strictly as grams (parseGramsReading),
+            // as the weigh-out list's are: a number box kept only the digits of
+            // "0.645kg" or "6,45" and saved them.
+            inputType: 'text',
             inputmode: 'decimal',
             hint: 'used = initial − (gross − empty_tare)',
         },
@@ -64,7 +67,7 @@
             label: 'Net',
             inputLabel: 'Filament remaining (no spool)',
             placeholder: 'e.g. 425',
-            inputType: 'number',
+            inputType: 'text',
             inputmode: 'decimal',
             hint: 'used = initial − net',
         },
@@ -80,7 +83,7 @@
             label: 'Set Used',
             inputLabel: 'Target used weight',
             placeholder: 'e.g. 575',
-            inputType: 'number',
+            inputType: 'text',
             inputmode: 'decimal',
             hint: 'used = value (override)',
         },
@@ -298,15 +301,25 @@
                 return parsed.value;
             }
             if (raw === null || raw === undefined || String(raw).trim() === '') return null;
-            const n = Number(raw);
-            return Number.isNaN(n) ? null : n;
+            // Grams only (Group 63.9(b)): NaN for anything else, which the preview
+            // and Save say in words; no unit is converted.
+            return typeof window.parseGramsReading === 'function' ? window.parseGramsReading(raw) : Number(raw);
         }
+
+        const notGrams = () => `"${String(inputEl.value).trim()}" is not a weight in grams: type grams only, like 645 or 645.5`;
 
         function updatePreview() {
             const v = getNumericValue();
             if (v === null || v === undefined) {
                 previewEl.textContent = 'Enter a value to preview…';
                 previewEl.style.color = '#cfd';
+                warnEl.textContent = '';
+                return;
+            }
+            // Additive's own reading (+25, -10) keeps its words below ("Invalid input").
+            if (Number.isNaN(v) && mode !== 'additive') {
+                previewEl.textContent = notGrams();
+                previewEl.style.color = '#f88';
                 warnEl.textContent = '';
                 return;
             }
@@ -361,6 +374,12 @@
                 warnEl.textContent = 'Enter a value first.';
                 return;
             }
+            if (Number.isNaN(v) && mode !== 'additive') {
+                inputEl.focus();
+                warnEl.textContent = notGrams();
+                return;
+            }
+            let typedTare = null;   // the tare the person gave the missing-tare question (Group 63.7)
             let r = window.computeUsedWeight({
                 mode,
                 value: v,
@@ -382,12 +401,33 @@
                 // tare) would be recorded as the spool's full net — overstating
                 // filament by exactly the tare. Force a real tare entry instead.
                 const promptCtx = context || {};
+                // Group 63.9(a) (Derek's idea, Group 24): a new spool (nothing used
+                // yet) whose net weight is known weighs its net plus its own empty
+                // spool, so the reading less the net is offered as its empty weight:
+                // filled in with the sum shown, never saved unasked, never on a
+                // used spool (its filament is no longer its net).
+                const offer = (mode === 'gross' && !allowUnknownInitial && Number(currentUsed) === 0
+                               && Number(initial) > 0 && v > Number(initial))
+                    ? Math.round((v - Number(initial)) * 10) / 10 : null;
+                // With no net known (the wizard), what is on the spool is the reading
+                // less its empty weight: a figure at or above the reading is refused
+                // (review round 3: it wrote a total of 0 g into the form).
+                const ceiling = (mode === 'gross' && typeof window.tareCeiling === 'function')
+                    ? window.tareCeiling(v, Number(initial), Number(currentUsed), { unknownNet: !!allowUnknownInitial })
+                    : null;
                 const tare = await window.promptMissingEmptyWeight({
                     vendor: promptCtx.vendor || '',
                     material: promptCtx.material || '',
                     color: promptCtx.color || '',
                     color_hex: promptCtx.color_hex || spool.color_hex || null,
                     allowSkip: !allowUnknownInitial,
+                    prefill: offer,
+                    offer: offer === null ? '' : window.newSpoolTareOfferWords(v, Number(initial), offer),
+                    // Group 63 review (K05, round 2): the heaviest empty weight this reading allows.
+                    maxTare: ceiling ? ceiling.max : null,
+                    maxTareWhy: ceiling ? ceiling.why : '',
+                    maxTareBelow: !!(ceiling && ceiling.below),
+                    maxTareNext: (ceiling && ceiling.next) || '',
                 });
                 if (tare === null) { inputEl.focus(); return; }  // user cancelled: back to the reading
                 let effectiveMode = mode;
@@ -398,6 +438,7 @@
                     effectiveMode = 'net';
                 } else {
                     currentEmpty = Number(tare);
+                    typedTare = currentEmpty;
                     tareValEl.textContent = fmtG(currentEmpty);
                     if (tareBadgeEl) tareBadgeEl.style.display = 'none';
                 }
@@ -431,6 +472,10 @@
                 // 31.1 — present only on the unknown-original-net path; carries
                 // the derived spool capacity so the caller seeds initial_weight.
                 derived_initial: r.derived_initial,
+                // Group 63.7: the empty weight the person gave the missing-tare
+                // question (null when none was asked): the caller keeps it as the
+                // spool's own (the Quick-Weigh saves it as its spool_weight).
+                typed_tare: typedTare,
             };
             cleanup();
             if (typeof onSubmit === 'function') onSubmit(payload);

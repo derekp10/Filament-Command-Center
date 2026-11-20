@@ -136,7 +136,8 @@
         match: { modal: 'weighOutModal' },
         lines: [
             'Weigh the spools in your scan buffer one after another: each has a box for its weight and a preview of what will be saved.',
-            'The buttons at the top say how a number is read. Gross: the scale reading with the spool on it; FCC takes off the empty spool\'s weight, and asks for it when it doesn\'t know it.',
+            "The buttons at the top say how a number is read. Gross: the scale reading with the spool on it; FCC takes off the empty spool's weight, and asks for it when it doesn't know it.",
+            "The empty weight you give is kept as that spool's own, so it isn't asked again. For a new spool FCC offers one, about the reading less its filament: it can read a little high.",
             'Net: the filament alone. Additive: grams added to what was used, like +25, or -10 to take some back. Set Used: the used weight itself.',
             'Type the weight and press Enter, or click 💾: the line goes away and the next box is ready. A weighed spool stays in your scan buffer.',
             'Auto-Archive 0g is on each time this opens: a spool weighed down to 0 g is archived and taken off its place. Turn it off to keep such a spool where it is.',
@@ -155,9 +156,24 @@
             'Pick a mode: Gross (the scale reading with the spool on it), Net (the filament alone), Additive (grams added to what was used, like +25 or -10) or Set Used (the used weight itself). The preview shows what is left before you save.',
             'Save Update, or Enter, saves it; Cancel, × or Esc closes without saving. Set as default makes the mode you are on the one it opens in next time.',
             'Auto Archive & Eject if Empty (0g) is on each time it opens: a spool saved at 0 g is archived and taken off its place.',
-            'In Gross, when the empty spool\'s weight isn\'t known, Save asks for it first. Skip there saves your number as the filament left (as Net does).',
+            "In Gross, when the empty spool's weight isn't known, Save asks for it first, and keeps the weight you give as this spool's own. For a new spool it offers one, about the reading less its filament: it can read a little high.",
+            'Skip: save as filament left keeps no empty weight: your number is saved as the filament left, as Net does.',
         ],
         scopes: ['Weigh window'],
+    });
+
+    // Group 63.1: a spool weighed back into stock after it left a toolhead.
+    help({
+        key: 'refill-place',
+        title: 'Where a refilled spool goes',
+        match: { overlay: 'fcc-refill-place' },
+        lines: [
+            "FCC asks this when you weigh a spool back above 0 g, or untick Archived, after it was archived off a toolhead: a spool on the scale is in your hand, so FCC doesn't put it back on the toolhead by itself.",
+            'Back on HEAD-1 (or the QR under it) puts it back on the toolhead it came off. It is greyed out, its QR dimmed, when another spool is on HEAD-1 now.',
+            "In ROOM-1 for now (or its QR) puts it loose in the room that toolhead stands in. Pick a place… opens Force Location's list of places.",
+            "Leave it Unassigned (or its QR), or Esc, moves nothing: scan it to where you put it later. Scanning a place's label while this is open puts the spool there.",
+            'A spool that came off a box, cart or shelf goes back there by itself, with no question.',
+        ],
     });
 
     help({
