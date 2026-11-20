@@ -434,10 +434,11 @@ def test_the_empty_weight_prompt_waits_for_a_reading_typed_during_its_read(wo2):
 
 def test_the_offered_empty_weight_is_selected_and_one_as_heavy_as_the_spool_is_refused(wo2):
     """K05. #8 is a new spool with no empty weight on record; Gross 1245 offers 245 g
-    (1245 less its 1000 g). The offer is selected, so 250 typed over it is 250; and
-    1300, heavier than the whole spool on the scale, is refused in words. RED on
-    8153b81: the caret sat in front of the offer, 250245 g was saved, and the 1300
-    would have been taken."""
+    (1245 less its 1000 g). Since Derek's option 2 (2026-11-19, round 4) the box opens
+    empty and the offer is a button of its own, so 1300 typed is 1300, and as heavy as
+    the whole spool on the scale it is refused in words; 250 typed over it (selected
+    by the refusal) is 250. RED on 8153b81: the caret sat in front of the offer,
+    250245 g was saved, and the 1300 would have been taken."""
     page, open_ = wo2
     open_(held=(8,), mode="gross")
     press(page, "1245", 150)
@@ -450,9 +451,11 @@ def test_the_offered_empty_weight_is_selected_and_one_as_heavy_as_the_spool_is_r
     # PIN UPDATED DELIBERATELY (review round 2: the first rule, "at or above the reading", refused an
     # empty spool's own reading; round 3: a spool FCC has nothing used from, its reading above its net,
     # can't be empty, so it is refused at or above the reading, in words that don't call it new: round
-    # 2's "the reading less 85% of its net" refused a part-used spool's true empty weight).
+    # 2's "the reading less 85% of its net" refused a part-used spool's true empty weight; round 4: the
+    # net is FCC's record, and the words say how to record a spool that is empty after all).
     assert err == ("1300 g can't be its empty weight: it must be less than the 1245 g on the scale, which is "
-                   "more than this spool's 1000 g of filament. Check the number."), err
+                   "more than the 1000 g of filament FCC has on this spool. If the spool on the scale is "
+                   "empty, Cancel and weigh it in Net as 0; otherwise check the number."), err
     assert _updates(page) == []
     later(page, 700)
     press(page, "250", 150)

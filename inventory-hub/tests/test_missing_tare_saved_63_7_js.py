@@ -111,8 +111,9 @@ def test_the_weigh_out_list_offers_a_new_spool_its_tare_and_saves_it_as_its_own(
     """RED: no figure was offered, and the tare stayed in the list's session."""
     res = _run(tmp_path, WEIGH, ROW.replace("__USED__", "0").replace("__TARE__", "245"))
     assert res["asked"] == [{"prefill": 245, "offer":
-        # PIN UPDATED DELIBERATELY (Derek's picture walk, 2026-11-18: worded as an estimate).
-        "About 245 g: 1245 g on the scale less the 1000 g of filament its label says. A spool often holds a little more than its label, so this can read high: weigh an empty one to be sure."}], res
+        # PIN UPDATED DELIBERATELY (Derek's picture walk, 2026-11-18: worded as an estimate; 2026-11-19, the
+        # Group 63 review's round 4, his option 2: a button beside words saying it holds only for a new, full spool).
+        "If this spool is new and full: 1245 g on the scale less the 1000 g its label says (a maker's extra filament makes it read high)."}], res
     assert res["updates"] == [{"used_weight": 0, "spool_weight": 245}], res
 
 

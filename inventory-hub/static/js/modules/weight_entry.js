@@ -427,6 +427,7 @@
                     maxTare: ceiling ? ceiling.max : null,
                     maxTareWhy: ceiling ? ceiling.why : '',
                     maxTareBelow: !!(ceiling && ceiling.below),
+                    maxTareNext: (ceiling && ceiling.next) || '',
                 });
                 if (tare === null) { inputEl.focus(); return; }  // user cancelled: back to the reading
                 let effectiveMode = mode;

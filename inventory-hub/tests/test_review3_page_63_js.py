@@ -90,8 +90,11 @@ def test_a_figure_at_the_reading_on_a_spool_with_nothing_used_is_refused_in_word
     later(page, 700)
     press(page, "1050", 150)
     page.wait_for_timeout(50)
+    # PIN UPDATED DELIBERATELY (review round 4): the net is FCC's record, and the words
+    # say how to record a spool that is empty after all.
     assert _err(page) == ("1050 g can't be its empty weight: it must be less than the 1050 g on the scale, which "
-                          "is more than this spool's 1000 g of filament. Check the number."), _err(page)
+                          "is more than the 1000 g of filament FCC has on this spool. If the spool on the scale "
+                          "is empty, Cancel and weigh it in Net as 0; otherwise check the number."), _err(page)
     assert page.evaluate("() => window.__saved.length") == 0
 
 

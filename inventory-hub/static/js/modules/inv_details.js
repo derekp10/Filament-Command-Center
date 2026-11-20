@@ -1045,6 +1045,11 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
     (window.fetchT || fetch)('/api/locations')
         .then(r => r.json())
         .then(locs => {
+            // An answer that isn't a list is no place list (review round 4: FCC's own
+            // answer for a locations.json it can't read, a 500 with a JSON error, drew
+            // a list holding only "-- Unassigned --", and said nothing), as
+            // fccForceMove reads one: the catch below says so and asks again.
+            if (!Array.isArray(locs)) throw new Error((locs && locs.error) || 'the place list is not a list');
             const hostEl = fromCard ? shownHost() : null;
             if (fromCard) {
                 const panel = document.querySelector('.offcanvas.show');
@@ -1696,7 +1701,10 @@ const _weighPause = async (opts) => {
 // answers, heard on the page while it is on top (Group 62.4's rule; K21: a click on
 // its words left them dead). The answers that move take no click for 700 ms after it
 // opens (window.armedClick: the second press of the double click that saved); Leave
-// it Unassigned takes one at once. It waits its turn in the one line of weigh
+// it Unassigned takes one at once, unless the question opened right after the one
+// before it in the line was answered: then no answer takes a press, a keyboard's
+// included, an Enter or an Escape for 700 ms after that answer (_weighTooSoon,
+// review rounds 2 to 4). It waits its turn in the one line of weigh
 // questions (_inWeighLine), then for `opts.settle` / `opts.scanPending` /
 // `opts.waitWhile` (the weigh-out list: a scan being answered, a reading being
 // typed; K13: it opened over a scan and took its spool's reading), and opens only
@@ -1841,7 +1849,13 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
     // (review round 3: a spool scanned in the weigh-out list during the move lost
     // its box's keyboard to the question asked again, and its reading went out as
     // a scan): a scan being answered, a reading being typed, a spool scanned since.
+    // However the turn ends, it stamps the line's answer time (review round 4, the
+    // critic): a turn that ended in a dialog the move opened (its print question, the
+    // slot picker, Force Location's "Cancel Override?") left the stamp at the press
+    // on Back, seconds before, so a double Enter or Escape there answered the next
+    // question unread.
     const settled = (outcome, words) => {
+        _weighAnswered();
         if (outcome === 'failed') {
             const again = Object.assign({}, opts,
                 { notice: words || `#${sid} wasn't moved: ask again, or Leave it Unassigned.` });
@@ -1892,7 +1906,14 @@ const _askRefillPlace = async (spoolId, ask, opts, shown) => {
         hostEl.addEventListener('hidden.bs.modal', () => close('host'), { once: true });
     }
     const armMs = typeof window.questionArmMs === 'function' ? window.questionArmMs() : 700;
-    const armed = (fn) => (typeof window.armedClick === 'function' ? window.armedClick(fn, armMs) : fn);
+    // The line's rule holds for the answers that move too (review round 4: a keyboard's
+    // click on Back, the room or Pick a place…, after an arrow, answered the next
+    // question unread inside its 700 ms). Wrapped once here, so a pointer's arming
+    // still counts from this question's open.
+    const armed = (fn) => {
+        const a = typeof window.armedClick === 'function' ? window.armedClick(fn, armMs) : fn;
+        return (e) => (tooSoon() ? undefined : a(e));
+    };
     const backBtn = ov.querySelector('#fcc-refill-back');
     const roomBtn = ov.querySelector('#fcc-refill-room');
     const pickBtn = ov.querySelector('#fcc-refill-pick');
@@ -2288,7 +2309,11 @@ const _askArchiveEmptyWeight = async (spoolId, filamentId, prefillWeight = null,
     if (saveBtn) saveBtn.onclick = () => { if (!tooSoon()) doSave(); };
     if (laterBtn) laterBtn.onclick = () => { if (!tooSoon()) answered(); };
     if (wtEl) wtEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); if (!tooSoon()) doSave(); }
+        if (e.key === 'Enter') { e.preventDefault(); if (!tooSoon()) doSave(); return; }
+        // A double Space's second press (review round 4) would replace the figure
+        // filled in, selected, with a space. No label starts with a Space, and a weight
+        // typed with its unit takes one only after its digits.
+        if (e.key === ' ' && tooSoon()) e.preventDefault();
     });
     shown();
     const gone = setInterval(() => {

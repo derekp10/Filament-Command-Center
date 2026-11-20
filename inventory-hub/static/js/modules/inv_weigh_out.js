@@ -1070,7 +1070,7 @@ window.saveWeighOutRow = async (idStr) => {
                 { onScanDismiss: unsaved, scanPending: () => !!pendingScan, prefill: offer,
                   offer: offer === null ? '' : window.newSpoolTareOfferWords(reading, Number(details.initial), offer),
                   maxTare: ceiling ? ceiling.max : null, maxTareWhy: ceiling ? ceiling.why : '',
-                  maxTareBelow: !!(ceiling && ceiling.below) }));
+                  maxTareBelow: !!(ceiling && ceiling.below), maxTareNext: (ceiling && ceiling.next) || '' }));
             // Cancelled: back to the target's box (round 7: the focus fell to
             // the page), where the person is: this spool's, unless the save
             // moved them on (round 10: it went back to this one, and the next
@@ -1277,26 +1277,34 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                                 + 'Scan it to where you put it.', 'info', 7000);
                             return;
                         }
-                        // Its host: the weigh-out list, else the window the Quick-Weigh was
-                        // opened over (a spool window, the Location Manager), so Pick a
-                        // place… draws Force Location's list inside it (review round 2);
-                        // with no window, none. The list closes a search panel over it
-                        // first, window or not (round 3). That window is the one on top,
-                        // by its z-index (the page gives each window it shows one above
-                        // the open ones, inv_core.js; round 3: the last one in the page's
-                        // order was the Location Manager under a spool window), a tie
-                        // going to the later one.
+                        // Its host: the window on top, the weigh-out list or the window the
+                        // Quick-Weigh was opened over (a spool window, the Location
+                        // Manager), so Pick a place… draws Force Location's list inside it
+                        // (review round 2); with no window, none. The list closes a search
+                        // panel over it first, window or not (round 3). On top by its
+                        // z-index (the page gives each window it shows one above the open
+                        // ones, inv_core.js; round 3: the last in the page's order was the
+                        // Location Manager under a spool window), a tie going to the later
+                        // one; the weigh-out list too when a window is over it (round 4: a
+                        // Quick-Weigh from the Location Manager opened over the list drew
+                        // the list under the manager). Never a gating dialog (#confirmModal
+                        // and its kin): a question's few seconds, and the refill question
+                        // would close with it.
                         const zOf = (el) => {
                             try {
                                 return (typeof getComputedStyle === 'function'
                                     && parseInt(getComputedStyle(el).zIndex || '0', 10)) || 0;
                             } catch (_) { return 0; }
                         };
-                        const shownModals = Array.from(document.querySelectorAll('.modal.show'));
+                        const GATING = ['confirmModal', 'safetyModal', 'actionModal'];
+                        const listEl = weighOutShown() ? document.getElementById('weighOutModal') : null;
+                        const shownModals = Array.from(document.querySelectorAll('.modal.show'))
+                            .filter((m) => m && !GATING.includes(m.id));
+                        if (listEl && !shownModals.includes(listEl)) shownModals.unshift(listEl);
                         const topModal = shownModals.length
                             ? shownModals.reduce((a, b) => (zOf(b) >= zOf(a) ? b : a)) : null;
                         window.askRefillPlace(id, askRefill, {
-                            host: weighOutShown() ? document.getElementById('weighOutModal') : topModal,
+                            host: topModal,
                             settle: scanSettled, scanPending: () => !!pendingScan,
                             waitWhile: weighReadingBeingTyped,
                             skipIf: () => scansTaken !== takenAtSave,

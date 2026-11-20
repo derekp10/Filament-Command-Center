@@ -1355,31 +1355,43 @@ def api_edit_spool_wizard():
                     elif k not in original_spool:
                          dirty_spool_data[k] = v
 
-                if new_location is not None and dirty_spool_data:
+                archived_at_place = bool(original_spool.get('archived')
+                                         and _loc_key(original_spool.get('location')))
+                if new_location is not None and archived_at_place:
+                    # Group 63 review, round 2: a spool archived AT a place (63.2's
+                    # stuck spool on its head) is never named where it is in this
+                    # write: named, a refill or untick there brought it back in stock
+                    # ON its head beside the spool loaded since. Left out, the refill
+                    # edge's own rule decides (a head or a taken one-spool place: taken
+                    # off first; anywhere else it stays), and it never restores a
+                    # note's place for a spool filed somewhere.
+                    # Review round 3: archived ON a toolhead, it comes off the head in
+                    # this write (Unassigned, its trail blank, as the refill edge takes
+                    # it off), so that edge asks nothing (its Activity Log line said
+                    # "FCC asks where it goes", and nothing asked: the move decides),
+                    # and a spool the Save leaves archived isn't left hidden on the
+                    # head by a move that is asked about or refused. Round 4: whatever
+                    # else the Save changes, nothing included (a Save that changed only
+                    # the Location wrote nothing, so the spool stayed hidden on the
+                    # head, a print question named it, and a single-slot box another
+                    # spool runs from was let go), and an older pre-archive note is
+                    # written '' (the moving rule, _take_archived_off's: the person
+                    # asked for the spool elsewhere, so a later refill restores no
+                    # older place).
+                    off_head = _archived_on_head(original_spool)
+                    if off_head:
+                        spoolman_api._take_off_on_refill(dirty_spool_data, original_spool)
+                        pre_extra = original_spool.get('extra') if isinstance(original_spool.get('extra'), dict) else {}
+                        extra = spoolman_api._extra_of(dirty_spool_data)
+                        for key, value in spoolman_api._archive_note_extras(pre_extra, '').items():
+                            extra.setdefault(key, value)
+                elif new_location is not None and dirty_spool_data:
                     # update_spool's archive and unarchive edges move a spool
                     # themselves when a write names no location (to Unassigned, or
                     # back where it was archived from), and they have always left a
                     # location the caller named alone. The move is the engine's, so
                     # this write names where the spool is now.
-                    # Group 63 review, round 2: except for a spool archived AT a place
-                    # (63.2's stuck spool on its head): named, a refill or untick there
-                    # brought it back in stock ON its head beside the spool loaded
-                    # since. Left out, the refill edge's own rule decides (a head or a
-                    # taken one-spool place: taken off first; anywhere else it stays),
-                    # and it never restores a note's place for a spool filed somewhere.
-                    if not (original_spool.get('archived') and _loc_key(original_spool.get('location'))):
-                        dirty_spool_data['location'] = original_spool.get('location') or ''
-                    else:
-                        # Review round 3: archived ON a toolhead, it comes off the
-                        # head in this write (Unassigned, its trail blank, as the
-                        # refill edge takes it off), so that edge asks nothing (its
-                        # Activity Log line said "FCC asks where it goes", and nothing
-                        # asked: the move decides), and a spool the Save leaves
-                        # archived isn't left hidden on the head by a move that is
-                        # asked about or refused.
-                        off_head = _archived_on_head(original_spool)
-                        if off_head:
-                            spoolman_api._take_off_on_refill(dirty_spool_data, original_spool)
+                    dirty_spool_data['location'] = original_spool.get('location') or ''
                 spool_data = dirty_spool_data
                 state.logger.info(f"DIRTY SPOOL DATA: {dirty_spool_data}")
             else:
@@ -1412,6 +1424,7 @@ def api_edit_spool_wizard():
                     # itself (Group 63.5); landed, it is this Save's answer, with
                     # the refill question and the 42.3c warning it carries.
                     lost = spoolman_api.take_unanswered(spool_id)
+                    unsure = False
                     if (lost is not None and lost.get('landed')
                             and _is_spool_record(lost.get('record'), spool_id)):
                         state.logger.warning(f"Spool #{spool_id}: the edit's answer was lost ({err}), "
@@ -1421,6 +1434,31 @@ def api_edit_spool_wizard():
                             spool_res['fcc_warning'] = lost['warning']
                         if isinstance(lost.get('refill_ask'), dict):
                             spool_res['fcc_refill_ask'] = lost['refill_ask']
+                    elif lost is None and off_head and _write_may_have_landed(err):
+                        # Review round 4: round 3's take-off of a spool archived on a
+                        # head (location '' and its trail blank, maybe nothing else)
+                        # is no archive or un-archive, so update_spool read nothing
+                        # back: it is read here, as /api/spool/update reads a write
+                        # nobody read. Landed, the Save goes on as saved (the box let
+                        # go, the move from Unassigned); it said "Nothing was saved"
+                        # while the spool had come off its head, and its single-slot
+                        # box stayed attached there for good.
+                        back, _answered = spoolman_api.get_spool_answer(spool_id)
+                        landed = spoolman_api.landed_as_sent(back, spool_data) if isinstance(back, dict) else None
+                        if landed and _is_spool_record(back, spool_id):
+                            state.logger.warning(f"Spool #{spool_id}: the edit's answer was lost ({err}), "
+                                                 f"but a read-back shows it landed")
+                            spool_res = dict(back)
+                        elif landed is None:
+                            # Can't tell: written down, so archive_takeoff takes it off
+                            # the head if it is still archived there, and forgets it
+                            # quietly if it came off (K26's rule for a lost weigh).
+                            unsure = True
+                            try:
+                                archive_takeoff.note_stuck(spool_id, off_head, err, quiet=True)
+                            except Exception as e:
+                                state.logger.warning(f"63.2: #{spool_id}'s lost take-off couldn't be "
+                                                     f"written down: {e}")
                 if not spool_res:
                     failed = {
                         "success": False,
@@ -1429,7 +1467,17 @@ def api_edit_spool_wizard():
                     }
                     if new_location is not None:
                         failed.update(spool_saved=False, location_moved=False)
-                        failed["msg"] += f" Nothing was saved, and #{spool_id} was not moved."
+                        if unsure:
+                            said = spoolman_api.refusal_words(err).rstrip()
+                            if not said.endswith(('.', '!', '?')):
+                                said += '.'
+                            failed["may_have_saved"] = True
+                            failed["msg"] = (f"Couldn't tell whether Spool #{spool_id} saved: {said} It may be off "
+                                             f"{off_head} already, and was not moved to "
+                                             f"{new_location or 'Unassigned'}: check where FCC shows it, then save "
+                                             f"again.")
+                        else:
+                            failed["msg"] += f" Nothing was saved, and #{spool_id} was not moved."
                     return jsonify(failed)
                 spool_committed = True
                 # Group 42 review: a write that changed the spool's location off a

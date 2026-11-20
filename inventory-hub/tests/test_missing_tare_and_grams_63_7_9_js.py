@@ -108,18 +108,29 @@ def test_control_skip_saves_as_net_and_keeps_no_tare(entry):
 # ---- 63.9(a): a new spool's tare is offered ----------------------------------------------------------
 
 def test_a_new_spools_tare_is_offered_with_its_sum(entry):
-    """RED: no figure was offered."""
+    """RED: no figure was offered.
+
+    PIN UPDATED DELIBERATELY (Derek, 2026-11-19, the Group 63 review's round 4, his
+    option 2): the box opens empty and the figure is a button of its own beside its
+    words, which say it holds only for a new, full spool ("nothing used" is no proof a
+    spool is full: filled in and selected, one Enter recorded a part-used spool as
+    full). The button puts it in the box, selected, and Enter saves it."""
     page, open_ = entry
     open_("gross", initial=1000, used=0)
     press(page, "1245", 150)
     _prompt_up(page)
     value = page.evaluate(f"() => document.getElementById('{PROMPT_ID}-input').value")
     offer = page.evaluate(f"() => (document.getElementById('{PROMPT_ID}-offer') || {{}}).textContent || ''")
-    assert value == "245", value
-    # PIN UPDATED DELIBERATELY (Derek's picture walk, 2026-11-18: Skip on one line, "Skip: save as filament left";
-    # the offer worded as an estimate, "some brands aren't 100% exact on the 1kg filament").
-    assert offer == "About 245 g: 1245 g on the scale less the 1000 g of filament its label says. A spool often holds a little more than its label, so this can read high: weigh an empty one to be sure.", offer
+    use = page.evaluate(f"() => (document.getElementById('{PROMPT_ID}-use-offer') || {{}}).textContent || ''")
+    assert value == "", value
+    assert use.strip() == "Use about 245 g", use
+    assert offer == ("If this spool is new and full: 1245 g on the scale less the 1000 g its label says "
+                     "(a maker's extra filament makes it read high)."), offer
+    press(page, "", 150)   # an Enter in the empty box takes nothing
     assert page.evaluate("() => window.__saved.length") == 0   # never saved unasked
+    page.click(f"#{PROMPT_ID}-use-offer")
+    assert page.evaluate(f"""() => {{ const b = document.getElementById('{PROMPT_ID}-input');
+        return [b.value, b.selectionStart, b.selectionEnd, document.activeElement === b]; }}""") == ["245", 0, 3, True]
     press(page, "", 150)   # the person's Enter on it
     page.wait_for_function("() => window.__saved.length === 1")
     assert _saved(page) == [{"mode": "gross", "value": 1245, "tare": 245, "typed": 245}], _saved(page)
