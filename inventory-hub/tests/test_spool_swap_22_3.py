@@ -278,13 +278,17 @@ def test_snapshot_recaptured_on_job_change():
     assert e["snapshot_job"] == "10" and e["start_spools"] == {"0": 200}
 
 
-def test_capture_skipped_when_flag_off():
+def test_capture_runs_with_the_flag_off():
+    """Group 64.3 (2): the start snapshot is taken whatever `fcc_owns_completion_deduct`
+    says. A cancel FCC always owns reads it to see a spool changed during the print;
+    with the flag off (a new install's default) it used to be skipped, and the
+    cancel couldn't see the change."""
     snap = MagicMock(return_value={0: 100})
     with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=False), \
          patch.object(print_deduct, "_snapshot_active_spools", snap):
         _latch("PRINTING", {"filename": "f.gcode", "job_id": 9, "progress": 0.4})
-    snap.assert_not_called()
-    assert "start_spools" not in app_module._PRINT_TRACKER["XL"]
+    snap.assert_called_once()
+    assert app_module._PRINT_TRACKER["XL"]["start_spools"] == {"0": 100}
 
 
 def test_capture_skipped_when_first_seen_paused():

@@ -215,17 +215,22 @@ def test_resume_blip_snapshot_skips_and_retries():
             app_module._PRINT_TRACKER["XL"]["swap_log"]] == [(100, 200)]
 
 
-def test_resume_capture_skipped_when_flag_off():
-    """With the completion-ownership flag off, neither the start NOR the resume snapshot
-    runs (deduct_completed_print is the only consumer)."""
-    snap = MagicMock(return_value={0: 100})
+def test_resume_capture_runs_with_the_flag_off():
+    """Group 64.3 (2): with the completion-ownership flag off, the start AND the
+    resume snapshot still run: the cancel and ambiguous reviews read them too (since
+    the print-end hotfix of 2026-11-11), not only deduct_completed_print. A swap at
+    the pause is recorded."""
+    snap = MagicMock(side_effect=[{0: 100}, {0: 200}])
     with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=False), \
-         patch.object(print_deduct, "_snapshot_active_spools", snap):
+         patch.object(print_deduct, "_snapshot_active_spools", snap), \
+         patch.object(app_module.state, "add_log_entry"):
         _latch("PRINTING", dict(JOB))
         _latch("PAUSED", dict(JOB))
         _latch("PRINTING", dict(JOB))
-    snap.assert_not_called()
-    assert "swap_log" not in app_module._PRINT_TRACKER.get("XL", {})
+    assert snap.call_count == 2
+    entry = app_module._PRINT_TRACKER["XL"]
+    assert entry["start_spools"] == {"0": 100}
+    assert [(ev["from_sid"], ev["to_sid"]) for ev in entry["swap_log"]] == [(100, 200)]
 
 
 def test_job_change_pops_swap_log():

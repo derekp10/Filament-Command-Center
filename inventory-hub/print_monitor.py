@@ -839,12 +839,14 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                         float(entry.get('pause_progress', 0.0)))
                     swap_runout = bool(entry.get('saw_attention'))
         # 22.3 (off-lock, like get_printer_job): capture the start-spool snapshot for
-        # mid-print swap detection. ONLY when FCC owns completions (taking it whatever
-        # the flag says is a follow-up). Since the hotfix of 2026-11-11 the cancel and
-        # ambiguous reviews read it too, to check the heads read when the print ended.
+        # mid-print swap detection. Taken whatever `fcc_owns_completion_deduct` says
+        # (Group 64.3 (2)): since the hotfix of 2026-11-11 the cancel and ambiguous
+        # reviews read it too, to check the heads read when the print ended, and a
+        # cancel FCC always owns; without it a cancel couldn't see a spool changed
+        # during the print on an install that leaves completions to another tool.
         # _snapshot_active_spools is best-effort ({} on failure), so a blip leaves
         # start_spools unset and the completion degrades to today's auto-apply.
-        if need_snapshot and _fcc_owns_completion_deduct():
+        if need_snapshot:
             snap = print_deduct._snapshot_active_spools(printer_name, fb_url)
             with _PRINT_TRACKER_LOCK:
                 e = _PRINT_TRACKER.get(printer_name)
@@ -862,12 +864,13 @@ def _track_print_edge(printer_name, state_info, fb_url):
         # against the mapping in effect for the segment just printed (start_spools +
         # any prior swaps) — each clean 1→1 sid change appends an ordered swap_log
         # event. Best-effort: an empty/failed snapshot just skips (retries next resume).
-        # Same flag gate + same-job re-check as the start snapshot. This release-then-
+        # Taken whatever the flag says, as the start snapshot (64.3 (2)), with the same
+        # same-job re-check. This release-then-
         # re-acquire is safe because _track_print_edge has a SINGLE sequential caller
         # (the _cancel_monitor daemon's per-printer loop) — the job_id re-check guards a
         # fast job change, not a concurrent same-job writer (none exists). If this is ever
         # re-attached to the dashboard pulse (it historically was), revisit the locking.
-        if need_swap_snapshot and _fcc_owns_completion_deduct():
+        if need_swap_snapshot:
             snap = print_deduct._snapshot_active_spools(printer_name, fb_url)
             if snap:
                 with _PRINT_TRACKER_LOCK:
