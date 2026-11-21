@@ -4299,6 +4299,69 @@ def _lines_left_unplaced(rec, kind, charges):
     return under, over, {k: v for k, v in picked.items() if k in under or k in over}
 
 
+def _rows_left_off(rec, charges, updates):
+    """Group 64.2 (5): on an Apply whose ask is fixed (`requested_total` on the
+    record: a retry after a failed write, an uncharged-grams card kept by an earlier
+    Apply), what each of the card's rows was charged less, or more, than the card
+    showed for it, as the ledger's shortfall counts it: ([{sid, line, toolhead,
+    grams}] short, [same] over). A row's grams come from its pick (`charges`' `row`,
+    kept or moved to another spool) or, from an older page, its `updates` entry;
+    a row the Apply leaves out is short all of its grams. On any other Apply the ask
+    is what was typed, so nothing is returned."""
+    if rec.get("requested_total") is None:
+        return [], []
+    typed = {}
+    if isinstance(charges, list):
+        for c in charges:
+            if isinstance(c, dict) and c.get("row") is not None:
+                try:
+                    typed[str(c.get("row"))] = typed.get(str(c.get("row")), 0.0) + float(c.get("grams") or 0)
+                except (TypeError, ValueError):
+                    continue
+    elif isinstance(updates, dict):
+        for k, v in updates.items():
+            try:
+                typed[str(k)] = float(v or 0)
+            except (TypeError, ValueError):
+                continue
+    short, over = [], []
+    for r in rec.get("spools") or []:
+        if not isinstance(r, dict) or r.get("sid") is None:
+            continue
+        try:
+            d = round(float(r.get("grams") or 0) - typed.get(str(r.get("sid")), 0.0), 2)
+        except (TypeError, ValueError):
+            continue
+        entry = {"sid": r.get("sid"), "toolhead": r.get("toolhead"),
+                 "line": None if r.get("position") is None else str(_norm_pos(r.get("position")))}
+        if d > 0.005:
+            short.append(dict(entry, grams=d))
+        elif d < -0.005:
+            over.append(dict(entry, grams=-d))
+    return short, over
+
+
+def _join_row_grams(*lists):
+    """Row entries ({sid, line, toolhead, grams}) joined across `lists`, a spool's
+    grams on one line added up, in the order each was first named."""
+    out = []
+    for lst in lists:
+        for e in lst if isinstance(lst, list) else []:
+            if not isinstance(e, dict):
+                continue
+            have = next((o for o in out if str(o.get("sid")) == str(e.get("sid"))
+                         and o.get("line") == e.get("line")), None)
+            try:
+                g = float(e.get("grams") or 0)
+            except (TypeError, ValueError):
+                continue
+            if have is None:
+                out.append(dict(e, grams=round(g, 2)))
+            else:
+                have["grams"] = round(float(have["grams"]) + g, 2)
+    return out
+
+
 def _add_grams(*maps):
     """{line(str): grams} summed across `maps` (each a dict, or None)."""
     out = {}
@@ -4416,6 +4479,41 @@ def _uncharged_parts(rec):
     return parts, named, round(listed, 2)
 
 
+def _row_where(rec, entry):
+    """Where a row entry's head is, as the line names a head: "T6 · RCOI-7"."""
+    if entry.get("line") is not None:
+        return _esc(_line_where(rec, entry["line"]))
+    return _esc(entry.get("toolhead") or "its head")
+
+
+def _row_parts(rec):
+    """Group 64.2 (5): ([short words], [over words], [spools named], grams short,
+    grams over) for the card rows an Apply with a fixed ask charged less or more
+    than the card showed (`rows_short` / `rows_over`, _rows_left_off): "25.32 g
+    more on T6 · RCOI-7 left off #243's row", "24.68 g more than the card showed
+    were typed for #243's row on T6 · RCOI-7"."""
+    shorts, overs, named = [], [], []
+    short_g = over_g = 0.0
+    for key, words, out in (("rows_short", "{g} g more on {where} left off #{sid}'s row", shorts),
+                            ("rows_over", "{g} g more than the card showed were typed for #{sid}'s row "
+                                          "on {where}", overs)):
+        for e in rec.get(key) if isinstance(rec.get(key), list) else []:
+            try:
+                g = float(e.get("grams") or 0)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if g <= 0.05:
+                continue
+            out.append(words.format(g=_g_words(g), where=_row_where(rec, e), sid=_esc(e.get("sid"))))
+            if str(e.get("sid")) not in named:
+                named.append(str(e.get("sid")))
+            if key == "rows_short":
+                short_g += g
+            else:
+                over_g += g
+    return shorts, overs, named, round(short_g, 2), round(over_g, 2)
+
+
 def _overplaced_parts(rec):
     """([part words], [spools named], grams) for the lines whose picks were typed
     beyond what FCC worked out where the ledger's ask is a total (a no_spool card,
@@ -4454,7 +4552,10 @@ def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
     another's are said ("but ... were typed for ..."). "Said above" counts only
     the grams a picked spool couldn't take, as the Apply loop logged them
     (`clamped`, with an earlier Apply's on a retry); anything else no spool took is
-    said without a reason ("more that went to no spool")."""
+    said without a reason ("more that went to no spool"). Group 64.2 (5): grams a
+    card row was charged less or more than the card showed, on an Apply whose ask
+    was fixed (a retry, a kept card), are named with the row's spool and head
+    (`_row_parts`); "no spool" is left only for grams nothing on record explains."""
     file = _esc(rec.get('filename'))
     try:
         on_card = float(residue_card.get("total_grams") or 0) if residue_card else 0.0
@@ -4468,6 +4569,7 @@ def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
     try:
         parts, named, listed = _uncharged_parts(rec)
         overs, over_named, over_g = _overplaced_parts(rec)
+        row_short, row_over, row_named, row_short_g, row_over_g = _row_parts(rec)
         said = round(max(0.0, float(clamped or 0) - on_card), 2)
     except Exception as e:
         state.logger.debug(f"uncharged heads unnamed for {printer}: {e}")
@@ -4479,14 +4581,16 @@ def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
     clauses = []
     if said > 0.05:
         clauses.append(f"and {_g_words(said)} g the picked spools couldn't take (said above)")
-    rest = round(total - listed - (said if said > 0.05 else 0.0) + over_g, 2)
+    clauses.extend(f"and {w}" for w in row_short)
+    overs = overs + row_over
+    rest = round(total - listed - (said if said > 0.05 else 0.0) - row_short_g + over_g + row_over_g, 2)
     if rest > 0.05:
         clauses.append(f"and {_g_words(rest)} g more that went to no spool")
     elif rest < -0.05:
         overs = overs + [f"{_g_words(-rest)} g more than the card asked were typed for other spools"]
     if overs:
         clauses.append("but " + ", and ".join(overs))
-    named.extend(s for s in over_named if s not in named)
+    named.extend(s for s in over_named + row_named if s not in named)
     who = "the spools" if not named else ("it" if len(named) == 1 and not clauses else "them")
     state.add_log_entry(
         f"⚠️ {_esc(printer)}: {total:.2f}g of '{file}' wasn't charged to any spool: "
@@ -4629,6 +4733,10 @@ def api_cancel_deduct_confirm():
     # left unpicked, or a clamp). A retry re-stashed by an earlier Apply carries
     # it, with the grams that Apply already charged; otherwise this Apply sets it.
     requested_total = rec.get("requested_total")
+    # Group 64.2 (5): what this Apply charges each of the card's rows short of, or
+    # beyond, what the card showed, where the ask is fixed; read before the picks
+    # replace the rows, and kept on the record (a retry carries it) for the line.
+    rows_short, rows_over = _rows_left_off(rec, data.get('charges'), updates)
     # 43.3 — explicit picks from the card's spool picker. They become this
     # review's rows and run through the same clamped, idempotent per-spool loop
     # below. Without `charges` the old behaviour stands (a cached page, the
@@ -4747,6 +4855,12 @@ def api_cancel_deduct_confirm():
                         "msg": "Usage couldn't be measured — weigh the spool and "
                                "adjust it directly, or Discard this review."})
 
+    if rows_short or rows_over:
+        rec = dict(rec)
+        if rows_short:
+            rec["rows_short"] = _join_row_grams(rec.get("rows_short"), rows_short)
+        if rows_over:
+            rec["rows_over"] = _join_row_grams(rec.get("rows_over"), rows_over)
     # Only spools that were in the reviewed preview may be deducted — a stray /
     # crafted update for an out-of-scope sid must never touch a different spool.
     rec_rows = {r["sid"]: r for r in rec.get("spools", [])}
