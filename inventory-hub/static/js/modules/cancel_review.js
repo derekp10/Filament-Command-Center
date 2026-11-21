@@ -212,7 +212,7 @@
                     <span style="color:#9aa;font-size:var(--fcc-fs-small);">(${esc(when)}${esc(left)})</span>
                 </div>
                 <div class="input-group input-group-sm" style="width:132px;flex:none;">
-                    <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                    <input type="number" class="fcc-cr-pgrams fcc-weight-box form-control bg-dark text-white border-secondary"
                            data-line="${esc(line)}" value="" step="0.01" min="0" autocomplete="off"
                            aria-label="Grams from spool #${esc(e.sid)}" style="font-size:1.05rem;" />
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
@@ -365,33 +365,55 @@
         });
         return out;
     }
+    // Whether the ledger counts a card's ask as a total (the server's rule in
+    // _lines_left_unplaced): a no_spool card's whole usage, or a review an earlier
+    // Apply fixed (`requested_total`: a retry after a failed write, a card kept with
+    // grams left). Group 64.2 (6).
+    function askFixed(rec, kind) {
+        return kind === 'no_spool' || (rec && rec.requested_total != null);
+    }
     // Round 2's review: a held line that isn't a set and that a press charges
     // nothing to (no spool picked, or no grams) is left uncharged too, at its
     // record's grams, whatever its box shows: the server keeps them on the review
     // (a no_spool card counts its whole line), and the Activity Log names them.
-    // [{line, where, grams}], for the set check's Yes to count.
+    // Group 64.2 (6): where the ask is fixed (askFixed, the card's
+    // data-ask-fixed), a picked line typed under FCC's figure leaves the grams it
+    // was typed short of, as the ledger counts them, and one typed over makes up
+    // for another line's (`grams` below 0); on any other card a picked line is
+    // charged what its pick says. [{line, where, grams, picked}], for the set
+    // check's Yes to count.
     function plainLinesLeft(card) {
+        const fixed = card.dataset.askFixed === '1';
         const out = [];
         card.querySelectorAll('.fcc-cr-unline, .fcc-cr-pickline').forEach((ln) => {
             if (ln.classList.contains('fcc-cr-setline')) return;
             const box = ln.querySelector('.fcc-cr-pgrams');
             const held = Number(box && box.getAttribute('value'));
             if (!(held > 0)) return;
-            if (pickedSid(card, ln.dataset.line) && parseFloat(box.value) > 0) return;
             const pos = ln.dataset.pos != null ? ln.dataset.pos : ln.dataset.line;
-            out.push({ line: ln.dataset.line, where: ln.dataset.where || `T${pos}`, grams: held });
+            const where = ln.dataset.where || `T${pos}`;
+            const typed = parseFloat(box.value);
+            if (pickedSid(card, ln.dataset.line) && typed > 0) {
+                if (!fixed) return;
+                const d = Math.round((held - typed) * 100) / 100;
+                if (Math.abs(d) > 0.005) out.push({ line: ln.dataset.line, where, grams: d, picked: true });
+                return;
+            }
+            out.push({ line: ln.dataset.line, where, grams: held, picked: false });
         });
         return out;
     }
-    // "a", "a or b", "a, b or c", as sayOnCard's pieces: each head's name bold.
-    function orHeads(wheres) {
+    // "a", "a or b", "a, b or c" (or with "and"), as sayOnCard's pieces: each
+    // head's name bold.
+    function listHeads(wheres, conj) {
         const out = [];
         wheres.forEach((w, i) => {
-            if (i) out.push(i === wheres.length - 1 ? ' or ' : ', ');
+            if (i) out.push(i === wheres.length - 1 ? conj : ', ');
             out.push({ head: w });
         });
         return out;
     }
+    function orHeads(wheres) { return listHeads(wheres, ' or '); }
     // Whether an Apply may go ahead over the card's sets: at once when each is
     // placed exactly; else the first press says why in each set and on the card,
     // and a second press with the same grams goes ahead (Derek: more resistance on
@@ -402,7 +424,7 @@
         const problems = setProblems(card);
         const plain = problems.length ? plainLinesLeft(card) : [];
         const sig = problems.map((p) => `${p.box.dataset.pos}=${p.placed}`)
-            .concat(plain.map((l) => `${l.line}=left`)).join(';');
+            .concat(plain.map((l) => `${l.line}=${l.picked ? l.grams : 'left'}`)).join(';');
         // A double click's second press is no second press (Derek's rule for a
         // yes that is hard to undo): the second click of a double click, or any
         // press under 700 ms after the one that asked, does nothing, and what
@@ -427,23 +449,37 @@
             if (a) { a.textContent = `⚠️ ${p.words}`; a.style.display = ''; }
         });
         const setShort = problems.filter((p) => p.short > 0).reduce((a, p) => a + p.short, 0);
-        const over = problems.filter((p) => p.short < 0).reduce((a, p) => a - p.short, 0);
-        const plainG = plain.reduce((a, l) => a + l.grams, 0);
-        const short = setShort + plainG;
+        const setOver = problems.filter((p) => p.short < 0).reduce((a, p) => a - p.short, 0);
+        const unpicked = plain.filter((l) => !l.picked);
+        const pickedShort = plain.filter((l) => l.picked && l.grams > 0);
+        const pickedOver = plain.filter((l) => l.picked && l.grams < 0);
+        const plainG = unpicked.reduce((a, l) => a + l.grams, 0);
+        const shortG = pickedShort.reduce((a, l) => a + l.grams, 0);
+        const overG = pickedOver.reduce((a, l) => a - l.grams, 0);
+        const short = Math.round((setShort + plainG + shortG) * 100) / 100;
+        const over = Math.round((setOver + overG) * 100) / 100;
         // Held sets are among a card's last lines, just above its buttons, so one
         // set's words are said in the set alone: the card's notice said them again
         // a line or two below. Two or more sets get one line by the buttons, and so
         // do the plain held lines the press leaves (round 2's review), so every
         // gram the Yes names is said on the card.
-        const does = !over ? 'leave them uncharged' : !setShort ? 'charge the spools as typed' : 'go ahead as typed';
+        const does = !setOver ? 'leave them uncharged' : !setShort ? 'charge the spools as typed' : 'go ahead as typed';
         // Each line is a list of sayOnCard's pieces, the heads it names bold.
         const lines = [];
         if (problems.length > 1) {
             lines.push([`${problems.length} heads' grams don't add up, as each says above. Press ⚠️ Yes below to ${does}.`]);
         }
-        if (plain.length) {
-            lines.push(['⚠️ Yes below charges nothing to ', ...orHeads(plain.map((l) => l.where)),
-                `, leaving ${plain.length === 1 ? 'its' : 'their'} ${fmtG(plainG)} g uncharged.`]);
+        if (unpicked.length) {
+            lines.push(['⚠️ Yes below charges nothing to ', ...orHeads(unpicked.map((l) => l.where)),
+                `, leaving ${unpicked.length === 1 ? 'its' : 'their'} ${fmtG(plainG)} g uncharged.`]);
+        }
+        if (pickedShort.length) {
+            lines.push([`⚠️ Yes below charges ${fmtG(shortG)} g less than FCC worked out on `,
+                ...listHeads(pickedShort.map((l) => l.where), ' and '), ', leaving them uncharged.']);
+        }
+        if (pickedOver.length) {
+            lines.push([`⚠️ Yes below charges ${fmtG(overG)} g more than FCC worked out on `,
+                ...listHeads(pickedOver.map((l) => l.where), ' and '), '.']);
         }
         const notice = lines.reduce((all, l) => (all.length ? all.concat(' ', l) : l), []);
         if (notice.length) _askSaid.set(card, notice);
@@ -749,7 +785,7 @@
                     </span>
                 </div>
                 <div class="input-group input-group-sm" style="width:132px;flex:none;">
-                    <input type="number" class="fcc-cr-grams form-control bg-dark text-white border-secondary"
+                    <input type="number" class="fcc-cr-grams fcc-weight-box form-control bg-dark text-white border-secondary"
                            data-sid="${s.sid}" data-remaining="${known ? s.remaining_before : ''}"
                            data-own-remaining="${known ? s.remaining_before : ''}"
                            value="${fmtG(boxValue)}" step="0.01" min="0" ${known ? `max="${fmt(s.remaining_before)}"` : ''}
@@ -790,7 +826,7 @@
                      style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #2b2c30;">
                     <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> used</span>
                     <div class="input-group input-group-sm" style="width:120px;flex:none;">
-                        <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                        <input type="number" class="fcc-cr-pgrams fcc-weight-box form-control bg-dark text-white border-secondary"
                                data-line="${esc(pos)}" value="${fmtG(usage[pos])}" step="0.01" min="0"
                                autocomplete="off" style="font-size:1.05rem;" />
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
@@ -842,7 +878,7 @@
                      style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #2b2c30;">
                     <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> used</span>
                     <div class="input-group input-group-sm" style="width:120px;flex:none;">
-                        <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                        <input type="number" class="fcc-cr-pgrams fcc-weight-box form-control bg-dark text-white border-secondary"
                                data-line="${esc(line)}" value="${fmtG(un[pos])}" step="0.01" min="0"
                                autocomplete="off" style="font-size:1.05rem;" />
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
@@ -923,7 +959,7 @@
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> uncharged</span>
                         <div class="input-group input-group-sm" style="width:120px;flex:none;">
-                            <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                            <input type="number" class="fcc-cr-pgrams fcc-weight-box form-control bg-dark text-white border-secondary"
                                    data-line="${esc(line)}" value="${fmtG(boxValue)}" step="0.01" min="0"
                                    autocomplete="off" style="font-size:1.05rem;" />
                             <span class="input-group-text bg-dark text-light border-secondary">g</span>
@@ -942,6 +978,7 @@
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-kind="shortfall" data-ambiguous="0" data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
+                 data-ask-fixed="${askFixed(rec, 'shortfall') ? '1' : '0'}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:#ffd27a;">⚖️ ${esc(rec.printer_name)} — ${total}g went to no spool</div>
@@ -1052,6 +1089,7 @@
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-kind="${esc(kind)}" data-ambiguous="${rec.ambiguous ? '1' : '0'}"
+                 data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:${isNoSpool ? '#ffd27a' : '#7ec8ff'};">${header}</div>
@@ -1162,6 +1200,7 @@
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-ambiguous="${ambiguous ? '1' : '0'}" data-kind="${esc(kind)}"
+                 data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:${headerColor};">${header}</div>
@@ -1307,34 +1346,18 @@
     // over an open one leaves only its own listening.
     let _offBuffer = null;
 
-    // Review fix (hotfix 2026-11-11): a scan read while the keyboard is in a grams
-    // box (where the review starts) goes to the scan path, as it does from the
-    // rest of the card. The dashboard's scan accumulator leaves an INPUT's keys
-    // alone, so a label's digits were typed into the grams ("ID:229" made #42's
-    // 30 g read 30229 g) and the spool never reached the scan buffer, where the
-    // pickers list it. inv_core.js's capture (its one copy, a document listener)
-    // puts back what the box held before the scan's first key; installed once,
-    // when a review first opens.
-    let _gramsScanCapture = false;
-    function captureScansInGramsBoxes() {
-        if (_gramsScanCapture || typeof window.installFieldScanCapture !== 'function') return;
-        _gramsScanCapture = true;
-        window.installFieldScanCapture({
-            match: (el) => !!(el && el.classList && el.closest
-                && (el.classList.contains('fcc-cr-grams') || el.classList.contains('fcc-cr-pgrams'))
-                && el.closest(`#${OVERLAY_ID}`)),
-            isScanPayload: (txt) => !!(window.looksLikeScanPayload && window.looksLikeScanPayload(txt)),
-            onScan: (payload, el) => {
-                // The box holds what it held before the scan again: its preview and
-                // its set's count follow it.
-                try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) { /* noop */ }
-                if (window.processScan) window.processScan(payload, 'barcode');
-            },
-        });
-    }
+    // A scan read while the keyboard is in a grams box (where the review starts)
+    // goes to the scan path, as it does from the rest of the card (hotfix
+    // 2026-11-11: a label's digits were typed into the grams, "ID:229" making #42's
+    // 30 g read 30229 g). Group 64.2 (11): the boxes are weight boxes
+    // (`fcc-weight-box`), so inv_core.js's one weight capture serves them as every
+    // other: a label from its ':' at any speed (a slower scanner's digits went into
+    // the grams under the old field capture, which caught only a scan ending
+    // within 150 ms), digits faster than a person types, the box put back as it
+    // was before the scan with an `input` event, so its preview and its set's
+    // count follow. Enter in a box still presses nothing.
 
     async function openCancelReview() {
-        captureScansInGramsBoxes();
         const pending = await fetchPending();
         if (!pending.length) {
             toast('No pending cancel reviews.', 'info');
@@ -1612,6 +1635,48 @@
                 lookUpBox(card, t, false);
             }
         });
+        // Group 64.2 (4): a scan with the keyboard on a picker (a closed <select>)
+        // picks that spool on its line. The dashboard's scan accumulator reads a
+        // select's keys (it skips only an INPUT's), so a label scanned there went to
+        // the scan path (the spool joined the scan buffer), and the select's own
+        // typeahead moved the pick with the label's letters. The scan's Enter, read
+        // as a scan the way a printable key is (scanIsArriving: in flight, or a ':'
+        // or '/' in it) or a scanner burst, never reaches the accumulator (this
+        // capture runs before it), and the line takes the scanned spool, whatever
+        // the typeahead did: the picker's own option for it when it lists it, else
+        // "Another spool by #ID…" with the label in its box, looked up as a typed
+        // number is. A person's typeahead moves the select as ever; their Enter
+        // after it goes on.
+        overlay.addEventListener('keydown', (e) => {
+            const t = e.target;
+            if (e.key !== 'Enter' || e.isComposing || !t || !t.classList || !t.classList.contains('fcc-cr-pick')) return;
+            // inv_core.js's `let state` is a script-global binding, not a window
+            // property: read it by name, as the buffer list above does.
+            const st = (typeof state !== 'undefined') ? state : window.state;
+            const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+            if (!buf.trim() || !((window.scanIsArriving && window.scanIsArriving())
+                    || (window.isScannerBurst && window.isScannerBurst()))) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (st) st.lastScanEnterAt = Date.now();     // as the accumulator marks a scan's Enter
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            const card = t.closest('.fcc-cr-card');
+            if (card) pickByScan(card, t, buf);
+        }, true);
+        // The scanned spool on the picker's line: its own option, or the #ID box.
+        function pickByScan(card, sel, text) {
+            const got = readSpoolBox(text);
+            const own = got.sid != null && Array.from(sel.options || []).find((o) => o.value === String(got.sid));
+            if (own) {
+                sel.value = String(got.sid);
+            } else {
+                const box = card.querySelector(`.fcc-cr-other[data-line="${CSS.escape(String(sel.dataset.line))}"]`);
+                if (!box) return;
+                box.value = String(text).trim();
+                sel.value = 'other';
+            }
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
         // Scope D: an Enter in the #id box (a scanner ends every label with one,
         // and some send two) reads the box and nothing else: it never applies the
         // card or presses a button, and goes no further. Its text is left

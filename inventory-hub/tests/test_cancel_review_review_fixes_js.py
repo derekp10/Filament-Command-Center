@@ -383,51 +383,79 @@ def test_the_card_says_what_it_knows_and_what_it_needs(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def _inv_core_capture():
-    """The real installFieldScanCapture and looksLikeScanPayload, from inv_core.js
-    (the dashboard loads it before any review opens)."""
+    """The real weight capture (installWeightScanCapture, the one every
+    `fcc-weight-box` box shares, Group 64.2 (11)) and looksLikeScanPayload, from
+    inv_core.js (the dashboard loads it before any review opens)."""
     src = INV_CORE.read_text(encoding="utf-8")
-    cap = re.search(r"const installFieldScanCapture = .*?\nwindow\.installFieldScanCapture = installFieldScanCapture;",
-                    src, re.S)
+    cap = re.search(r"const GRAMS_READING = .*?\ninstallWeightScanCapture\(\{ match: .*?\}\);\n", src, re.S)
     look = re.search(r"window\.looksLikeScanPayload = \(txt\) =>.*?;\n", src, re.S)
-    assert cap and look, "inv_core.js's scan capture moved: teach this test where"
-    return cap.group(0) + "\n" + look.group(0) + "\nwindow.__scans = [];\n" \
+    assert cap and look, "inv_core.js's weight capture moved: teach this test where"
+    return look.group(0) + "\nwindow.state = window.state || {}; state.scanBuffer = ''; state.scanStartTime = 0;\n" \
+        "window.isScanInFlight = () => false;\n" \
+        "window.clearScanBuffer = () => { state.scanBuffer = ''; state.scanStartTime = 0; };\n" \
+        + cap.group(0) + "\nwindow.__scans = [];\n" \
         "window.processScan = (t, src) => { window.__scans.push([t, src]); };\n"
 
 
+# A key the capture doesn't keep from the box is typed into it, as a browser does;
+# a number box keeps only the digits (and a '.') it is sent.
 SCAN_JS = r"""
 const c = cardOf('ps');
+const typeIn = async (box, text, gap) => {
+  for (const ch of text) {
+    const ev = key(box, ch);
+    if (!ev.defaultPrevented && /[\d.]/.test(ch)) { box.value = box.value + ch; fire(box, 'input'); }
+    if (gap) await settle(gap);
+  }
+};
 const box = c.querySelector('.fcc-cr-pgrams[data-line="set:4:42"]');
 box.focus();
 box.value = '30'; fire(box, 'input');            // what the person typed first
-// A scanner's label, at its speed: a number box keeps only the digits it sends.
-for (const ch of 'ID:229') { key(box, ch); if (/\d/.test(ch)) { box.value = box.value + ch; fire(box, 'input'); } }
+await settle(10);
+// A scanner's label, at its speed.
+await typeIn(box, 'ID:229', 0);
 const during = box.value;
 const ev = key(box, 'Enter');
 await settle(20);
 const left = c.querySelector('.fcc-cr-set-left').textContent;
-// A person typing slowly is never taken for a scan.
+// A slower scanner (160 ms a key): the ':' proves a label all the same.
+await settle(120);
+await typeIn(box, 'ID:231', 160);
+const slowDuring = box.value;
+key(box, 'Enter');
+await settle(20);
+const slowLeft = c.querySelector('.fcc-cr-set-left').textContent;
+// A person typing slowly is never taken for a scan, a '.' included.
 const other = c.querySelector('.fcc-cr-pgrams[data-line="set:4:229"]');
 other.focus();
-key(other, '1'); other.value = '1'; fire(other, 'input');
-await settle(200);
-key(other, '2'); other.value = '12'; fire(other, 'input');
-await settle(200);
-key(other, 'Enter');
+await typeIn(other, '12.5', 200);
+const enter = key(other, 'Enter');
 await settle(20);
 return { during, value: box.value, scans: window.__scans, prevented: ev.defaultPrevented, left,
-         typed: other.value, posted: posts('/api/cancel_deduct/confirm') };
+         slowDuring, slowLeft, typed: other.value, enterPrevented: enter.defaultPrevented,
+         weightBoxes: c.querySelectorAll('.fcc-cr-pgrams').every((b) => b.classList.contains('fcc-weight-box')),
+         posted: posts('/api/cancel_deduct/confirm') };
 """
 
 
 def test_a_scan_in_a_grams_box_goes_to_the_scan_path(tmp_path):
-    # On 9b16a9e: AssertionError: assert '30229' == '30' (the label's digits went into #42's grams)
+    """Group 64.2 (11): the boxes are weight boxes, so the one weight capture takes a
+    label from its ':' (never a digit of it reaches the box) at a scanner's speed and
+    a slower scanner's alike; the box keeps what the person typed, and its set's count
+    follows. A person's slow "12.5" stays, and their Enter presses nothing."""
+    # On 9b16a9e: AssertionError: assert '30229' == '30' (the label's digits went into #42's grams).
+    # On 1d1ddc2: AssertionError: the slower scanner's '30231' (the field capture took a scan only
+    # when it ended within 150 ms).
     res = _go(tmp_path, SCAN_JS, [PARTIAL_SET], pre=_inv_core_capture())
-    assert res["during"] == "30229", res
+    assert res["weightBoxes"], res
+    assert res["during"] == "30", res
     assert res["value"] == "30", res
-    assert res["scans"] == [["ID:229", "barcode"]], res
     assert res["prevented"], res
     assert res["left"] == "54.28 g of 84.28 g still to place", res
-    assert res["typed"] == "12", res
+    assert res["slowDuring"] == "30", res
+    assert res["slowLeft"] == "54.28 g of 84.28 g still to place", res
+    assert res["scans"] == [["ID:229", "barcode"], ["ID:231", "keyboard"]], res
+    assert res["typed"] == "12.5" and not res["enterPrevented"], res
     assert res["posted"] == [], res
 
 
