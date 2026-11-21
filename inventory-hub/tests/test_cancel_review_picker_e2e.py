@@ -537,3 +537,38 @@ def test_a_slow_scanners_label_in_a_grams_box_goes_to_the_scan_path(page: Page, 
     page.wait_for_timeout(200)
     assert page.input_value(other) == "12.5"
     assert page.evaluate("() => window.__scans") == [["ID:98", "keyboard"]]
+
+
+def _dbl_card(job, sid):
+    row = dict(ROW, sid=sid, display=f"#{sid} PLA Red", toolhead="RCOI-3", position=2)
+    return dict(PARTIAL, job_id=job, spools=[row])
+
+
+def test_a_double_click_on_confirm_never_applies_the_next_card(page: Page, base_url, reset_dom_state_js):
+    """Group 64 review (R1), red on 82dbb38 (J-1 and J-2 posted; older than Group 64).
+    Four cards of one shape fill the panel, so its body scrolls and keeps its height:
+    the first press of a double click applies J-1, its card goes, J-2 slides up
+    under the pointer, and the second press applied J-2, unread. The removal now
+    shields that press, and Confirm refuses a click with detail 2 besides."""
+    cards = [_dbl_card(f"J-{i}", 90 + i) for i in range(1, 5)]
+    be = _open(page, base_url, reset_dom_state_js, cards, pending_after_confirm=cards[1:],
+               confirm_answer={"status": "confirmed", "errors": [],
+                               "applied": [{"sid": 91, "grams": 2.5, "remaining": 897.5}]})
+    page.wait_for_timeout(400)
+    btn = page.locator('.fcc-cr-card[data-job="J-1"] .fcc-cr-confirm')
+    btn.scroll_into_view_if_needed()
+    box = btn.bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.up()
+    page.wait_for_timeout(150)
+    # The test means something only where J-2's Confirm slid under the pointer.
+    under = page.evaluate("""([x, y]) => { const el = document.elementFromPoint(x, y);
+        const b = el && el.closest('.fcc-cr-confirm'); const c = b && b.closest('.fcc-cr-card');
+        return c ? c.dataset.job : null; }""", [x, y])
+    assert under == "J-2", under
+    page.mouse.down(click_count=2)
+    page.mouse.up(click_count=2)
+    page.wait_for_timeout(800)
+    assert [c.get("job_id") for c in be.confirms] == ["J-1"], be.confirms

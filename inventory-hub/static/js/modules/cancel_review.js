@@ -957,13 +957,13 @@
         }
         if (c.why === 'no_spool') return `no spool was loaded on ${head}`;
         if (c.why === 'two_spools' && Array.isArray(c.mmu_shared) && c.mmu_shared.length) {
-            // Group 64.6: MMU slots sharing one toolhead number, each holding a spool.
+            // Group 64.6: MMU slots sharing one Position, each holding a spool.
             const slots = c.mmu_shared.length > 1
                 ? `${c.mmu_shared.slice(0, -1).join(', ')} and ${c.mmu_shared[c.mmu_shared.length - 1]}`
                 : c.mmu_shared.join('');
-            return `MMU slots ${slots} share one toolhead number and each held a spool `
+            return `MMU slots ${slots} share one Position and each held a spool `
                 + `(${spoolListWords(c.sids)}), so FCC charged none of them: give each MMU slot its own `
-                + `toolhead number in Settings so FCC can tell which printed`;
+                + `Position in Settings (slot 1 = Position 0, slot 2 = Position 1, …) so FCC can tell which printed`;
         }
         if (c.why === 'two_spools') {
             // Round 2 (R3): counted, as FCC's record can put more than two on a head.
@@ -1686,13 +1686,15 @@
         // select's keys (it skips only an INPUT's), so a label scanned there went to
         // the scan path (the spool joined the scan buffer), and the select's own
         // typeahead moved the pick with the label's letters. The scan's Enter, read
-        // as a scan the way a printable key is (scanIsArriving: in flight, or a ':'
-        // or '/' in it) or a scanner burst, never reaches the accumulator (this
+        // as a scan when the buffer looks like one (looksLikeScanPayload: a ':' or
+        // '/' in it) or came as a scanner burst, never reaches the accumulator (this
         // capture runs before it), and the line takes the scanned spool, whatever
         // the typeahead did: the picker's own option for it when it lists it, else
         // "Another spool by #ID…" with the label in its box, looked up as a typed
         // number is. A person's typeahead moves the select as ever; their Enter
-        // after it goes on.
+        // after it goes on, however soon it comes (Group 64 review, O1: "#2" and a
+        // quick Enter was in flight, isScanInFlight's 500 ms, and moved the line to
+        // spool #2: a bare in-flight test is never a scan here).
         overlay.addEventListener('keydown', (e) => {
             const t = e.target;
             if (e.key !== 'Enter' || e.isComposing || !t || !t.classList || !t.classList.contains('fcc-cr-pick')) return;
@@ -1700,7 +1702,7 @@
             // property: read it by name, as the buffer list above does.
             const st = (typeof state !== 'undefined') ? state : window.state;
             const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
-            if (!buf.trim() || !((window.scanIsArriving && window.scanIsArriving())
+            if (!buf.trim() || !((window.looksLikeScanPayload && window.looksLikeScanPayload(buf.trim()))
                     || (window.isScannerBurst && window.isScannerBurst()))) return;
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -1763,6 +1765,11 @@
             const job = card.dataset.job;
 
             if (e.target.classList.contains('fcc-cr-confirm')) {
+                // Group 64 review (R1): a double click's second press is no Apply. Its
+                // first applied this card and took it away, the next card slid up
+                // under the pointer, and the second press applied that one, unread
+                // (a press from the keyboard has detail 0).
+                if (e.detail > 1) return;
                 // 43.3: explicit picks become `charges`; a card whose rows all keep
                 // their own spool still sends the old `updates` shape.
                 const payload = { printer_name: printer, job_id: job };
@@ -1853,12 +1860,19 @@
                     // Decision 1 (Group 64): a card whose every line is a spool weighed
                     // (or changed) after its print, each left at 0 g, settles with
                     // nothing charged: the scale counted the print.
+                    // Group 64 review (O3): the lines left without a pick count, so a
+                    // card with a pick for one line and a weighed line left at 0 g
+                    // settles that line in the same Apply (settle_held beside the
+                    // picks), instead of keeping it and asking for a spool for grams
+                    // the scale already counted.
                     const shortLines = Array.from(card.querySelectorAll('.fcc-cr-shortline'));
-                    const settleHeld = card.dataset.kind === 'shortfall' && !redirected
-                        && !Object.keys(updates).length && shortLines.length > 0
+                    const pickedPos = new Set(charges.filter((c) => c.position != null).map((c) => String(c.position)));
+                    const leftLines = shortLines.filter((ln) => !pickedPos.has(String(ln.dataset.pos)));
+                    const settleLeft = card.dataset.kind === 'shortfall' && leftLines.length > 0
                         && !card.querySelector('.fcc-cr-grams')
-                        && shortLines.every((ln) => ln.dataset.weighed === '1'
+                        && leftLines.every((ln) => ln.dataset.weighed === '1'
                             && !(parseFloat((ln.querySelector('.fcc-cr-pgrams') || {}).value) > 0));
+                    const settleHeld = settleLeft && !redirected && !Object.keys(updates).length;
                     if (settleHeld) {
                         payload.settle_held = true;
                         payload.charges = [];
@@ -1868,6 +1882,7 @@
                         return;
                     }
                     if (!settleHeld) { if (redirected) payload.charges = charges; else payload.updates = updates; }
+                    if (settleLeft && redirected) payload.settle_held = true;
                     // 43.2: the card's revision, so an Apply from a view opened before
                     // another Apply changed it is refused instead of charging again.
                     if (card.dataset.kind === 'shortfall') payload.rev = Number(card.dataset.rev || 0);
@@ -1902,19 +1917,41 @@
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'confirmed') {
-                        if (d.settled_held) toast(`Left ${fmtG(d.shortfall_g)}g uncharged: the spool was weighed after the print.`, 'success');
-                        else if (took > 0) toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
-                        else toast('Nothing was charged: the spool picked has 0 g left on record.', 'warning', 7000);
+                        // Group 64 review (O4 / Y2): the weighed spools this Apply left
+                        // uncharged are said by name, in the words of what FCC knows
+                        // (weighed on FCC after the print, or a change it can't place).
+                        const left = Array.isArray(d.left_weighed) ? d.left_weighed : [];
+                        const leftG = left.reduce((a, l) => a + (Number(l.grams) || 0), 0);
+                        const leftWho = spoolListWords(left.map((l) => l.sid));
+                        const leftWords = !left.length ? ''
+                            : (d.settled_unsure
+                                ? `left ${fmtG(leftG)}g uncharged on ${leftWho} as set: `
+                                  + `${left.length > 1 ? 'their weights' : 'its weight'} changed after the print`
+                                : `left ${fmtG(leftG)}g uncharged on ${leftWho}: `
+                                  + `${left.length > 1 ? 'they were' : 'it was'} weighed after the print`);
+                        if (took > 0) {
+                            toast(`Deducted from ${(d.applied || []).length} spool(s)${leftWords ? `; ${leftWords}` : ''}.`, 'success');
+                        } else if (leftWords) {
+                            toast(`${leftWords.charAt(0).toUpperCase()}${leftWords.slice(1)}.`, 'success');
+                        } else if (d.settled_held) {
+                            toast(`Left ${fmtG(d.shortfall_g)}g uncharged: the spool was weighed after the print.`, 'success');
+                        } else {
+                            toast('Nothing was charged: the spool picked has 0 g left on record.', 'warning', 7000);
+                        }
                         if (d.shortfall_card) {
                             // 43.2: what the picked spools couldn't take is on a new card.
                             toast(`${fmtG(d.shortfall_g)}g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard.`, 'warning', 7000);
-                        } else if (Number(d.shortfall_g) > 0.05) {
+                        } else if (!d.settled_held && Number(d.shortfall_g) > 0.05) {
+                            // A settle's grams were left on purpose (Group 64 review, Y2).
                             // Partial-bind / clamp shortfall (no_spool re-resolve path): part of the
                             // computed usage couldn't be applied — surface it AT THE OVERLAY, not only
                             // in the Activity Log, so the user knows to weigh the still-short spool.
                             toast(`${fmtG(d.shortfall_g)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
                         }
                         if ((d.errors || []).length) toast(`${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
+                        // R1: the card under the pointer goes, so the second press of a
+                        // double click reaches nothing behind it.
+                        if (window.fccShieldNextPress) window.fccShieldNextPress();
                         card.remove(); updateCount(); refreshBadge();
                         if (d.shortfall_card) await showNewCard(printer, d.shortfall_card);
                         closeIfEmpty();
@@ -1927,6 +1964,7 @@
                         sayOnCard(fresh, headPieces(fresh, msg));
                     } else if (d.status === 'already_handled') {
                         toast('Already handled elsewhere.', 'info');
+                        if (window.fccShieldNextPress) window.fccShieldNextPress();
                         card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
                     } else if (d.status === 'still_no_spool' || d.status === 'manual_only') {
                         // Not applied, but the review is kept server-side — LEAVE the

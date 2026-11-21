@@ -1148,6 +1148,35 @@ return { n: boxes.length, rows: document.querySelectorAll('.fcc-cr-grams').lengt
 """
 
 
+TYPEAHEAD_JS = r"""
+const c = cardOf('ns');
+const L = lineOf(c, '4');
+pickIn(L.sel, '');
+L.sel.focus();
+const typed = [];
+for (const ch of '#2') { const ev = key(L.sel, ch); if (!ev.defaultPrevented) typeahead(L.sel, ch); typed.push(L.sel.value); await settle(90); }
+await settle(-30);                                   // the Enter 60 ms after the last key
+const enter = key(L.sel, 'Enter');
+await settle(30);
+return { typed, prevented: enter.defaultPrevented, value: L.sel.value, box: L.box.value,
+         scans: window.__scans, acEnters: window.__acEnters || 0 };
+"""
+
+
+def test_a_persons_typeahead_and_a_quick_enter_is_no_scan_of_the_pickers(tmp_path):
+    """Group 64 review (O1), red on 82dbb38: "#2" typed on a picker (90 ms a key)
+    and an Enter 60 ms later was still in flight (isScanInFlight's 500 ms) and was
+    taken as a scan, so the line moved to "Another spool by #ID…" with #2 in its
+    box, and Apply charged spool #2. Only a scanner burst or a buffer that looks
+    like a scan (a ':' or '/') is a scan here; the Enter goes on, as a person's."""
+    scenario = PICKER_SCAN_JS.split("const out = {};")[0] + TYPEAHEAD_JS
+    res = run(tmp_path, _picker_pre() + _scenario(scenario), {"pending": [NO_SPOOL], "spools": SPOOLS})
+    assert res["prevented"] is False, res
+    assert res["value"] != "other" and res["box"] == "", res
+    assert res["value"] == res["typed"][-1], res      # where the person's typeahead left it
+    assert res["acEnters"] == 1 and res["scans"] == [["#2", "barcode"]], res
+
+
 def test_every_grams_box_is_a_weight_box(tmp_path):
     """Group 64.2 (11): a row's grams and a line's grams, on every card kind."""
     res = run(tmp_path, _scenario(WEIGHT_BOXES_JS),

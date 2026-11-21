@@ -402,12 +402,13 @@ def test_a_scanned_label_leaves_an_inherited_empty_weight_marked_and_unsent(wiz)
 def test_a_scanned_label_never_zeroes_the_used_weight(wiz):
     """Claude's call: every number box in the wizard, not just the five. An emptied
     Total Used box is sent as 0, a refill of a spool with 500 g used. RED on the
-    base: `used_weight: 0`."""
+    base: `used_weight: 0`. Since the Group 64 review (S2 / S3) a Total Used box left
+    as the record filled it isn't sent at all (it was sent as 500)."""
     _open_edit(wiz)
     assert _value(wiz, "#wiz-spool-used") == "500"
     _scan_into(wiz, "#wiz-spool-used", "LOC:XL")
     assert _value(wiz, "#wiz-spool-used") == "500"
-    assert _save(wiz, EDIT)["spool_data"]["used_weight"] == 500
+    assert _got(_save(wiz, EDIT)["spool_data"], "used_weight") == "<missing>"
 
 
 def test_a_persons_backspace_still_empties_the_box(wiz):
@@ -512,3 +513,66 @@ def test_the_route_passes_each_null_through_to_spoolman(monkeypatch):
     rec = copy.deepcopy(fake.records)
     assert rec["spool"][57]["price"] is None and rec["spool"][57]["spool_weight"] is None, rec["spool"][57]
     assert json.dumps(rec["filament"][7]["settings_bed_temp"]) == "null", rec["filament"][7]
+
+
+# --- Group 64 review (S2 / S3): Total Used is sent only when it changed -------------
+
+def _open_edit_used(page, used):
+    """Edit Spool on #57 with `used` g used (two decimals, as a print's charge leaves it)."""
+    details = _details()
+    details["used_weight"] = used
+    details["remaining_weight"] = round(1000.0 - used, 2)
+    page.evaluate("""(a) => {
+        window.__answers['/api/spool_details'] = a.details;
+        window.__answers['/api/external/vendors'] = { success: true, vendors: [a.vendor] };
+    }""", {"details": details, "vendor": details["filament"]["vendor"]})
+    page.evaluate("() => { window.openEditWizard(57); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool' && wizardState.selectedFilamentId === 7"
+                           " && document.getElementById('wiz-fil-color_name').value === 'Red'"
+                           " && !document.getElementById('btn-wiz-submit').disabled")
+
+
+def test_a_comment_only_edit_sends_no_used_weight(wiz):
+    """S2 / S3, RED on 82dbb38 (used_weight 100.4 sent). Total Used shows 100.37 as
+    100.4; a Save that changed only the comment sent the box as drawn, which
+    rewrote the used weight (and stamped a weighing), and a form opened before a
+    print's charge wrote the old used weight back over the charge."""
+    _open_edit_used(wiz, 100.37)
+    assert _value(wiz, "#wiz-spool-used") == "100.4"
+    wiz.locator("#wiz-spool-comment").fill("new note")
+    body = _save(wiz, EDIT)
+    assert "used_weight" not in body["spool_data"], body["spool_data"]
+    assert body["spool_data"]["comment"] == "new note", body["spool_data"]
+
+
+def test_a_total_used_the_person_changed_is_sent(wiz):
+    """Passes on 82dbb38 by design: a typed Total Used goes out as before."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    body = _save(wiz, EDIT)
+    assert body["spool_data"]["used_weight"] == 130, body["spool_data"]
+
+
+def test_a_total_used_worked_out_by_the_recent_usage_box_is_sent(wiz):
+    """The wizard's own weigh boxes change Total Used too (here "recent usage",
+    added to the used weight): that is a change, and is sent."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-recent-usage").press_sequentially("20")      # its keyup works it out
+    assert _value(wiz, "#wiz-spool-used") != "100.4"
+    body = _save(wiz, EDIT)
+    assert body["spool_data"]["used_weight"] == pytest.approx(120.4, abs=0.05), body["spool_data"]
+
+
+def test_a_second_save_sends_total_used_only_if_it_changed_again(wiz):
+    """S3: after a Save, the box shows what that Save wrote, so the next Save in the
+    same session (a comment fixed after the weight) sends no used weight."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    assert _save(wiz, EDIT)["spool_data"]["used_weight"] == 130
+    wiz.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    wiz.locator("#wiz-spool-comment").fill("fixed note")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert "used_weight" not in second["spool_data"], second["spool_data"]
+    assert second["spool_data"]["comment"] == "fixed note", second["spool_data"]

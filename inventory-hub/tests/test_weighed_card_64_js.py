@@ -155,9 +155,10 @@ def test_mmu_slots_sharing_one_number_say_so_on_the_uncharged_grams_card(tmp_pat
                                "mmu_shared": ["MMU-1", "MMU-2"]}])
     res = run(tmp_path, RESPOND_JS + MMU_JS, {"pending": [rec], "spools": SPOOLS})
     why = " ".join((res["why"] or "").split())
-    assert why.startswith("MMU slots MMU-1 and MMU-2 share one toolhead number and each held a spool "
+    assert why.startswith("MMU slots MMU-1 and MMU-2 share one Position and each held a spool "
                           "(#401 and #402), so FCC charged none of them"), why
-    assert "own toolhead number in Settings" in why, why
+    # Group 64 review (O2): in the editor's own terms, its 0-based Position.
+    assert "own Position in Settings (slot 1 = Position 0, slot 2 = Position 1, …)" in why, why
 
 
 PICK_JS = r"""
@@ -205,3 +206,177 @@ def test_a_set_that_adds_up_goes_out_on_one_press_with_no_set_ack(tmp_path):
     assert len(res["posted"]) == 1, res
     assert "set_ack" not in res["posted"][0], res["posted"][0]
     assert any(c.get("grams") == 84.28 for c in res["posted"][0].get("charges") or []), res["posted"][0]
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 review, the page half (O2, O3, O4, R1, Y2)                         #
+# --------------------------------------------------------------------------- #
+
+def test_the_settings_mmu_sentence_names_the_editors_position():
+    """O2, red on 82dbb38 ("slot 1 = Toolhead 1": the editor's only number is a
+    0-based Position, so following it charged each slot the next slot's filament)."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "static" / "js" / "modules"
+           / "inv_settings.js").read_text(encoding="utf-8")
+    flat = " ".join(src.split())
+    assert "give each slot its own Position, the slicer's tool number (slot 1 = Position 0 for T0, " \
+           "slot 2 = Position 1 for T1, and so on)" in flat
+    assert "Toolhead 1" not in flat
+
+
+CONFIRM_ANSWER_JS = r"""
+const __base = window.__respond;
+window.__respond = (url, method, body) => (url.startsWith('/api/cancel_deduct/confirm')
+    ? { body: D.confirm } : __base(url, method, body));
+"""
+
+
+def _mixed(job):
+    return _base(job, "shortfall", rev=0, total_grams=15.4, unresolved_usage={"0": 12.4, "1": 3.0},
+                 shortfall_prefill={"0": 0.0},
+                 shortfall_causes={"0": {"why": "weighed", "sid": 200, "toolhead": "HEAD-1", "archived": False,
+                                         "known_order": True, "words": WORDS_KNOWN},
+                                   "1": {"why": "no_spool", "toolhead": "HEAD-2"}},
+                 heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                               {"toolhead": "HEAD-2", "position": 1, "sid": None}])
+
+
+MIXED_JS = r"""
+const c = cardOf('x#shortfall');
+const L = lineOf(c, 'pos:1');
+pickIn(L.sel, 'other');
+L.box.value = '57'; key(L.box, 'Enter');
+await settle(40);
+const box = c.querySelector('.fcc-cr-shortline[data-pos="1"] .fcc-cr-pgrams');
+box.value = '3'; box.dispatchEvent(new Event('input', { bubbles: true }));
+c.querySelector('.fcc-cr-confirm').click();
+await settle(60);
+return { posted: posts('/api/cancel_deduct/confirm'), toasts: __rec.toasts,
+         gone: !cardOf('x#shortfall') };
+"""
+
+
+def test_a_pick_beside_a_weighed_line_left_at_0g_sends_settle_held_with_it(tmp_path):
+    """O3, red on 82dbb38 (it posted the pick alone, and the card kept asking for a
+    spool for the 12.40 g the scale already counted). One toast says both."""
+    confirm = {"status": "confirmed", "applied": [{"sid": 57, "grams": 3.0, "remaining": 409.4}],
+               "errors": [], "settled_held": True, "shortfall_g": 12.4, "settled_unsure": False,
+               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}]}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + MIXED_JS,
+              {"pending": [_mixed("x#shortfall")], "spools": SPOOLS, "confirm": confirm})
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "x#shortfall", "rev": 0,
+                              "charges": [{"position": 1, "sid": 57, "grams": 3}],
+                              "settle_held": True}], res["posted"]
+    assert res["toasts"] == [{"msg": "Deducted from 1 spool(s); left 12.4g uncharged on #200: it was "
+                                     "weighed after the print.", "type": "success", "duration": 2000}], res["toasts"]
+    assert res["gone"] is True
+
+
+SETTLE_TOAST_JS = r"""
+const c = cardOf(__JOB__);
+c.querySelector('.fcc-cr-confirm').click();
+await settle(60);
+return { posted: posts('/api/cancel_deduct/confirm'), toasts: __rec.toasts };
+"""
+
+
+def _settle(tmp_path, job, known, confirm):
+    body = SETTLE_TOAST_JS.replace("__JOB__", repr(job))
+    return run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + body,
+               {"pending": [_held(job, known)], "spools": SPOOLS, "confirm": confirm})
+
+
+def test_a_settle_raises_one_toast_and_no_weigh_it_warning(tmp_path):
+    """Y2, red on 82dbb38 (a second, 7 s toast: "12.4g couldn't be applied — weigh
+    that spool to true up", against the settle the person chose)."""
+    confirm = {"status": "confirmed", "applied": [], "settled_held": True, "shortfall_g": 12.4,
+               "settled_unsure": False,
+               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}]}
+    res = _settle(tmp_path, "k", True, confirm)
+    assert res["toasts"] == [{"msg": "Left 12.4g uncharged on #200: it was weighed after the print.",
+                              "type": "success", "duration": 2000}], res["toasts"]
+
+
+def test_a_settle_of_a_change_fcc_cant_place_says_it_was_left_as_set(tmp_path):
+    """Y2's words: a change FCC couldn't place in time is no weighing FCC knows of."""
+    confirm = {"status": "confirmed", "applied": [], "settled_held": True, "shortfall_g": 12.4,
+               "settled_unsure": True,
+               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": False}]}
+    body = SETTLE_TOAST_JS.replace("__JOB__", repr("u"))
+    rec = _held("u", False)
+    rec["shortfall_prefill"] = {"0": 0.0}      # the person set it to 0 (as if typed)
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + body,
+              {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
+    assert res["posted"][0].get("settle_held") is True, res["posted"]
+    assert res["toasts"] == [{"msg": "Left 12.4g uncharged on #200 as set: its weight changed after the print.",
+                              "type": "success", "duration": 2000}], res["toasts"]
+
+
+ROW_LEFT_JS = r"""
+const c = cardOf('r');
+c.querySelector('.fcc-cr-confirm').click();
+await settle(60);
+return { posted: posts('/api/cancel_deduct/confirm'), toasts: __rec.toasts };
+"""
+
+
+def test_a_cancels_weighed_row_left_at_0g_is_said_by_name(tmp_path):
+    """O4, red on 82dbb38 ("Nothing was charged: the spool picked has 0 g left on
+    record", false: the row was left at the 0 g filled in, the spool weighed)."""
+    rec = _base("r", "partial", total_grams=12.4,
+                spools=[_row(200, 12.4, prefill=0.0, weighed={"words": WORDS_KNOWN, "known_order": True})],
+                heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}])
+    confirm = {"status": "confirmed", "applied": [], "errors": [], "shortfall_g": 0.0, "settled_unsure": False,
+               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}]}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + ROW_LEFT_JS,
+              {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "r", "updates": {}}], res["posted"]
+    assert res["toasts"] == [{"msg": "Left 12.4g uncharged on #200: it was weighed after the print.",
+                              "type": "success", "duration": 2000}], res["toasts"]
+
+
+def test_nothing_charged_with_no_weighed_row_left_keeps_its_words(tmp_path):
+    """A clamp (the spool picked had nothing left) keeps its 7 s warning. Passes on
+    82dbb38 by design."""
+    rec = _base("r", "partial", total_grams=12.4, spools=[_row(200, 12.4)],
+                heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}])
+    confirm = {"status": "confirmed", "applied": [{"sid": 200, "grams": 0.0, "remaining": 0.0}],
+               "errors": [], "shortfall_g": 0.0}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + ROW_LEFT_JS,
+              {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
+    assert res["toasts"] == [{"msg": "Nothing was charged: the spool picked has 0 g left on record.",
+                              "type": "warning", "duration": 7000}], res["toasts"]
+
+
+DOUBLE_JS = r"""
+window.__shields = 0;
+window.fccShieldNextPress = () => { window.__shields += 1; };
+const c1 = cardOf('a'), c2 = cardOf('b');
+c1.querySelector('.fcc-cr-confirm').click();
+await settle(60);
+const second = c2.querySelector('.fcc-cr-confirm');
+second.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 2 }));
+await settle(60);
+const after = posts('/api/cancel_deduct/confirm').map((p) => p.job_id);
+second.click();                          // a press of its own, later: an Apply
+await settle(60);
+return { after, then: posts('/api/cancel_deduct/confirm').map((p) => p.job_id),
+         gone: !cardOf('a'), shields: window.__shields };
+"""
+
+
+def test_a_double_clicks_second_press_never_applies_the_next_card(tmp_path):
+    """R1, red on 82dbb38 (card b was applied too, unread: card a's Apply took it
+    away and b slid up under the pointer). The removal shields the second press;
+    the Confirm handler refuses a click with detail 2 besides."""
+    cards = [_base(j, "partial", total_grams=3.6,
+                   spools=[_row(300, 3.6, toolhead="HEAD-2", position=1)],
+                   heads_at_end=[{"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}])
+             for j in ("a", "b")]
+    confirm = {"status": "confirmed", "applied": [{"sid": 300, "grams": 3.6, "remaining": 896.4}],
+               "errors": [], "shortfall_g": 0.0}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + DOUBLE_JS,
+              {"pending": cards, "spools": SPOOLS, "confirm": confirm})
+    assert res["gone"] is True and res["shields"] >= 1, res
+    assert res["after"] == ["a"], res
+    assert res["then"] == ["a", "b"], res

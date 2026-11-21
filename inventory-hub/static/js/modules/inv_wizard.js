@@ -983,6 +983,10 @@ const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.touchedExtras = new Set();
     wizardState.touchedNative = new Set();
+    // Group 64 review (S2 / S3): what Edit Spool's Total Used box showed when it
+    // was filled from the record, so Save sends the used weight only when the box
+    // changed.
+    wizardState.usedShown = null;
     // Group 54.8: nothing is shown from the filament until an open puts it there.
     wizardState.spoolPriceFrom = null;
     wizardState.spoolEmptyWeightFrom = null;
@@ -4205,6 +4209,15 @@ window.wizardSubmit = async () => {
             extra: {}
         };
 
+        // Group 64 review (S2 / S3): Edit Spool sends Total Used only when the box
+        // changed from what the record filled in (typed, or worked out by the weigh
+        // boxes). Sent as drawn, it rewrote 100.37 as the box's 100.4 on a comment
+        // save, and a form opened before a print's charge and saved after it wrote
+        // the old used weight back over the charge; either was stamped as a weighing.
+        if (isWizardEdit && wizardState.usedShown != null && getVal('wiz-spool-used') === wizardState.usedShown) {
+            delete sp_payload.used_weight;
+        }
+
         // Purchase Link (Spool Extra)
         const purchaseUrl = document.getElementById('wiz-spool-purchase_url')?.value?.trim();
         if (purchaseUrl) sp_payload.extra.purchase_url = purchaseUrl;
@@ -4513,6 +4526,9 @@ window.wizardSubmit = async () => {
             // over the wizard, and show where a move put it in the Location field, so the
             // next Save moves nothing (wizardAfterOwnWrite, below).
             if (isWizardEdit) wizardAfterOwnWrite(data, editSid, wizModal);
+            // Group 64 review (S3): the box shows what this Save wrote, so the next
+            // Save in this session sends it only if it changes again.
+            if (isWizardEdit) wizardState.usedShown = document.getElementById('wiz-spool-used').value;
             if (isWizardEdit && data.location_moved) {
                 // Group 40.7: where the Location move put it, in short arrows.
                 const lr = data.location_result;
@@ -5098,6 +5114,7 @@ window.openEditWizard = async (spoolId) => {
             // (a) doesn't show float noise like "150.40000001" and (b) reconciles
             // with the remaining field derived by wizardCalcRemainingFromUsed below.
             document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(d.used_weight || 0);
+            wizardState.usedShown = document.getElementById('wiz-spool-used').value;
             
             // WEIGH-OUT PROTOCOL: Store original value and show input
             wizardState.original_used_weight = d.used_weight || 0;
