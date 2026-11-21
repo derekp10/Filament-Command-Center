@@ -201,6 +201,11 @@ _EXTRUDING_MOVE_RE = re.compile(r'^G0*[0-3](?![0-9])')
 # words as bare lines with no ';' (the raccoon capture): the slicer counted those
 # moves, so a bare line is no tag.
 _EXCLUDE_E_TAG_RE = re.compile(r'\s*;EXCLUDE_E_(START|END)')
+# Group 64.5: G90 / G91 (absolute / relative positioning for every axis, E
+# included), zero-padded or not; G90.1-style subcodes are no such line.
+_POSITIONING_RE = re.compile(r'^G0*9([01])(?![0-9.])')
+# An axis word on a G92 line other than E (X, Y, Z, or a rotary axis).
+_AXIS_WORD_RE = re.compile(r'[XYZABC]-?\d*\.?\d')
 
 
 def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int):
@@ -212,24 +217,35 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
     ``(cuts, whole)``: ``cuts`` is a list in `cut_bytes` order of
     ``({tool: mm}, saw_tool)``, and ``whole`` is the same pair for the file.
 
-    Handles absolute (M82, default) and relative (M83) extrusion, ``G92 E<n>``
-    extruder-origin resets, per-tool absolute-E context across ``T<n>`` changes
-    (each tool changer head has its own E coordinate), and inline ``;`` comments.
+    One rule for both E modes (Group 64.5): each tool keeps its E position (its
+    own coordinate: a toolchanger's heads each have one) and a high-water mark;
+    new filament is what the position passes the mark by. A relative move (``M83``
+    for E, or ``G91`` for every axis: E is relative under either, as PrusaSlicer's
+    GCodeProcessor reads them, so ``G90`` doesn't undo ``M83``) adds to the
+    position; an absolute one sets it. So a retract the file takes back adds
+    nothing, and one it never takes back (each tool's last, the park's at a
+    cancel) stays counted, as the slicer's footer counts it: the walk used to net
+    them in relative E and land ~0.8 mm per tool under its footer. ``G92 E<v>``
+    moves the position to v and keeps a retract still owed (the mark is v plus
+    what was owed), so the un-retract after it isn't new filament; a bare ``G92``
+    is ``G92 E0``, and one naming only other axes leaves E alone. Inline ``;``
+    comments are ignored.
     A move between the slicer's ``;EXCLUDE_E_START`` / ``;EXCLUDE_E_END`` tags
     adds no filament, as in the slicer's own count (`_EXCLUDE_E_TAG_RE`), but it
-    still moves E: in absolute E the high-water mark moves by the move's own
-    delta, so a retract before it is still owed and E past the moved mark counts
-    (the slicer's count, for any excluded move). Tool changes and ``G92`` inside
-    the tags act as anywhere else; a START with no END leaves out the rest of the
-    file and an END with no START does nothing, as in the slicer.
+    still moves E: the mark moves by the move's own delta, so a retract before it
+    is still owed and E past the moved mark counts (the slicer's count, for any
+    excluded move). Tool changes and ``G92`` inside the tags act as anywhere else;
+    a START with no END leaves out the rest of the file and an END with no START
+    does nothing, as in the slicer.
     """
     order = sorted(range(len(cut_bytes)), key=lambda i: cut_bytes[i])
     cuts = [None] * len(cut_bytes)
     nxt = 0
     active_tool = default_tool
-    relative_e = False           # M82 absolute (default) vs M83 relative
-    e_high: Dict[int, float] = {}   # per-tool high-water E since last G92 reset
-    e_last: Dict[int, float] = {}   # per-tool absolute E after its last move or G92
+    relative_e = False           # M83 (E relative) vs M82 (E absolute, the default)
+    relative_all = False         # G91 (every axis relative) vs G90 (absolute, the default)
+    e_pos: Dict[int, float] = {}    # per-tool E position, in its own coordinate
+    e_mark: Dict[int, float] = {}   # per-tool high-water mark of that position
     extruded_mm: Dict[int, float] = {}
     saw_tool = False
     exclude_e = False            # between ;EXCLUDE_E_START and ;EXCLUDE_E_END
@@ -237,9 +253,13 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
 
     for line in gcode_content.splitlines(keepends=True):
         consumed += len(line.encode('utf-8'))
-        # Every cut this line runs past sees the state before the line.
+        # Every cut this line runs past sees the state before the line: what each
+        # tool had pushed out, and the retract it still owed then (worked out once
+        # the walk ends, below).
         while nxt < len(order) and consumed > cut_bytes[order[nxt]]:
-            cuts[order[nxt]] = (dict(extruded_mm), saw_tool)
+            cuts[order[nxt]] = (dict(extruded_mm),
+                                {t: max(0.0, e_mark.get(t, 0.0) - e_pos.get(t, 0.0)) for t in extruded_mm},
+                                saw_tool)
             nxt += 1
         code = line.split(';', 1)[0].strip()
         if not code:
@@ -263,45 +283,56 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
         if upper.startswith('M83'):
             relative_e = True
             continue
+        mode = _POSITIONING_RE.match(upper)
+        if mode:
+            relative_all = mode.group(1) == '1'      # G91 relative, G90 absolute
+            continue
         if upper.startswith('G92'):
             em = _E_RE.search(upper)
-            if em:
-                # G92 E<v> redefines the E origin: reset the high-water mark so
-                # extrusion past <v> counts (filament already used stays counted).
-                e_high[active_tool] = e_last[active_tool] = float(em.group(1))
-            else:
-                # Bare G92 (no params) resets all axes incl. E to 0 (RepRap) —
-                # reset the high-water mark too. (PrusaSlicer emits `G92 E0`
-                # explicitly, so this only guards hand/odd gcode.)
-                e_high[active_tool] = e_last[active_tool] = 0.0
+            if em is None and _AXIS_WORD_RE.search(upper[3:]):
+                continue        # G92 naming only other axes: E stays where it is
+            # G92 E<v> (a bare G92 is E0) moves E to v: a retract still owed stays
+            # owed, so the un-retract after it isn't new filament.
+            pos = e_pos.get(active_tool, 0.0)
+            owed = e_mark.get(active_tool, 0.0) - pos
+            v = float(em.group(1)) if em else 0.0
+            e_pos[active_tool] = v
+            e_mark[active_tool] = v + owed
             continue
         if _EXTRUDING_MOVE_RE.match(upper):
             em = _E_RE.search(upper)
             if not em:
                 continue
             e = float(em.group(1))
-            if relative_e:
-                # Net extrusion: a retract (negative) and its later re-prime
-                # cancel, so signed accumulation matches the slicer's count (all
-                # but a last retract the file never recovers, which the slicer
-                # still counts as used: a fraction of a mm per tool).
-                if not exclude_e:
-                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + e
-            else:
-                # High-water mark: only E that EXCEEDS the running max is new
-                # filament (a retract + re-prime below the max adds nothing).
-                hi = e_high.get(active_tool, 0.0)
-                if exclude_e:
-                    # Not filament, but E moves: the mark moves by the same delta.
-                    e_high[active_tool] = hi + (e - e_last.get(active_tool, 0.0))
-                elif e > hi:
-                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + (e - hi)
-                    e_high[active_tool] = e
-                e_last[active_tool] = e
+            pos = e_pos.get(active_tool, 0.0)
+            new = pos + e if (relative_e or relative_all) else e
+            mark = e_mark.get(active_tool, 0.0)
+            if exclude_e:
+                # Not filament, but E moves: the mark moves by the same delta.
+                e_mark[active_tool] = mark + (new - pos)
+            elif new > mark:
+                # Only E past the running mark is new filament (a retract and its
+                # re-prime below the mark add nothing; a retract never taken back
+                # stays counted, as in the slicer's footer).
+                extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + (new - mark)
+                e_mark[active_tool] = new
+            e_pos[active_tool] = new
 
     whole = (dict(extruded_mm), saw_tool)
     for i in order[nxt:]:
         cuts[i] = whole
+    # A cut counts what each tool pushed out, less a retract still pending then:
+    # pulled back into the tool, not used (the next prime gives it back), so a
+    # cancel isn't charged it. A tool that pushes out nothing more after the cut
+    # had finished: it keeps its whole count, a retract the file never takes back
+    # included, as the slicer's footer (and a completion's charge) counts it.
+    for i, snap in enumerate(cuts):
+        if snap is whole:
+            continue
+        mm_at, owed_at, saw_at = snap
+        cuts[i] = ({t: (mm if mm >= extruded_mm.get(t, 0.0) - 1e-9
+                        else max(0.0, mm - owed_at.get(t, 0.0)))
+                    for t, mm in mm_at.items()}, saw_at)
     return cuts, whole
 
 

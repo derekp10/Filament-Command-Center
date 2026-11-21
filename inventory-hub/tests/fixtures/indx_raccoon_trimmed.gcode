@@ -6,17 +6,21 @@
 ; What is kept: the decoded file's first 15322 lines (start gcode and prime flush, then
 ; the first layer's T0 -> T1 -> T2 segments with their tool changes and Purge Station
 ; blocks, arc-fitted G2/G3 moves on every tool, cut just before layer 2's T0), then the
-; file's end gcode, then a footer recomputed for this excerpt: per tool, mm = the signed
-; sum of E over every G0/G1/G2/G3 line (the file is M83 throughout), g = that mm times the
-; original footer's g/mm for the tool (built by make_trimmed_fixture.py beside the capture).
+; file's end gcode, then a footer recomputed for this excerpt: per tool, mm = the E it
+; pushes past its own high-water mark over every G0/G1/G2/G3 line (the slicer's count: a
+; retract the file takes back adds nothing, one it never takes back stays counted; the file
+; is M83 throughout), g = that mm times the original footer's g/mm for the tool (built by
+; make_trimmed_fixture.py beside the capture; rebuilt 2026-11-20 for Group 64.5, when the
+; footer had been the signed sum of E, which nets each tool's last retract out).
 ;
 ; What it should parse to: a whole-file walk lands on the footer below for every tool
-; (T0 0.57 g, T1 0.22 g, T2 0.20 g). Arcs carry T0 0.43 g, T1 0.05 g and
+; (T0 0.57 g, T1 0.22 g, T2 0.21 g). Arcs carry T0 0.43 g, T1 0.05 g and
 ; T2 0.04 g of that, so a walk that skips G2/G3 falls short on every tool.
 ;
 ; The whole original file, for the record (footer 18.83 / 24.44 / 9.00 g = 52.27 g): FCC's
 ; walk counted 17.58 / 22.20 / 8.65 g = 48.43 g before arcs were counted, and
-; 18.83 / 24.44 / 9.00 g = 52.26 g after (Group 56.1).
+; 18.83 / 24.44 / 9.00 g = 52.26 g after (Group 56.1), and each tool lands on its footer's
+; mm to 0.005 mm once a retract the file never takes back counts (Group 64.5).
 ; 
 M73 P0 R314
 M73 Q0 S372
@@ -15376,5 +15380,5 @@ M73 P100 R0
 M73 Q100 S0
 
 
-; filament used [mm] = 190.02, 73.60, 68.09, 0.00, 0.00, 0.00, 0.00, 0.00
-; filament used [g] = 0.57, 0.22, 0.20, 0.00, 0.00, 0.00, 0.00, 0.00
+; filament used [mm] = 190.82, 74.40, 68.89, 0.00, 0.00, 0.00, 0.00, 0.00
+; filament used [g] = 0.57, 0.22, 0.21, 0.00, 0.00, 0.00, 0.00, 0.00

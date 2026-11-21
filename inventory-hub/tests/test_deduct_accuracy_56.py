@@ -176,9 +176,11 @@ def test_trimmed_indx_fixture_whole_walk_lands_on_its_footer():
     the G91 prime flush) walks to its footer on every tool; skipping arcs (the
     regex before 56.1) falls short on every tool by more than 10%.
 
-    The excerpt's footer was computed for it by an independent signed-E count
-    over G0-G3 (make_trimmed_fixture.py beside the capture), so its first half
-    only proves the walker reads the real syntax the way that count does; the
+    The excerpt's footer was computed for it by an independent count over G0-G3,
+    the slicer's high-water rule (make_trimmed_fixture.py beside the capture;
+    since Group 64.5, when it stopped netting each tool's last retract out), so
+    its first half only proves the walker reads the real syntax the way that
+    count does; the
     second half (arcs carry >10% of every tool) is what tells the old walk from
     the new. The check against the SLICER's own footer is the full-capture test
     below, which runs where the git-ignored capture exists (Derek's PC)."""
@@ -211,12 +213,18 @@ def test_trimmed_indx_fixture_partials_keep_the_untouched_head_at_zero():
                     reason="the full raccoon capture is git-ignored (only on Derek's PC)")
 def test_full_raccoon_capture_walks_to_its_footer():
     """The whole real file: 52.26 g against the footer's 52.27 g (it was 48.43 g),
-    and a cancel at the end charges exactly the footer."""
+    and a cancel at the end charges exactly the footer. Since Group 64.5 each tool
+    walks to its footer's millimetres within 0.05 mm (to 0.004 mm today)."""
     g = _read_text(_RACCOON)
     measured = prusalink_api.measure_filament_usage(g, [0.5, 1.0])
     assert measured["footer"] == {0: 18.83, 1: 24.44, 2: 9.0}
     for t, want in measured["footer"].items():
         assert abs(measured["whole"][t] - want) < 0.1, (t, measured["whole"])
+    foot_mm = prusalink_api._parse_weights_from_match(prusalink_api._GCODE_MM_RE.search(g))
+    _cuts, (walked_mm, _saw) = prusalink_api._walk_extrusion(g, [], 0)
+    assert set(walked_mm) == set(foot_mm) == {0, 1, 2}
+    for t, want in foot_mm.items():
+        assert walked_mm[t] == pytest.approx(want, abs=0.05), (t, walked_mm, foot_mm)
     assert measured["partials"][1] == measured["footer"]
     half = measured["partials"][0]
     assert sum(half.values()) == pytest.approx(23.80, abs=0.05)
@@ -243,14 +251,16 @@ def test_partial_is_the_share_reached_times_the_footer():
     assert measured["partials"][1][0] == pytest.approx(1.0)    # not 1.1
 
 
-def test_a_net_negative_tail_never_charges_past_the_footer():
-    """Relative E nets a final retract, so a cancel just before it reaches more
-    than the whole file: the charge stops at the footer. (Before 56.2 this
-    cancel was charged 12mm at the footer's g/mm: 1.2g against a 1g footer.)"""
+def test_a_walk_past_its_footer_never_charges_past_the_footer():
+    """A file that walks 12mm against a 10mm / 1g footer: a cancel after the
+    tool's last filament is charged the whole share, the footer, never 12mm at
+    the footer's g/mm (1.2g, before 56.2). Since Group 64.5 the final retract
+    stays counted, as the slicer counts a retract the file never takes back, so
+    the whole walk is 12mm (relative E used to net it to 10)."""
     head = "M83\nT0\nG1 E12\n"
     g = head + "G1 E-2\n" + _footer([10], [1.0])
     measured = prusalink_api.measure_filament_usage(g, [(len(head) + 1) / len(g)])
-    assert measured["whole"][0] == pytest.approx(1.0)
+    assert measured["whole"][0] == pytest.approx(1.2)
     assert measured["partials"][0][0] == pytest.approx(1.0)
 
 
@@ -268,13 +278,18 @@ def test_absolute_e_wipe_tail_keeps_a_late_cancel_under_the_footer():
 
 def test_core_one_fixture_still_scales_and_clamps():
     """The Core One fixture walks ~1.4% over its footer with arcs counted; every
-    partial stays within the footer and the end of the file charges exactly it."""
+    partial stays within the footer and the end of the file charges exactly it.
+    It is a Core One MMU3 print (its metadata: COREONEMMU3, five extruders, a wipe
+    tower), and the 30 mm over is its first load, which the slicer's MMU rule leaves
+    out and the walk doesn't read. Group 64.5 moved its whole from 6.4374 g to
+    6.4394 g: the print's last retract, never taken back, now counts."""
     if not os.path.isfile(_CORE1):
         pytest.skip("sample.bgcode fixture not present")
     g = bgcode_decode.decode_bgcode(open(_CORE1, "rb").read())["gcode"]
     measured = prusalink_api.measure_filament_usage(g, [0.25, 0.5, 0.75, 0.99, 1.0])
     assert measured["footer"] == {1: 6.35}
     assert 1.01 < measured["whole"][1] / 6.35 < 1.02, measured["whole"]
+    assert measured["whole"][1] == pytest.approx(6.4394, abs=5e-5), measured["whole"]
     vals = [p[1] for p in measured["partials"]]
     assert vals == sorted(vals) and all(v <= 6.35 for v in vals), vals
     assert vals[-1] == pytest.approx(6.35)
@@ -776,14 +791,30 @@ def test_the_warning_never_raises_into_the_deduct(logs):
     assert _gap_lines(logs) == []
 
 
-def test_a_tool_whose_walk_nets_nothing_falls_back_to_the_footer_ratio():
-    """Relative E whose tail nets the tool below zero: there is no share to scale
-    by, so the partial is mm x the footer's g/mm (still clamped)."""
+def test_a_retract_past_what_a_tool_pushed_out_takes_nothing_back():
+    """Relative E whose tail retracts more than the tool ever pushed out: the walk
+    used to net the tool to -1mm, with no share to scale by. Since Group 64.5 a
+    retract adds nothing and takes nothing back (the slicer's count), so the tool
+    walks to the 2mm it pushed out, and a cancel after them is charged the whole
+    share: the footer."""
     head = "M83\nT0\nG1 E2\n"
-    g = head + "G1 E-3\n" + _footer([5], [1.0])          # whole walk -1 mm
+    g = head + "G1 E-3\n" + _footer([5], [1.0])
     measured = prusalink_api.measure_filament_usage(g, [(len(head) + 1) / len(g)])
-    assert "0" not in {str(k) for k in measured["whole"]}
-    assert measured["partials"][0][0] == pytest.approx(0.4)   # 2 mm * 0.2 g/mm
+    assert measured["whole"] == {0: pytest.approx(0.4)}              # 2 mm * 0.2 g/mm
+    assert measured["partials"][0][0] == pytest.approx(1.0)
+
+
+def test_a_whole_walk_of_nothing_falls_back_to_the_footer_ratio():
+    """A guard no walk reaches since Group 64.5 (a tool's count only grows, so its
+    whole is never under a cut's): with no whole to scale by, the partial is mm x
+    the footer's g/mm, still clamped."""
+    g = "M83\nT0\nG1 E2\n" + _footer([5], [1.0])
+    walked = ([({0: 2.0}, True), ({0: 30.0}, True)], ({}, True))
+    with patch.object(prusalink_api, "_walk_extrusion", return_value=walked):
+        measured = prusalink_api.measure_filament_usage(g, [0.5, 0.6])
+    assert measured["whole"] == {}
+    assert measured["partials"][0][0] == pytest.approx(0.4)          # 2 mm * 0.2 g/mm
+    assert measured["partials"][1][0] == pytest.approx(1.0)          # 6 g, clamped
 
 
 def _split_file():
