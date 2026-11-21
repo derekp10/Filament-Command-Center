@@ -357,6 +357,33 @@
 > here from under "Overarching Issue" (whose "table for now" is about Derek's three-levels note, not these), then the
 > plan docs item, moved out of ⏸️ PENDING DEREK because its next step is Claude's.
 
+* **🔁 Dev downloads every ended print's file from the printers too, as prod does (Derek, 2026-11-20, during Group 64).**
+  Dev's and prod's FCC both watch the same printers, so each ended print's file is downloaded twice from the printer's
+  USB stick (an INDX file takes 20 to 33 minutes), and since Group 64.4 a file FCC can't read is tried for the whole
+  72 hours on each. Derek: *"I'm fine for it being a little more efficient and considerate of thrashing the USB stick
+  (Because both prod and dev do this currently, and may be the cause for some of the slow downs IF the printer can
+  handle multiple file request connections at once."* Direction: a setting that keeps dev from watching (or from
+  downloading from) the real printers, its tests using the fakes; check first whether a printer serves two downloads at
+  once. Standalone.
+* **⚖️ A 🛑 card's Apply doesn't see a weighing made after the card was opened (found 2026-11-20 building Group 64's
+  Decision 1).** Decision 1 holds a spool weighed between a print's end and its charge (pre-filled 0 g when FCC's own
+  stamp shows the order), and a card's row gets the same note when the card is made. A spool weighed after that, before
+  the card's Apply, is charged on top as before (the Apply re-reads the used weight so it doesn't overwrite the scale,
+  then adds the grams). Direction: at the Apply, check each row's spool's weigh stamp (`weigh_stamps`) against the
+  print's end read time (`heads_read_at`) and ask, as the card does at its making. Standalone.
+* **🧵 An MMU's SpoolJoin is invisible to FCC (found 2026-11-20 building Group 64.6; no hardware here).** An MMU that
+  switches to another slot by itself when a filament runs out (SpoolJoin) neither parks at ATTENTION nor makes an FCC
+  move, so FCC charges the whole print to the first slot's spool. Needs a real MMU, and whether its firmware or
+  PrusaLink reports the switch at all. Also noted then: PrusaSlicer's own footer leaves out the whole parking distance
+  (84 mm on a Core One MMU3) for an MMU print whose first filament is T0 (no tool change for its first load; 32 mm for
+  any other), and FCC charges by that footer. Watch item.
+* **🧪 Five deduct test files set `_CANCEL_DEDUCT_RUN_ASYNC` by hand (found 2026-11-20 by Group 64.3 (9)).**
+  `test_cancel_detection.py`, `test_completion_deduct.py`, `test_deduct_followups_22_4.py`,
+  `test_indx_multitool_deduct.py` and `test_runout_auto_split.py` save, set and restore it in a try / finally (correct;
+  only not monkeypatch's form, which 64.3 (9) gave the spool-swap files). Hygiene, any time.
+* **🧪 A flaky node test: `test_missing_tare_and_grams_63_7_9_js.py` case [16,7] (seen 2026-11-20 in a full run).** A
+  keystroke dropped under load; it passed on its own. Check whether its typing waits for the page, as the other weight
+  tests do. Standalone.
 * **🟡 Force Location or a move can let a single-slot box go while another spool still runs from it, when it takes an
   archived spool off a head (found 2026-11-19 by Group 63's review, round 4; it needs 63.2's stuck spool).** Since
   round 4 an Edit Spool Save keeps the box (`logic.release_box_after_direct_write`'s `_box_runs_another` check, the
