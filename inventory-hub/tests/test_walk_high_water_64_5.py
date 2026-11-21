@@ -118,12 +118,63 @@ def test_only_g90_and_g91_switch_the_mode():
     assert _whole("M82\nT0\nG92 E0\nG1 X1 E2\nG91.1\nG1 X1 E3\n", [3]) == {0: 3.0}
 
 
-def test_each_tool_keeps_its_own_position_and_debt():
+def test_each_tool_keeps_its_own_debt_on_the_one_e_axis():
     """T0 retracts 1 and hands over; T1's moves never pay T0's debt, and T0 pays its
     own when it comes back. (Passes by design on the old walk: relative E netted
     each tool's own moves the same.)"""
     body = ("M83\nT0\nG1 X1 E4\nG1 E-1\nT1\nG1 X2 E1\nG1 E2\nT0\nG1 E1\nG1 X3 E2\n")
     assert _whole(body, [6, 3]) == {0: 6.0, 1: 3.0}
+
+
+def test_a_tool_picked_up_takes_the_e_axis_where_it_is():
+    """One E axis, as the slicer keeps it (Group 64 review, W3): in absolute E a
+    custom tool change that pulls back before the T and pushes after it moves one
+    axis, so T1's first push from -2 to 2 is 4 mm of new filament, not 2. Each tool
+    giving its own position (T1 starting at 0) counted T1 7. The reviewer's
+    absolute-E slice with such a tool change came 2 mm short a change; relative E
+    counts the same either way."""
+    body = "M82\nT0\nG92 E0\nG1 X1 E10\nG92 E0\nG1 E-2\nT1\nG1 E2\nG92 E0\nG1 X2 E5\n"
+    assert _whole(body, [10, 9]) == {0: 10.0, 1: 9.0}
+    relative = "M83\nT0\nG1 X1 E10\nG1 E-2\nT1\nG1 E4\nG1 X2 E5\n"
+    assert _whole(relative, [10, 9]) == {0: 10.0, 1: 9.0}
+    # T0 comes back owing its 2 on the axis T1 left at 5: 5 -> 7 pays it, 7 -> 8 is
+    # new. (T0 giving its own position, -2, counted 9 there: 18 in all.)
+    back = body + "T0\nG1 E7\nG1 X3 E8\n"
+    assert _whole(back, [11, 9]) == {0: 11.0, 1: 9.0}
+
+
+_REVIEW_SLICES = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".captures",
+                                              "g64-review-slices-2026-11-20"))
+
+
+def test_the_reviews_prusaslicer_slices_walk_to_their_footers():
+    """Real PrusaSlicer 2.9.7 slices, one shape each (absolute E with a custom tool
+    change, G91, an XL 5T, the INDX, MMU3 on T0 and T1 first, a CR LF copy, a start
+    G-code holding the config marker: the folder's README): every tool walks to its
+    footer's millimetres within 0.01 mm. Git-ignored, as every capture is: skipped
+    where the folder is absent."""
+    import glob
+    import bgcode_decode  # noqa: E402
+    files = sorted(glob.glob(os.path.join(_REVIEW_SLICES, "*.gcode"))
+                   + glob.glob(os.path.join(_REVIEW_SLICES, "*.bgcode")))
+    if not files:
+        import pytest
+        pytest.skip("the review's slices aren't on this PC (.captures/g64-review-slices-2026-11-20)")
+    assert len(files) == 15, files
+    for path in files:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+        g = (bgcode_decode.decode_bgcode(raw)["gcode"] if bgcode_decode.is_bgcode(raw)
+             else raw.decode("utf-8"))
+        foot = prusalink_api._parse_weights_from_match(prusalink_api._GCODE_MM_RE.search(g))
+        assert foot, path
+        default = next(iter(foot)) if len(foot) == 1 else 0
+        _cuts, (walked, saw) = prusalink_api._walk_extrusion(g, [], default,
+                                                             mmu=prusalink_api._mmu_rule(g))
+        if not saw and len(foot) == 1 and walked:
+            walked = {next(iter(foot)): sum(walked.values())}
+        gaps = {t: round(walked.get(t, 0.0) - mm, 4) for t, mm in foot.items()}
+        assert all(abs(v) <= 0.01 for v in gaps.values()), (os.path.basename(path), gaps)
 
 
 # --------------------------------------------------------------------------- #

@@ -226,7 +226,24 @@ _AXIS_WORD_RE = re.compile(r'[XYZABC]-?\d*\.?\d')
 _SLICER_CONFIG_BEGIN = "; prusaslicer_config = begin"
 _MMU_CONFIG_RE = re.compile(
     r'(?m)^;[ \t]*(single_extruder_multi_material|wipe_tower|parking_pos_retraction'
-    r'|extra_loading_move|nozzle_diameter)[ \t]*=[ \t]*(.*?)[ \t]*$')
+    r'|extra_loading_move|nozzle_diameter)[ \t]*=[ \t]*(.*?)[ \t\r]*$')
+
+
+def _config_block_start(text: str) -> int:
+    """Where the file's config block begins: the last line that is exactly the
+    begin marker (a CRLF file's \\r allowed), never the marker's words inside another
+    line (a start G-code that holds them, kept on its own config line after the real
+    marker: Group 64 review, W2). -1 when there is none."""
+    end = len(text)
+    while True:
+        at = text.rfind(_SLICER_CONFIG_BEGIN, 0, end)
+        if at < 0:
+            return -1
+        line_end = text.find('\n', at)
+        line = text[at:line_end if line_end >= 0 else len(text)]
+        if (at == 0 or text[at - 1] == '\n') and line.rstrip('\r \t') == _SLICER_CONFIG_BEGIN:
+            return at
+        end = at
 
 
 def _mmu_rule(gcode_content: str):
@@ -234,7 +251,7 @@ def _mmu_rule(gcode_content: str):
     slicer counted it as an MMU print (single extruder multi material, a wipe tower,
     more than one extruder by its `nozzle_diameter` list, as apply_config reads
     them), else None."""
-    at = gcode_content.rfind(_SLICER_CONFIG_BEGIN)
+    at = _config_block_start(gcode_content)
     if at < 0:
         return None
     cfg = {}
@@ -259,8 +276,9 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int,
     ``(cuts, whole)``: ``cuts`` is a list in `cut_bytes` order of
     ``({tool: mm}, saw_tool)``, and ``whole`` is the same pair for the file.
 
-    One rule for both E modes (Group 64.5): each tool keeps its E position (its
-    own coordinate: a toolchanger's heads each have one) and a high-water mark;
+    One rule for both E modes (Group 64.5): one E axis, as the slicer keeps it (a
+    tool picked up takes the axis where it is; Group 64 review, W3), and each tool a
+    high-water mark of it (what it owes is how far the axis is below its mark);
     new filament is what the position passes the mark by. A relative move (``M83``
     for E, or ``G91`` for every axis: E is relative under either, as PrusaSlicer's
     GCodeProcessor reads them, so ``G90`` doesn't undo ``M83``) adds to the
@@ -337,6 +355,14 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int,
             tool = int(tmatch.group(1))
             if mmu and tool != active_tool:
                 tool_changed = True
+            if tool != active_tool and active_tool in e_pos:
+                # One E axis for every tool, as the slicer keeps it (Group 64 review,
+                # W3): the new tool takes the axis where it is, keeping only what it
+                # owes. Relative E counts the same either way; in absolute E a custom
+                # tool change that moves E on both sides of the T counted 2 mm short.
+                owed_new = e_mark.get(tool, e_pos.get(tool, 0.0) + park) - e_pos.get(tool, 0.0)
+                e_pos[tool] = e_pos[active_tool]
+                e_mark[tool] = e_pos[tool] + owed_new
             active_tool = tool
             saw_tool = True
             continue
@@ -428,10 +454,10 @@ def measure_filament_usage(gcode_content: str, reached_fractions) -> Optional[Di
     whole-file extrusion reached, times the footer's grams for that tool, never
     more than the footer: ``footer_g × partial_mm / whole_mm``. The footer is the
     slicer's count of the whole job, so a walk that over- or under-counts the file
-    as a whole (the Core One fixture walks ~1.4% over, from moves the slicer counts
-    differently) can't move a cancel's charge past it, and a cancel at 99% stays
-    under the footer even where the walk leaves out a final wipe. A tool whose walk
-    sums to nothing over the file falls back to mm × the footer's own g/mm.
+    as a whole can't move a cancel's charge past it (since Group 64.5 / 64.6 the walk
+    is the slicer's own count, to 0.005 mm per tool on every capture here). A tool
+    whose walk sums to nothing over the file falls back to mm × the footer's own g/mm
+    (a guard: the count only grows, so no walk reaches it).
 
     Critically this is PER-TOOLHEAD by construction: a tool never selected before
     the cancel sums to zero extrusion and is simply absent from that result (the XL

@@ -47,7 +47,7 @@ _META_TYPES = (_BT_FILE_META, _BT_SLICER_META, _BT_PRINTER_META, _BT_PRINT_META)
 # (prusalink_api._mmu_rule), read from the Slicer-Metadata block's `key=value` lines.
 _MMU_KEYS = ("single_extruder_multi_material", "wipe_tower", "parking_pos_retraction",
              "extra_loading_move", "nozzle_diameter")
-_MMU_KEY_RE = re.compile(r"(?m)^[ \t]*(" + "|".join(_MMU_KEYS) + r")[ \t]*=[ \t]*(.*?)[ \t]*$")
+_MMU_KEY_RE = re.compile(r"(?m)^[ \t]*(" + "|".join(_MMU_KEYS) + r")[ \t]*=[ \t]*(.*?)[ \t\r]*$")
 # Compression
 _COMP_NONE = 0
 _COMP_DEFLATE = 1

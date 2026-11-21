@@ -2079,7 +2079,15 @@ def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content, 
             "WARNING", "ffaa00")
         return "no_usage"
     has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
-    if has_footer and reason in (None, "nothing_reached"):
+    if has_footer and reason in (None, "nothing_reached") and prusalink_api._mmu_rule(content):
+        # Group 64 review (W1): an MMU print's count leaves out its first load, as the
+        # slicer's does (64.6), and that load can run into a purge line that printed.
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
+            f"no partial usage to deduct: it was cancelled within the MMU's first load, "
+            f"which the slicer counts as no filament used (a purge line may have printed).",
+            "INFO")
+    elif has_footer and reason in (None, "nothing_reached"):
         state.add_log_entry(
             f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
             f"no partial usage to deduct (cancelled before any extrusion).",
@@ -2224,15 +2232,17 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
 
 
 # Group 56.2 — how far a cancel's whole-file G-code walk may drift from the
-# slicer's footer, per head, before FCC says so. Arcs counted, real files land
-# within ~1.4% (the Core One fixture), ~0.01% (the raccoon INDX print) or ~0.9%
-# (the flexi-fox INDX print, its ;EXCLUDE_E moves left out as the slicer leaves
-# them out: counted, they walked to ~2.5x its footer; hotfix 2026-11-02; what is
-# left is each tool's last retract, which the slicer counts and the walk nets).
+# slicer's footer, per head, before FCC says so. Since Group 64.5 / 64.6 the walk is
+# the slicer's own count (its high-water rule, the ;EXCLUDE_E and ;FLUSH tags, one E
+# axis, an MMU print's parking rule): every capture here lands within 0.005 mm per
+# tool (the raccoon and flexi-fox INDX prints, the Core One MMU3 fixture, a
+# three-filament MMU3 slice, absolute-E slices). A head past 2% is a file FCC reads
+# differently from the slicer (a new tag, a firmware command it doesn't know).
 _PARSE_GAP_PCT = 2.0
-# ... and by at least this many grams: a Core One MMU3-profile file's start G-code
-# walks a fixed ~29 mm (~0.09 g) the slicer doesn't count, which is over 2% of any
-# print under ~4.4 g although nothing is misread (Group 56 review, round 2).
+# ... and by at least this many grams: below it a tiny tool's footer, rounded to
+# 0.01 g, can be 2% out on its own (Group 56 review, round 2, set it for a start
+# G-code the walk then counted and the slicer didn't, which 64.6 now counts as the
+# slicer does).
 _PARSE_GAP_MIN_G = 0.1
 
 

@@ -255,3 +255,80 @@ def test_decode_leaves_every_other_file_as_it_was():
     other = _SLICER_META.replace(b"single_extruder_multi_material=1", b"single_extruder_multi_material=0")
     g = bgcode_decode.decode_bgcode(_bgcode(other))["gcode"]
     assert g == _THREE_CHANGES + "\n; filament used [mm] = 0, 130, 50\n; filament used [g] = 0, 130, 50\n"
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 review (W2): the settings are read wherever a file keeps them        #
+# --------------------------------------------------------------------------- #
+
+def test_a_crlf_file_reads_its_settings_as_an_lf_one():
+    """A file whose lines end CR LF (a copy that went through a Windows tool): each
+    setting's value used to keep its CR, so "1\\r" was no "1" and the rule was off.
+    The reviewer's CR LF copy of the three-cube slice walked 1216 mm short."""
+    lf = _THREE_CHANGES + _footer([0, 130, 50]) + _config()
+    crlf = lf.replace("\n", "\r\n")
+    assert prusalink_api._mmu_rule(crlf) == prusalink_api._mmu_rule(lf) == (84.0, -52.0)
+    assert _walk(crlf) == {1: 130.0, 2: 50.0}
+
+
+@pytest.mark.parametrize("start", ["M17\\n; prusaslicer_config = begin\\nG28",
+                                   "M17\\nG28\\n; prusaslicer_config = begin"],
+                         ids=["inside-the-start-gcode", "ending-the-start-gcode"])
+def test_the_config_block_is_found_by_its_own_line(start):
+    """A start G-code holding the begin marker's words: the body has them on a line
+    of their own, and the config block keeps the start G-code on one line, its
+    newlines written as \\n, AFTER the real marker (the keys go in alphabetical
+    order). Read from that line, every setting before it (the parking distance, the
+    extruder count, single extruder multi material) was missed and the rule was off."""
+    cfg = _config().replace("; wipe_tower = 1\n", f"; start_gcode = {start}\n; wipe_tower = 1\n")
+    body = "M17\n; prusaslicer_config = begin\nG28\n" + _THREE_CHANGES
+    text = body + _footer([0, 130, 50]) + cfg
+    assert prusalink_api._mmu_rule(text) == (84.0, -52.0)
+    assert _walk(text) == {1: 130.0, 2: 50.0}
+    # The marker's words with no config block after them are no block either.
+    assert prusalink_api._mmu_rule(body + _footer([0, 130, 50]) + f"; start_gcode = {start}\n") is None
+    # Nor is a line that starts with them and goes on (no slicer writes one: the rule
+    # is a line of its own).
+    assert prusalink_api._mmu_rule(text + "; prusaslicer_config = begin, said the note\n") == (84.0, -52.0)
+
+
+def test_decode_reads_a_crlf_slicer_metadata_block():
+    """The same for a .bgcode whose Slicer-Metadata block ends its lines CR LF:
+    its settings carried their CR into the appended block, and the rule was off."""
+    g = bgcode_decode.decode_bgcode(_bgcode(_SLICER_META.replace(b"\n", b"\r\n")))["gcode"]
+    assert g.endswith("; nozzle_diameter = 0.4,0.4,0.4\n; prusaslicer_config = end\n"), g[-300:]
+    assert prusalink_api._mmu_rule(g) == (84.0, -52.0)
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 review (W1): a cancel inside an MMU print's first load               #
+# --------------------------------------------------------------------------- #
+
+def test_an_mmu_cancel_inside_its_first_load_says_so(monkeypatch):
+    """The slicer counts an MMU print's first load (its parking distance) as no
+    filament used, and on a Core One MMU3 profile that runs past the purge line. A
+    cancel there has nothing to charge, as the footer would count it, but it isn't
+    "cancelled before any extrusion": the purge line printed."""
+    import print_deduct  # noqa: E402
+    import state  # noqa: E402
+    with open(_THREE_CUBES, "rb") as fh:
+        g = bgcode_decode.decode_bgcode(fh.read())["gcode"]
+    end = g.index("\n", g.index("G0X145E36")) + 1     # the purge line's 36 mm move
+    frac = len(g[:end].encode("utf-8")) / len(g.encode("utf-8"))
+    monkeypatch.setattr(prusalink_api, "fetch_cancel_gcode",
+                        lambda *a, **k: {"gcode": g, "fraction": frac})
+    lines = []
+    monkeypatch.setattr(state, "add_log_entry", lambda msg, *a, **k: lines.append(msg))
+    usage, terminal = print_deduct._compute_cancel_usage("MMU", "cubes.bgcode", 77, frac, "ip", "key")
+    assert usage is None and terminal["reason"] == "nothing_reached", terminal
+    assert len(lines) == 1, lines
+    assert "MMU's first load" in lines[0] and "purge line may have printed" in lines[0], lines
+    assert "before any extrusion" not in lines[0], lines
+    # A plain file stopped before its first push keeps its words.
+    head = "M83\nT0\n"
+    plain = head + "G1 X1 E5\n" + _footer([5])
+    monkeypatch.setattr(prusalink_api, "fetch_cancel_gcode",
+                        lambda *a, **k: {"gcode": plain, "fraction": (len(head) - 1) / len(plain)})
+    lines.clear()
+    print_deduct._compute_cancel_usage("XL", "p.gcode", 78, 0.0, "ip", "key")
+    assert len(lines) == 1 and "before any extrusion" in lines[0], lines
