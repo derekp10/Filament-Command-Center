@@ -184,3 +184,24 @@ def test_the_picker_marks_only_the_run_out_spool_and_names_a_picked_one(tmp_path
     assert any(o.startswith("#101 — on HEAD-1") and "ran out" not in o for o in opts), opts
     assert "#300 — picked for HEAD-1 on this card (ran out, archived)" in opts, opts
     assert "Picked on this card" in res["groups"], res["groups"]
+
+
+SET_UP_JS = r"""
+const c = cardOf('ps');
+const boxes = c.querySelectorAll('.fcc-cr-heldset .fcc-cr-pgrams');
+boxes[0].value = '84.28';
+boxes[0].dispatchEvent(new Event('input', { bubbles: true }));
+c.querySelector('.fcc-cr-confirm').click();
+await settle(60);
+return { posted: posts('/api/cancel_deduct/confirm') };
+"""
+
+
+def test_a_set_that_adds_up_goes_out_on_one_press_with_no_set_ack(tmp_path):
+    """Group 64.2 (2): `set_ack` rides only on the press that answered the set's
+    question; a set whose grams add up asks nothing and says nothing."""
+    from test_cancel_review_review_fixes_js import PARTIAL_SET
+    res = run(tmp_path, RESPOND_JS + SET_UP_JS, {"pending": [PARTIAL_SET], "spools": SPOOLS})
+    assert len(res["posted"]) == 1, res
+    assert "set_ack" not in res["posted"][0], res["posted"][0]
+    assert any(c.get("grams") == 84.28 for c in res["posted"][0].get("charges") or []), res["posted"][0]

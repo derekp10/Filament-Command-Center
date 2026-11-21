@@ -195,7 +195,9 @@ def test_a_set_left_empty_is_never_applied_by_one_press(tmp_path):
     assert res["quick"] == {"posted": 0, "alertShown": True}, res
     assert res["dbl"] == {"posted": 0, "alertShown": True}, res
     # A second press goes ahead: what nobody placed is the job's shortfall.
-    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "ps", "updates": {"243": 75.32}}], res
+    # Group 64.2 (2): the second press says what the person saw of the set (set_ack).
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "ps", "updates": {"243": 75.32},
+                              "set_ack": {"4": 0}}], res
 
 
 TWO_SETS = _base("ts", "partial", spools=[], unresolved_usage={"4": 84.28, "6": 20.0}, total_grams=104.28,

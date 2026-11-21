@@ -4493,6 +4493,54 @@ def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
         f"{'; '.join(parts + clauses)} — weigh {who} to true up.", "WARNING", "ffaa00")
 
 
+def _set_check_refusal(rec, kind, charges, data):
+    """Group 64.2 (2): the server's own check of a card's sets (a head held as a set
+    of the spools it had, `unresolved_sets`), which only the page made before: a
+    card from another tab, or from a page loaded before the check, posted a set's
+    grams placed short or over with no question asked. A set line whose picks don't
+    add up to its grams (to 0.05 g) goes ahead only when the post says the person
+    saw the question (`set_ack`: {line: grams placed}, today's page's second press);
+    a post with no `set_ack` key at all is a page from before it, told to reload.
+    Plain rows keep taking an over-allocation, as before. Returns (msg, stale_page)
+    or None."""
+    sets = rec.get("unresolved_sets") or {}
+    if not isinstance(sets, dict) or not sets:
+        return None
+    lines = (rec.get("usage_map") if kind == "no_spool" else rec.get("unresolved_usage")) or {}
+    acks = data.get("set_ack")
+    heads = {str(_norm_pos(h.get('position'))): h.get('toolhead')
+             for h in rec.get("heads_at_end") or [] if isinstance(h, dict) and h.get('toolhead')}
+    changed = []
+    for line in sets:
+        try:
+            total = float(lines.get(str(line)) or 0)
+        except (TypeError, ValueError):
+            continue
+        placed = 0.0
+        for c in charges or []:
+            if isinstance(c, dict) and c.get("row") is None and str(c.get("position")) == str(line):
+                try:
+                    placed += float(c.get("grams") or 0)
+                except (TypeError, ValueError):
+                    pass
+        placed = round(placed, 2)
+        if abs(placed - total) <= 0.05:
+            continue
+        if not isinstance(acks, dict):
+            return ("This page is out of date, so it can't check the grams of a head with several "
+                    "spools: reload it (Ctrl+F5), then Apply again.", True)
+        try:
+            seen = float(acks.get(str(line)))
+        except (TypeError, ValueError):
+            seen = None
+        if seen is None or abs(seen - placed) > 0.05:
+            changed.append(heads.get(str(line)) or f"T{line}")
+    if changed:
+        return (f"The grams typed for {_and_list(changed)} changed since FCC asked about them: "
+                f"check them and Apply again.", False)
+    return None
+
+
 def _card_leftover(rec, applied, asked=None):
     """Group 43.2 — per head, what an Apply of a review left uncharged: each row's
     grams (as this Apply posted them, `asked` {sid: grams}; a row it left out asked
@@ -4648,6 +4696,12 @@ def api_cancel_deduct_confirm():
             cancel_review_store.add_pending(rec)   # the pop was the claim: keep the review
             state.add_log_entry(f"⚠️ {printer}: review Apply refused — {_esc(why)}.", "WARNING", "ffaa00")
             return jsonify({"status": "error", "msg": why})
+        set_refusal = _set_check_refusal(rec, kind, charges, data)
+        if set_refusal:
+            cancel_review_store.add_pending(rec)   # the pop was the claim: keep the review
+            msg, stale = set_refusal
+            state.add_log_entry(f"⚠️ {printer}: review Apply refused — {_esc(msg)}", "WARNING", "ffaa00")
+            return jsonify(dict({"status": "error", "msg": msg}, **({"stale_page": True} if stale else {})))
         if requested_total is None and kind == "no_spool":
             try:
                 requested_total = round(sum(float(v) for v in (rec.get("usage_map") or {}).values()), 2)

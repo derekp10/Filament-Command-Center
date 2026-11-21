@@ -1766,6 +1766,13 @@
                 // a second press with the same grams goes ahead (never a double
                 // click's second press).
                 if (!setsConfirmed(card, e)) return;
+                // Group 64.2 (2): a set whose grams don't add up goes out only after
+                // its question, and says what the person saw (the server checks it).
+                const acked = setProblems(card);
+                if (acked.length) {
+                    payload.set_ack = {};
+                    acked.forEach((p) => { payload.set_ack[String(p.box.dataset.pos)] = p.placed; });
+                }
                 e.target.disabled = true;
                 try {
                     const r = await fetch('/api/cancel_deduct/confirm', {

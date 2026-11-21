@@ -343,7 +343,8 @@ def test_a_set_takes_a_pick_per_spool_and_what_nobody_places_is_the_jobs_shortfa
         _tick("STOPPED")
         body = _confirm({"charges": [
             {"row": 243, "sid": 243, "grams": 75.32}, {"row": 231, "sid": 231, "grams": 21.9},
-            {"position": 4, "sid": 42, "grams": 30.0}, {"position": 4, "sid": 229, "grams": 50.0}]})
+            {"position": 4, "sid": 42, "grams": 30.0}, {"position": 4, "sid": 229, "grams": 50.0}],
+            "set_ack": {"4": 80.0}})       # the set's question was seen (Group 64.2 (2))
         assert body["status"] == "confirmed", body
         assert p.sm.used(42) == pytest.approx(730.0) and p.sm.used(229) == pytest.approx(60.0)
         assert p.sm.used(243) == pytest.approx(775.32) and p.sm.used(231) == pytest.approx(721.9)

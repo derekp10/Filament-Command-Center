@@ -147,9 +147,11 @@ def test_a_set_part_placed_names_only_what_its_boxes_left(logs):
     # any spool — weigh the spools to true up.")
     with Indx() as p, _measured(USAGE, {}):
         _changed_at_end(p)
+        # The person saw the set's question and went ahead (Group 64.2 (2): `set_ack`).
         body = _confirm({"charges": [{"row": 243, "sid": 243, "grams": 75.32},
                                      {"row": 231, "sid": 231, "grams": 21.9},
-                                     {"position": 4, "sid": 42, "grams": 30.0}]})
+                                     {"position": 4, "sid": 42, "grams": 30.0}],
+                         "set_ack": {"4": 30.0}})
         assert p.sm.used(42) == pytest.approx(730.0)
     assert body["status"] == "confirmed" and body["shortfall_g"] == pytest.approx(54.28), body
     assert _uncharged(logs) == (
@@ -237,7 +239,8 @@ def test_a_no_spool_cards_set_part_placed_is_named(logs):
         p.load_229()
         _tick("FINISHED")
         assert _rec()["kind"] == "no_spool"
-        body = _confirm({"charges": [{"position": 4, "sid": 42, "grams": 20.0}]})
+        body = _confirm({"charges": [{"position": 4, "sid": 42, "grams": 20.0}],
+                         "set_ack": {"4": 20.0}})      # Group 64.2 (2)
     assert body["status"] == "confirmed" and body["shortfall_g"] == pytest.approx(30.0), body
     assert _uncharged(logs) == (
         f"{LEAD}30.00g of '{FILE}' wasn't charged to any spool: 30 g on T4 · RCOI-5, "
@@ -303,7 +306,8 @@ def test_a_retry_after_a_failed_write_still_names_the_head(logs):
         p.sm.patch_lost.add(243)
         first = _confirm({"charges": [{"row": 243, "sid": 243, "grams": 75.32},
                                       {"row": 231, "sid": 231, "grams": 21.9},
-                                      {"position": 4, "sid": 42, "grams": 30.0}]})
+                                      {"position": 4, "sid": 42, "grams": 30.0}],
+                          "set_ack": {"4": 30.0}})      # Group 64.2 (2)
         assert first["status"] == "confirmed" and first["errors"], first
         assert not [m for m, _ in logs if "wasn't charged to any spool" in m]
         p.sm.patch_lost.clear()

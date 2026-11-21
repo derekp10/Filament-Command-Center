@@ -928,3 +928,90 @@ def test_a_run_out_spool_among_a_heads_several_gets_its_own_mark():
     entry = next(h for h in heads if h.get("sids") == [100, 101])
     assert entry.get("archived_sids") == [100] and not entry.get("archived"), heads
     assert len([h for h in heads if h.get("sid") == 100]) == 0, heads
+
+
+# --------------------------------------------------------------------------- #
+# 64.2 (2): the server checks a set's grams itself                             #
+# --------------------------------------------------------------------------- #
+
+def _set_card():
+    """A cancel's card: XL-2's #300 a row (3.6 g); XL-1's 12.4 g a set of #200 and
+    #100 (its spool changed during the print), nothing pre-filled."""
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    rec = {"printer_name": XL, "job_id": str(JOB), "filename": "x.gcode", "progress": 0.5,
+           "total_grams": 16.0, "ambiguous": False, "kind": "partial", "created": "2026-11-20 00:00:00",
+           "heads_source": "print_end", "heads_words": words,
+           "spools": [{"sid": 300, "toolhead": "XL-2", "position": 1, "grams": 3.6, "display": "#300",
+                       "color": "ff0000", "ambiguous": False}],
+           "unresolved_usage": {"0": 12.4},
+           "unresolved_sets": {"0": [{"sid": 100, "when": "start"}, {"sid": 200, "when": "end"}]},
+           "heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": 200, "sids": [200]},
+                            {"toolhead": "XL-2", "position": 1, "sid": 300, "sids": [300]}]}
+    cancel_review_store.add_pending(rec)
+    return rec
+
+
+def _post_set(rig, grams, **extra):
+    with rig:
+        return app_module.app.test_client().post("/api/cancel_deduct/confirm", json=dict({
+            "printer_name": XL, "job_id": str(JOB),
+            "charges": [{"row": 300, "sid": 300, "grams": 3.6},
+                        {"position": 0, "sid": 200, "grams": grams}]}, **extra)).get_json()
+
+
+def test_a_set_short_from_a_page_with_no_set_check_is_told_to_reload():
+    """Red on 0576b5a: the server took it (only the page asked)."""
+    rig = TwoHeadsOverHTTP()
+    _set_card()
+    body = _post_set(rig, 5.0)
+    assert body["status"] == "error" and body.get("stale_page") is True and "reload" in body["msg"], body
+    assert cancel_review_store.get_pending(XL, str(JOB)) is not None, "the card was lost"
+    assert rig.used(200) == 100.0 and rig.used(300) == 50.0
+
+
+def test_a_set_short_that_the_person_saw_goes_ahead():
+    """Passes on 0576b5a by design (the server took it then too): today's page's
+    second press says what the person saw."""
+    rig = TwoHeadsOverHTTP()
+    _set_card()
+    body = _post_set(rig, 5.0, set_ack={"0": 5.0})
+    assert body["status"] == "confirmed", body
+    assert rig.used(200) == pytest.approx(105.0) and rig.used(300) == pytest.approx(53.6)
+
+
+def test_a_set_whose_grams_changed_after_the_question_is_asked_again():
+    """Red on 0576b5a. The person saw 5 g placed, then the post placed 9 g (another
+    tab, or a box changed after the question)."""
+    rig = TwoHeadsOverHTTP()
+    _set_card()
+    body = _post_set(rig, 9.0, set_ack={"0": 5.0})
+    assert body["status"] == "error" and "changed since FCC asked" in body["msg"], body
+    assert "XL-1" in body["msg"] and not body.get("stale_page"), body
+    assert cancel_review_store.get_pending(XL, str(JOB)) is not None
+    assert rig.used(200) == 100.0
+
+
+def test_a_set_that_adds_up_needs_no_question():
+    """Passes on 0576b5a by design."""
+    rig = TwoHeadsOverHTTP()
+    _set_card()
+    body = _post_set(rig, 12.4)
+    assert body["status"] == "confirmed", body
+    assert rig.used(200) == pytest.approx(112.4)
+
+
+def test_a_plain_row_still_takes_more_than_its_grams():
+    """A row isn't a set: an over-allocation goes ahead, as before. Passes on
+    0576b5a by design."""
+    rig = TwoHeadsOverHTTP()
+    rec = _set_card()
+    rec = cancel_review_store.pop_pending(XL, str(JOB))
+    rec.pop("unresolved_sets")
+    rec["unresolved_usage"] = {}
+    cancel_review_store.add_pending(rec)
+    with rig:
+        body = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": str(JOB),
+            "charges": [{"row": 300, "sid": 300, "grams": 9.0}]}).get_json()
+    assert body["status"] == "confirmed", body
+    assert rig.used(300) == pytest.approx(59.0)

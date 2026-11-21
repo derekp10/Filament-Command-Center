@@ -510,7 +510,9 @@ def test_the_yes_counts_every_plain_line_its_press_leaves_uncharged(tmp_path):
         assert o["notice"] == notice, (job, o)
     # The second press goes ahead as asked: nothing for T6, whose grams the server
     # leaves uncharged, as the button said.
-    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "psl", "updates": {}}], res["posted"]
+    # Group 64.2 (2): the second press says what the person saw of the set (set_ack).
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "psl", "updates": {},
+                              "set_ack": {"4": 0}}], res["posted"]
 
 
 PLAIN_CHANGE_JS = r"""
