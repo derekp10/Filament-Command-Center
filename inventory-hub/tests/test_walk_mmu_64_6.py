@@ -38,6 +38,11 @@ import prusalink_api  # noqa: E402
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CORE1 = os.path.join(_HERE, "fixtures", "sample.bgcode")
+# A real multi-colour MMU3 slice (2026-11-20): three 15 mm cubes on filaments 1-3,
+# sliced with PrusaSlicer 2.9.7 from the Core One MMU3 settings in sample.bgcode's
+# Slicer-Metadata block, in a throwaway --datadir (how to rebuild it: the README in
+# the git-ignored .captures/mmu3-three-cubes-2026-11-20/, beside its inputs).
+_THREE_CUBES = os.path.join(_HERE, "fixtures", "mmu3_three_cubes.bgcode")
 
 
 def _config(semm="1", wipe_tower="1", park="84", extra="-52", nozzles="0.4,0.4,0.4"):
@@ -178,6 +183,37 @@ def test_the_core_one_mmu3_capture_walks_to_its_footers_millimetres():
     assert foot == {1: 2130.15}
     measured_mm = _walk(g)
     assert set(measured_mm) <= {0, 1} and measured_mm[1] == pytest.approx(2130.15, abs=0.01), measured_mm
+
+
+def test_a_real_multi_colour_mmu3_slice_walks_to_its_footer(monkeypatch):
+    """The slicer's own multi-colour MMU3 output: T0, T1, T2, 54 tool changes, each
+    an unload of the parking distance and a load of 32 mm. Every tool walks to its
+    footer's millimetres within 0.01 mm (0.005 today), so the 2% check has nothing to
+    say; the walk before the rule came 1216 / 644 / 592 mm short (52 mm a reload), a
+    WARNING on every head. Its first filament is T0: no tool change for its first
+    load (test_a_first_filament_of_t0_is_no_tool_change)."""
+    with open(_THREE_CUBES, "rb") as fh:
+        g = bgcode_decode.decode_bgcode(fh.read())["gcode"]
+    assert prusalink_api._mmu_rule(g) == (84.0, -52.0)
+    foot = prusalink_api._parse_weights_from_match(prusalink_api._GCODE_MM_RE.search(g))
+    assert foot == {0: 1475.82, 1: 1040.46, 2: 924.98}
+    walked = _walk(g)
+    assert set(walked) == {0, 1, 2}
+    for t, want in foot.items():
+        assert walked[t] == pytest.approx(want, abs=0.01), (t, walked, foot)
+    _cuts, (plain, _saw) = prusalink_api._walk_extrusion(g, [], 0)
+    assert all(plain[t] < foot[t] - 500 for t in foot), plain
+    measured = prusalink_api.measure_filament_usage(g, [1.0])
+    assert measured["footer"] == {0: 4.4, 1: 3.1, 2: 2.76}
+    assert measured["whole"] == {t: pytest.approx(v, abs=1e-3) for t, v in measured["footer"].items()}
+    import print_deduct  # noqa: E402  (the 2% check, as a cancel runs it)
+    import state  # noqa: E402
+    lines = []
+    monkeypatch.setattr(state, "add_log_entry", lambda msg, *a, **k: lines.append(msg))
+    pm = {f"MMU-{n + 1}": {"printer_name": "MMU", "position": n} for n in range(5)}
+    monkeypatch.setattr(print_deduct.locations_db, "get_active_printer_map", lambda: pm)
+    print_deduct._warn_parse_gap("MMU", "cubes.bgcode", measured)
+    assert [m for m in lines if "G-code walk" in m] == []
 
 
 # --------------------------------------------------------------------------- #
