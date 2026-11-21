@@ -745,3 +745,58 @@ def test_a_heads_name_is_bold_on_its_line_and_by_the_buttons(tmp_path):
         # the same again after a double click's second press.
         for press in ("first", "second"):
             assert o[press] == {"text": text, "bold": bold, "tags": 0}, (job, press, o)
+
+
+# --------------------------------------------------------------------------- #
+# Group 64.2 (the look): a head named in the server's words is bold             #
+# --------------------------------------------------------------------------- #
+
+LOOK_MSG = "The grams typed for HEAD-5 changed since FCC asked about them; HEAD-50 isn't on this card, T4 is."
+
+HEAD_REFUSAL_JS = r"""
+const old = window.__respond;
+let answer = { status: 'error', msg: D.msg };
+window.__respond = (url, m, b) => url.startsWith('/api/cancel_deduct/confirm') ? { body: answer } : old(url, m, b);
+const partsOf = (c) => c.querySelector('.fcc-cr-card-notice').childNodes.map(
+  (x) => (x.nodeType === 3 ? ['text', x.textContent] : [x.tagName, x.className, x.textContent]));
+const press = async () => {
+  const c = cardOf('ps');
+  fill(c, 'set:4:42', 40); fill(c, 'set:4:229', 44.28);
+  c.querySelector('.fcc-cr-confirm').click();
+  await settle(60);
+  return cardOf('ps');
+};
+const refused = partsOf(await press());
+answer = { status: 'error', stale: true, msg: D.msg };
+const stale = partsOf(await press());
+return { refused, stale, toasts: window.__rec.toasts.map((t) => t.msg) };
+"""
+
+
+def test_a_head_named_in_a_refusal_is_bold_on_the_card(tmp_path):
+    """The card's own head names (a toolhead, or its T<n>) standing whole in the
+    server's words are drawn bold, as the card's lines draw them; "HEAD-50", which
+    only starts like one, stays plain. The toast keeps the words as they came."""
+    # On 2742bb7: AssertionError: the notice was one text node.
+    res = _run(tmp_path, HEAD_REFUSAL_JS, [PARTIAL_SET], msg=LOOK_MSG)
+    want = [["text", "The grams typed for "], ["B", "fcc-cr-notice-head", "HEAD-5"],
+            ["text", " changed since FCC asked about them; HEAD-50 isn't on this card, "],
+            ["B", "fcc-cr-notice-head", "T4"], ["text", " is."]]
+    assert res["refused"] == want, res["refused"]
+    assert res["stale"] == want, res["stale"]        # the card drawn again says it the same way
+    assert LOOK_MSG in res["toasts"], res["toasts"]
+
+
+SPACED_MSG = "Spool #42 isn't a row on HEAD 2, and HEAD-70 is another printer's."
+
+
+def test_the_longest_head_name_wins_and_a_hyphen_goes_on(tmp_path):
+    """Head ids may hold a Space: on a card naming "HEAD" and "HEAD 2", "HEAD 2" is
+    bold whole, never "HEAD" with " 2" after it; and "HEAD-70" isn't "HEAD"."""
+    heads = [{"toolhead": "HEAD", "position": 4, "sid": 229, "sids": [229]},
+             {"toolhead": "HEAD 2", "position": 6, "sid": 243, "sids": [243]},
+             {"toolhead": "HEAD", "position": 4, "sid": 42, "when": "start"}]
+    card = dict(PARTIAL_SET, spools=[dict(PARTIAL_SET["spools"][0], toolhead="HEAD 2")], heads_at_end=heads)
+    res = _run(tmp_path, HEAD_REFUSAL_JS, [card], msg=SPACED_MSG)
+    assert res["refused"] == [["text", "Spool #42 isn't a row on "], ["B", "fcc-cr-notice-head", "HEAD 2"],
+                              ["text", ", and HEAD-70 is another printer's."]], res["refused"]

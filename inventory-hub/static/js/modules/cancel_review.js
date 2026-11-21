@@ -277,6 +277,49 @@
         });
         n.style.display = n.textContent ? '' : 'none';
     }
+    // Group 64.2 (the look): a head's name in words the server sent (a refusal) is
+    // bold, as on the card's own lines ("so that it reads as a toolhead", Derek,
+    // 2026-11-12): the card's head names (`data-head-names`: every toolhead it names
+    // and its T<n>) found standing whole in the words, longest first, become
+    // sayOnCard's {head} pieces; "XL-1" in "XL-10" stays as it is.
+    function cardHeadNames(rec) {
+        const out = new Set();
+        const add = (v) => { if (v != null && String(v).trim()) out.add(String(v).trim()); };
+        (rec.heads_at_end || []).forEach((h) => { if (h) { add(h.toolhead); if (h.position != null) add(`T${h.position}`); } });
+        (rec.spools || []).forEach((r) => { if (r) { add(r.toolhead); if (r.position != null) add(`T${r.position}`); } });
+        Object.keys(rec.unresolved_usage || rec.usage_map || {}).forEach((k) => add(`T${k}`));
+        Object.values(rec.shortfall_causes || {}).forEach((c) => { if (c) add(c.toolhead); });
+        return Array.from(out);
+    }
+    function headPieces(card, msg) {
+        const text = String(msg == null ? '' : msg);
+        let names = [];
+        try { names = JSON.parse((card && card.dataset && card.dataset.headNames) || '[]'); } catch (_) { names = []; }
+        names = (Array.isArray(names) ? names : []).map(String).filter((n) => n).sort((a, b) => b.length - a.length);
+        if (!text || !names.length) return text;
+        // A name stands whole: no letter, digit or hyphen just before it, and no
+        // letter or digit just after it, nor a hyphen and one ("HEAD" in "HEAD-70").
+        const word = /[A-Za-z0-9]/;
+        const goesOn = (j) => word.test(text[j] || '') || (text[j] === '-' && word.test(text[j + 1] || ''));
+        const out = [];
+        let i = 0;
+        let plain = '';
+        while (i < text.length) {
+            const hit = names.find((n) => text.startsWith(n, i)
+                && !(i > 0 && (word.test(text[i - 1]) || text[i - 1] === '-'))
+                && !goesOn(i + n.length));
+            if (hit) {
+                if (plain) { out.push(plain); plain = ''; }
+                out.push({ head: hit });
+                i += hit.length;
+            } else {
+                plain += text[i];
+                i += 1;
+            }
+        }
+        if (plain) out.push(plain);
+        return out.length === 1 && typeof out[0] === 'string' ? out[0] : out;
+    }
     // Round 2 (R1, Derek's picture check, 2026-11-12): while the set check waits
     // for its second press, the card's button says what that press does, in
     // orange ("Just so the user is made aware that they are about to not perform
@@ -979,6 +1022,7 @@
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-kind="shortfall" data-ambiguous="0" data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
                  data-ask-fixed="${askFixed(rec, 'shortfall') ? '1' : '0'}"
+                 data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:#ffd27a;">⚖️ ${esc(rec.printer_name)} — ${total}g went to no spool</div>
@@ -1090,6 +1134,7 @@
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-kind="${esc(kind)}" data-ambiguous="${rec.ambiguous ? '1' : '0'}"
                  data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
+                 data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:${isNoSpool ? '#ffd27a' : '#7ec8ff'};">${header}</div>
@@ -1201,6 +1246,7 @@
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-ambiguous="${ambiguous ? '1' : '0'}" data-kind="${esc(kind)}"
                  data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
+                 data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:${headerColor};">${header}</div>
@@ -1466,7 +1512,7 @@
         // Say on the card (review fix) and in a toast: the toast layer is drawn
         // under the review panel. A card drawn again is told on its new self.
         function tell(card, msg, type, dur) {
-            sayOnCard(card, msg);
+            sayOnCard(card, headPieces(card, msg));
             toast(msg, type || 'warning', dur || 7000);
         }
 
@@ -1851,7 +1897,8 @@
                         // near-empty spool); the rest stays on the card to pick again.
                         const msg = `Charged ${fmtG(took)}g. ${fmtG(d.shortfall_g)}g still have no spool — pick another spool, or Discard.`;
                         toast(msg, 'warning', 7000);
-                        sayOnCard(await rerenderCard(card, true), msg);
+                        const kept = await rerenderCard(card, true);
+                        sayOnCard(kept, headPieces(kept, msg));
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'confirmed') {
@@ -1876,7 +1923,8 @@
                         // 43.2: another Apply changed this card since it was shown.
                         const msg = d.msg || 'This card changed — check it and Apply again.';
                         toast(msg, 'warning', 7000);
-                        sayOnCard(await rerenderCard(card, true), msg);
+                        const fresh = await rerenderCard(card, true);
+                        sayOnCard(fresh, headPieces(fresh, msg));
                     } else if (d.status === 'already_handled') {
                         toast('Already handled elsewhere.', 'info');
                         card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
@@ -1890,7 +1938,10 @@
                         const why = d.msg || ((d.errors || [])[0] || {}).error || 'Confirm failed — check the log.';
                         tell(card, why, 'error');
                         // Writes that failed leave a reshaped review: show what it holds now.
-                        if ((d.errors || []).length) sayOnCard(await rerenderCard(card), why);
+                        if ((d.errors || []).length) {
+                            const fresh = await rerenderCard(card);
+                            sayOnCard(fresh, headPieces(fresh, why));
+                        }
                     }
                 } catch (err) {
                     e.target.disabled = false;
