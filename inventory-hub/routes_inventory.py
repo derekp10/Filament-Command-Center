@@ -1329,6 +1329,13 @@ def api_edit_spool_wizard():
                         elif _loc_key(v) and _reslot_asked(data, original_spool, _loc_key(v)):
                             new_location = _loc_key(v)
                         continue
+                    if k == 'used_weight' and _within_box_rounding(original_spool.get(k), v):
+                        # Group 64 review (S2): Total Used shows the used weight to
+                        # 0.1 g, so a page that sends the box as it drew it (any page
+                        # before this release) rewrote 100.37 as 100.4 on a comment
+                        # save, and stamped a weighing nobody made. Within half a
+                        # step, the box wasn't changed: nothing is written.
+                        continue
                     if k == 'spool_weight':
                         if v != original_spool.get('spool_weight'):
                             dirty_spool_data['spool_weight'] = v
@@ -1814,6 +1821,16 @@ def _details_changed(pre, based_on, updates=None):
         if abs(was_g - now_g) > _BASED_ON_EPS_G:
             return key, was_g, now_g
     return None
+
+
+def _within_box_rounding(stored, sent):
+    """Group 64 review (S2): whether Edit Spool's Total Used value `sent` is the
+    stored used weight as the box shows it (fmtGramsPrecise: to 0.1 g), so within
+    half a step of it."""
+    try:
+        return stored is not None and abs(float(sent) - float(stored)) <= 0.05 + 1e-9
+    except (TypeError, ValueError):
+        return False
 
 
 def _weight_lock(spool_id, updates):

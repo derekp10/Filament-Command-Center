@@ -329,7 +329,10 @@ def _try_again(printer, job_id):
     when the ledger or a review already holds the job (the queue then only drops
     its record: nothing is computed again), or when its record says a charge may
     have begun (that one is given up, not retried). The edge's own raise counts as
-    the first of the queue's quick tries (Group 64.2 (3))."""
+    the first of the queue's quick tries (Group 64.2 (3)), and the queue's raises
+    after it say nothing (_note_compute_raise speaks at the first), so this line is
+    the one that says how the queue keeps trying and carries the "↻ Try again now"
+    button (Group 64 review, S5: it never appeared on this path)."""
     try:
         if print_deduct_ledger._is_blank_job(job_id):
             return ""
@@ -339,7 +342,8 @@ def _try_again(printer, job_id):
         rec = cancel_fetch_store.get_pending(printer, job_id)
         if not isinstance(rec, dict) or rec.get("charging_since"):
             return ""
-        return " — FCC will try again when the printer is idle."
+        return (f" — {print_deduct._fetch_schedule_words(_CANCEL_FETCH_MAX_AGE_S // 3600, who='FCC')}"
+                f"{print_deduct._fetch_retry_button(printer, job_id)}")
     except Exception:
         return ""
 

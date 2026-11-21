@@ -845,7 +845,7 @@ def test_mmu_slots_sharing_one_number_each_holding_a_spool_are_asked_about(warn_
     assert out["status"] == "pending_unresolved" and out["kind"] == "no_spool", out
     card = cancel_review_store.get_pending(MMU, str(JOB))
     note = card["unresolved_notes"]["0"]
-    assert note.startswith("MMU slots MMU-1, MMU-2, MMU-3, MMU-4 and MMU-5 share one toolhead number"), note
+    assert note.startswith("MMU slots MMU-1, MMU-2, MMU-3, MMU-4 and MMU-5 share one Position"), note
     assert "(#401, #402, #403, #404 and #405)" in note and "in Settings" in note, note
     offered = {s for h in card["heads_at_end"] for s in (h.get("sids") or [h.get("sid")])}
     assert {401, 402, 403, 404, 405} <= offered, card   # the card's picker offers every slot's spool
@@ -857,8 +857,9 @@ def test_mmu_slots_sharing_one_number_with_no_print_end_read_charge_none(warn_li
     rig = MmuPrinter(shared=True)
     _mmu_complete(rig, {2: 5.0}, end=False)
     assert [rig.used(s) for s in (401, 402, 403)] == [10.0] * 3
-    said = [m for m, lvl in warn_lines if "share toolhead number 1" in m]
-    assert len(said) == 1 and "own toolhead number in Settings" in said[0], warn_lines
+    # Group 64 review (O2): in the editor's own terms, its 0-based Position.
+    said = [m for m, lvl in warn_lines if "share Position 0 (T0)" in m]
+    assert len(said) == 1 and "own Position in Settings (slot 1 = Position 0)" in said[0], warn_lines
 
 
 def test_mmu_slots_sharing_one_number_with_one_spool_loaded_charge_it():
@@ -879,8 +880,8 @@ def test_a_cancel_on_mmu_slots_sharing_one_number_says_why_it_asks():
                                                    end_heads=end_heads)
     rec = cancel_review_store.get_pending(MMU, str(JOB))
     note = (rec.get("unresolved_notes") or {}).get("0", "")
-    assert "MMU slots MMU-1 and MMU-2 share one toolhead number" in note, rec
-    assert "own toolhead number in Settings" in note, rec
+    assert "MMU slots MMU-1 and MMU-2 share one Position" in note, rec
+    assert "own Position in Settings (slot 1 = Position 0, slot 2 = Position 1, …)" in note, rec
     assert rig.used(401) == 10.0 and rig.used(402) == 10.0
 
 
@@ -1015,3 +1016,332 @@ def test_a_plain_row_still_takes_more_than_its_grams():
             "charges": [{"row": 300, "sid": 300, "grams": 9.0}]}).get_json()
     assert body["status"] == "confirmed", body
     assert rig.used(300) == pytest.approx(59.0)
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 review, the server half (S1, S2, S4, S5, Y1, Y2 / O3 / O4)          #
+# --------------------------------------------------------------------------- #
+
+def _two_end_reads(rig):
+    """Print A's end read, then print B's, as the morning goes: A ended two minutes
+    before B's end read was taken a minute ago."""
+    with rig:
+        end_a = print_monitor._capture_end_heads(XL, 77, "http://fb")
+        end_b = print_monitor._capture_end_heads(XL, 78, "http://fb")
+    end_a["at_s"] -= 120
+    end_b["at_s"] -= 60
+    return end_a, end_b
+
+
+def _charge(rig, job, end, name):
+    with rig, _download(_two_tool_gcode()):
+        return print_deduct.deduct_completed_print(XL, name, job, fb_url="http://fb", end_heads=end)
+
+
+def test_fcc_charging_an_earlier_print_after_a_later_ones_end_read_is_no_weighing(stamps, warn_lines):
+    """S1, red on 82dbb38 (B held whole: #200 left at 112.4, a card saying FCC can't
+    tell). Print B's end read was taken before print A's charge landed (A's file
+    waited behind the printer's screen); A's charge is FCC's own, so B is charged as
+    a plain print."""
+    rig = TwoHeadsOverHTTP()
+    end_a, end_b = _two_end_reads(rig)
+    _charge(rig, 77, end_a, "a.gcode")
+    assert rig.used(200) == pytest.approx(112.4) and rig.used(300) == pytest.approx(53.6)
+    assert stamps.charged_after(200, end_b["at_s"]) == pytest.approx(12.4)
+    out = _charge(rig, 78, end_b, "b.gcode")
+    assert out["status"] == "deducted", out
+    assert rig.used(200) == pytest.approx(124.8) and rig.used(300) == pytest.approx(57.2)
+    assert cancel_review_store.get_pending(XL, "78#shortfall") is None
+    assert not [m for m, lvl in warn_lines if "can't tell" in m or "was weighed" in m], warn_lines
+
+
+def test_a_weighing_in_the_same_window_is_still_held_and_its_words_name_fccs_charge(stamps, warn_lines):
+    """S1's other side: A's charge and a change FCC can't place (an edit in
+    Spoolman's own page) both land after B's end read. B's #200 is still held, its
+    words saying how much of the change was FCC's own; #300, which only A's charge
+    moved, is charged."""
+    rig = TwoHeadsOverHTTP()
+    end_a, end_b = _two_end_reads(rig)
+    _charge(rig, 77, end_a, "a.gcode")
+    rig.sm.records["spool"][200]["used_weight"] = 120.0
+    _charge(rig, 78, end_b, "b.gcode")
+    assert rig.used(200) == 120.0 and rig.used(300) == pytest.approx(57.2)
+    cause = cancel_review_store.get_pending(XL, "78#shortfall")["shortfall_causes"]["0"]
+    assert cause["known_order"] is False, cause
+    assert "(100.00 g used then, 120.00 g now, 12.40 g of it charged by FCC since)" in cause["words"], cause
+
+
+def test_a_weighing_after_fccs_own_charge_is_held_at_0g(stamps, warn_lines):
+    """And a weighing on FCC after both: held at 0 g, the scale having counted B."""
+    rig = TwoHeadsOverHTTP()
+    end_a, end_b = _two_end_reads(rig)
+    _charge(rig, 77, end_a, "a.gcode")
+    rig.sm.records["spool"][200]["used_weight"] = 137.2
+    stamps.note(200, "the Quick-Weigh")
+    _charge(rig, 78, end_b, "b.gcode")
+    assert rig.used(200) == 137.2
+    card = cancel_review_store.get_pending(XL, "78#shortfall")
+    assert card["shortfall_causes"]["0"]["known_order"] is True and card["shortfall_prefill"] == {"0": 0.0}
+
+
+def test_a_cards_apply_notes_its_charges_too(stamps):
+    """S1: a 🛑 card's Apply is FCC's own charge, so a print ended before it isn't
+    held over it."""
+    rig = TwoHeadsOverHTTP()
+    card = _held_card(rig, stamps)
+    with rig:
+        app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": card["job_id"], "rev": card["rev"],
+            "charges": [{"position": 0, "sid": 200, "grams": 12.4}]})
+    assert stamps.charged_after(200, 0) == pytest.approx(12.4)
+
+
+def test_the_stamp_store_reads_its_first_form_and_keeps_charges_apart(stamps):
+    """The file as the module first wrote it ({sid: stamp}) is read as weighings, and
+    a charge is never read as a weighing."""
+    import json
+    with open(stamps._STORE_PATH, "w", encoding="utf-8") as fh:
+        json.dump({"200": {"at": 1000.0, "how": "the Quick-Weigh"}}, fh)
+    assert stamps.weighed_after(200, 999.0)["how"] == "the Quick-Weigh"
+    stamps.note_charge(300, 5.0, at=1001.0)
+    stamps.note_charge(300, 0.0, at=1002.0)                # a charge of nothing notes nothing
+    assert stamps.last(300) is None and stamps.weighed_after(200, 999.0)["how"] == "the Quick-Weigh"
+    assert stamps.charged_after(300, 1000.0) == 5.0 and stamps.charged_after(300, 1001.0) == 0.0
+    stamps.note(300, "Edit Spool", at=1003.0)
+    assert stamps.charged_after(300, 1000.0) == 5.0, "a weighing dropped the charges"
+
+
+def test_a_save_between_the_check_and_the_charge_is_held_not_charged_on_top(stamps, warn_lines, monkeypatch):
+    """S4, red on 82dbb38 (#200 charged to 142.4, no card). The Quick-Weigh's save of
+    #200 lands right after deduct_completed_print's Decision 1 check: the apply's own
+    check, under the spool's lock, holds it."""
+    monkeypatch.setattr(routes_inventory, "_log_manual_weight_change", lambda *a, **k: None)
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    real = print_deduct._weighed_since_end
+
+    def _check_then_weigh(heads, end_at):
+        out = real(heads, end_at)
+        app_module.app.test_client().post("/api/spool/update", json={
+            "id": 200, "updates": {"used_weight": 130.0},
+            "based_on": {"mode": "set_used", "screen": "quick"}})
+        return out
+
+    with patch.object(print_deduct, "_weighed_since_end", side_effect=_check_then_weigh):
+        out = _complete(rig, end)
+    assert out["status"] == "deducted", out
+    assert rig.used(200) == pytest.approx(130.0), "the weighing was charged on top"
+    assert rig.used(300) == pytest.approx(53.6)
+    card = cancel_review_store.get_pending(XL, f"{JOB}#shortfall")
+    cause = card["shortfall_causes"]["0"]
+    assert cause["why"] == "weighed" and cause["known_order"] is True and cause["sid"] == 200, card
+    assert card["shortfall_prefill"] == {"0": 0.0}
+    said = [m for m, lvl in warn_lines if lvl == "WARNING" and "#200 on XL-1" in m]
+    assert len(said) == 1 and "was weighed on the Quick-Weigh" in said[0], warn_lines
+
+
+def test_a_comment_only_edit_spool_save_writes_no_used_weight_and_stamps_nothing(stamps, warn_lines, monkeypatch):
+    """S2, red on 82dbb38 (a 100.4 PATCH, a stamp, and the print held at 0 g). A page
+    that sends Total Used as it drew it (to 0.1 g) over a stored 100.37 changed
+    nothing there: nothing is written or stamped, and the print is charged."""
+    monkeypatch.setattr(routes_inventory, "_log_manual_weight_change", lambda *a, **k: None)
+    rig = TwoHeadsOverHTTP()
+    rig.sm.records["spool"][200]["used_weight"] = 100.37
+    rig.sm.records["spool"][200]["comment"] = "old"
+    with rig:
+        end = print_monitor._capture_end_heads(XL, JOB, "http://fb")
+    end["at_s"] -= 60
+    with rig:
+        body = app_module.app.test_client().post("/api/edit_spool_wizard", json={
+            "spool_id": 200,
+            "spool_data": {"used_weight": 100.4, "comment": "new note", "initial_weight": 1000.0,
+                           "archived": False, "extra": {}}}).get_json()
+    assert body["success"] is True, body
+    sent = [b for e, i, b in rig.sm.patches if e == "spool" and i == 200]
+    assert sent and all("used_weight" not in b for b in sent) and sent[-1].get("comment") == "new note", sent
+    assert stamps.last(200) is None
+    _complete(rig, end)
+    assert rig.used(200) == pytest.approx(112.77)
+    assert cancel_review_store.get_pending(XL, f"{JOB}#shortfall") is None
+
+
+def test_an_edit_spool_used_weight_past_the_boxs_rounding_is_still_written(stamps, monkeypatch):
+    """A real change in Total Used is written and stamped, as before."""
+    monkeypatch.setattr(routes_inventory, "_log_manual_weight_change", lambda *a, **k: None)
+    rig = TwoHeadsOverHTTP()
+    rig.sm.records["spool"][200]["used_weight"] = 100.37
+    with rig:
+        app_module.app.test_client().post("/api/edit_spool_wizard", json={
+            "spool_id": 200, "spool_data": {"used_weight": 100.5, "extra": {}}})
+    assert rig.used(200) == 100.5 and stamps.last(200)["how"] == "Edit Spool"
+
+
+def test_a_live_edges_raise_offers_try_again_now_once(warn_lines):
+    """S5, red on 82dbb38 (no line ever carried the button). A compute that always
+    raises, first at the live edge: the edge's own line says how the queue keeps
+    trying and carries the button; the queue's raises after it say nothing more."""
+    with patch.object(print_deduct, "deduct_completed_print", side_effect=RuntimeError("bad file")), \
+            patch.object(print_monitor, "_capture_end_heads", return_value=None):
+        print_monitor._on_completion_edge(XL, "x.gcode", JOB, "http://fb")
+        for _ in range(5):
+            rec = cancel_fetch_store.get_pending(XL, JOB)
+            print_monitor._run_fetch_retry(rec, "http://fb", print_monitor._claim_fetch(XL, JOB))
+    offered = [m for m, lvl in warn_lines if "Try again now" in m]
+    assert len(offered) == 1, warn_lines
+    assert "FCC tries again when the printer is idle, twice more right away" in offered[0], offered
+    assert 'data-fetch-job="77"' in offered[0], offered
+
+
+def test_a_set_placed_five_hundredths_off_the_card_goes_ahead():
+    """Y1, red on 82dbb38 (9.95 against 10 was 0.0500000000000007 here: refused as
+    a page out of date). Whole cents, as the page rounds them."""
+    rig = TwoHeadsOverHTTP()
+    _set_card()
+    body = _post_set(rig, 12.35)
+    assert body["status"] == "confirmed", body
+    assert rig.used(200) == pytest.approx(112.35)
+
+
+def test_a_set_placed_six_hundredths_off_is_still_asked_about():
+    rig = TwoHeadsOverHTTP()
+    _set_card()
+    body = _post_set(rig, 12.34)
+    assert body["status"] == "error" and body.get("stale_page") is True, body
+
+
+def test_a_no_spool_sets_unrounded_figure_is_compared_as_the_card_shows_it():
+    """Y1's twin: a no_spool card's ask is the walk's figure (12.3549, shown 12.35);
+    picks of 6.2 + 6.1 are within 0.05 g of what the card shows."""
+    rig = TwoHeadsOverHTTP()
+    rig.sm.add("spool", 100, location="", used_weight=10.0, initial_weight=1000.0, archived=False,
+               filament={"weight": 1000.0})
+    rec = {"printer_name": XL, "job_id": str(JOB), "filename": "x.gcode", "progress": 1.0,
+           "total_grams": 12.3549, "ambiguous": False, "kind": "no_spool", "created": "2026-11-20 00:00:00",
+           "spools": [], "usage_map": {"0": 12.3549},
+           "unresolved_sets": {"0": [{"sid": 100, "when": "start"}, {"sid": 200, "when": "end"}]},
+           "heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": 200, "sids": [200]}]}
+    cancel_review_store.add_pending(rec)
+    with rig:
+        body = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": str(JOB),
+            "charges": [{"position": 0, "sid": 200, "grams": 6.2},
+                        {"position": 0, "sid": 100, "grams": 6.1}]}).get_json()
+    assert body["status"] == "confirmed", body
+    assert rig.used(200) == pytest.approx(106.2) and rig.used(100) == pytest.approx(16.1)
+
+
+def _unsure_card(rig, stamps):
+    end = _end_read(rig)
+    stamps.note(200, "the weigh-out list", at=end["at_s"] - 3600)
+    rig.sm.records["spool"][200]["used_weight"] = 104.0       # an edit in Spoolman's own page
+    _complete(rig, end)
+    return cancel_review_store.get_pending(XL, f"{JOB}#shortfall")
+
+
+def test_settling_a_change_fcc_cant_place_says_it_was_left_as_set(stamps, warn_lines):
+    """Y2's server half, red on 82dbb38 (it said "weighed after the print ended, the
+    scale counted it", FCC's knowledge, for the person's choice)."""
+    rig = TwoHeadsOverHTTP()
+    card = _unsure_card(rig, stamps)
+    with rig:
+        body = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": card["job_id"], "rev": card["rev"],
+            "charges": [], "settle_held": True}).get_json()
+    assert body["settled_held"] is True and body["settled_unsure"] is True, body
+    assert body["left_weighed"] == [{"line": "0", "sid": 200, "grams": 12.4, "known_order": False}], body
+    said = [m for m, lvl in warn_lines if "left 12.40g" in m]
+    assert len(said) == 1 and "couldn't tell whether the scale counted it: left as set on the card" in said[0]
+    assert "the scale counted it." not in said[0], said
+
+
+def _mixed_card():
+    """An uncharged-grams card: line 0, #200 weighed on the Quick-Weigh after the print
+    ended (0 g filled in); line 1, XL-2 had no spool (3 g)."""
+    words = ("#200 on XL-1 was weighed on the Quick-Weigh at 14:05, after this print ended (at 13:50), "
+             "so the scale already counted its 12.40 g")
+    rec = {"printer_name": XL, "job_id": f"{JOB}#shortfall", "shortfall_of": str(JOB), "kind": "shortfall",
+           "rev": 0, "filename": "x.gcode", "progress": 1.0, "total_grams": 15.4, "spools": [],
+           "ambiguous": False, "unresolved_usage": {"0": 12.4, "1": 3.0}, "shortfall_prefill": {"0": 0.0},
+           "shortfall_causes": {"0": {"why": "weighed", "sid": 200, "toolhead": "XL-1", "archived": False,
+                                      "known_order": True, "words": words},
+                                "1": {"why": "no_spool", "toolhead": "XL-2"}},
+           "heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": 200, "sids": [200]},
+                            {"toolhead": "XL-2", "position": 1, "sid": None}]}
+    cancel_review_store.add_pending(rec)
+    return rec
+
+
+def _post_mixed(rig, **extra):
+    with rig:
+        return app_module.app.test_client().post("/api/cancel_deduct/confirm", json=dict({
+            "printer_name": XL, "job_id": f"{JOB}#shortfall", "rev": 0,
+            "charges": [{"position": 1, "sid": 300, "grams": 3.0}]}, **extra)).get_json()
+
+
+def test_a_pick_beside_a_weighed_line_left_at_0g_settles_the_card(warn_lines, monkeypatch):
+    """O3, red on 82dbb38 (the card was kept, and told the person to pick a spool for
+    the 12.40 g the scale already counted). The page sends settle_held beside its
+    pick; the weighed line settles in the same Apply."""
+    monkeypatch.setattr(print_deduct.stock_report, "check_after_deduct", lambda *a, **k: None)
+    rig = TwoHeadsOverHTTP()
+    rig.sm.records["spool"][200]["used_weight"] = 130.0
+    _mixed_card()
+    body = _post_mixed(rig, settle_held=True)
+    assert body["status"] == "confirmed" and body.get("settled_held") is True and not body.get("kept"), body
+    assert body["left_weighed"] == [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}], body
+    assert rig.used(300) == pytest.approx(53.0) and rig.used(200) == 130.0
+    assert cancel_review_store.get_pending(XL, f"{JOB}#shortfall") is None
+    msgs = [m for m, lvl in warn_lines]
+    assert any("left 12.40g" in m and "uncharged on #200" in m and "the scale counted it" in m for m in msgs), msgs
+    assert not any("still have no spool" in m or "wasn't charged to any spool" in m for m in msgs), msgs
+    assert print_deduct_ledger.was_deducted(XL, f"{JOB}#shortfall")
+
+
+def test_a_pick_beside_a_weighed_line_from_an_older_page_keeps_the_card(warn_lines, monkeypatch):
+    """No settle_held (a page from before the review): kept as before. Passes on
+    82dbb38 by design."""
+    monkeypatch.setattr(print_deduct.stock_report, "check_after_deduct", lambda *a, **k: None)
+    rig = TwoHeadsOverHTTP()
+    _mixed_card()
+    body = _post_mixed(rig)
+    assert body.get("kept") is True and not body.get("settled_held"), body
+    assert cancel_review_store.get_pending(XL, f"{JOB}#shortfall")["unresolved_usage"] == {"0": 12.4}
+
+
+def test_settle_held_beside_a_pick_with_another_line_left_keeps_the_card(warn_lines, monkeypatch):
+    """A line that isn't a weighed spool's, left without a pick, still keeps the card."""
+    monkeypatch.setattr(print_deduct.stock_report, "check_after_deduct", lambda *a, **k: None)
+    rig = TwoHeadsOverHTTP()
+    rec = cancel_review_store.pop_pending(XL, _mixed_card()["job_id"])
+    rec["unresolved_usage"]["2"] = 2.0
+    rec["shortfall_causes"]["2"] = {"why": "no_spool", "toolhead": "XL-3"}
+    rec["total_grams"] = 17.4
+    cancel_review_store.add_pending(rec)
+    body = _post_mixed(rig, settle_held=True)
+    assert body.get("kept") is True and not body.get("settled_held"), body
+    assert set(cancel_review_store.get_pending(XL, f"{JOB}#shortfall")["unresolved_usage"]) == {"0", "2"}
+
+
+def test_a_cancels_weighed_row_left_at_0g_is_said_and_handed_to_the_page(stamps, warn_lines):
+    """O4, red on 82dbb38 (no line said it, and the page could only say "the spool
+    picked has 0 g left on record"). The cancel's card marks #200's row (weighed
+    on FCC after the end, 0 g filled in); its Apply charges #300's row only."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    rig.sm.records["spool"][200]["used_weight"] = 120.0
+    stamps.note(200, "the weigh-out list", at=end["at_s"] + 30)
+    with rig, _download(_two_tool_gcode()):
+        print_deduct._create_pending_cancel_review(XL, "x.gcode", JOB, 0.5, fb_url="http://fb",
+                                                   end_heads=end)
+    rec = cancel_review_store.get_pending(XL, str(JOB))
+    rows = {r["sid"]: r for r in rec["spools"]}
+    with rig:
+        body = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": str(JOB), "updates": {"300": rows[300]["grams"]}}).get_json()
+    assert body["status"] == "confirmed", body
+    assert body["left_weighed"] == [{"line": "0", "sid": 200, "grams": rows[200]["grams"],
+                                     "known_order": True}], body
+    assert rig.used(200) == 120.0
+    said = [m for m, lvl in warn_lines if "uncharged on #200" in m]
+    assert len(said) == 1 and "weighed after the print ended, the scale counted it" in said[0], warn_lines

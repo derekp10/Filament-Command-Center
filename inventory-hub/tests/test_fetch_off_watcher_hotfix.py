@@ -495,7 +495,9 @@ def test_a_live_review_that_fails_stays_queued_and_the_loop_finishes_it(logs):
         _tick(XL, "PRINTING", _job(0.4))
         _tick(XL, "STOPPED")
         line = next(m for m in logs if "review failed" in m)
-        assert "try again" in line, line
+        # Since the Group 64 review (S5) the line says how the queue keeps trying and
+        # carries the "Try again now" button.
+        assert "FCC tries again when the printer is idle" in line and "Try again now" in line, line
         assert cancel_fetch_store.has_pending(XL, "7")
         print_monitor._process_pending_cancel_fetches({XL: {"state": "IDLE"}}, "http://fb")
     assert cancel_review_store.get_pending(XL, "7")["spools"][0]["sid"] == 100
@@ -695,6 +697,6 @@ def test_a_failed_edge_promises_no_retry_when_a_review_already_holds_the_print(l
     with patch.object(print_deduct, "_create_pending_cancel_review", side_effect=_stash_then_raise):
         print_monitor._on_cancel_edge(XL, "x.gcode", 7, 0.4, "http://fb")
     line = next(m for m in logs if "review failed" in m)
-    assert "try again" not in line, line
+    assert "tries again" not in line and "Try again now" not in line, line
     print_monitor._process_pending_cancel_fetches({XL: {"state": "IDLE"}}, "http://fb")
     assert not cancel_fetch_store.has_pending(XL, "7")

@@ -394,19 +394,24 @@ class SpoolListRead:
 # write weights too. Without a shared lock a save landing between a charge's read
 # and its write was overwritten by the charge (the scale's reading lost); with it,
 # the second writer waits for the first: a save after a charge writes the scale's
-# reading over it, and a charge after a save reads it (Decision 1 then holds the
-# charge: the spool changed weight after the print ended). Spoolman has no
-# compare-and-set, so a write from Spoolman's own page, or another FCC process,
-# can't take this lock. Re-entrant; never held across two spools.
+# reading over it, and a charge after a save reads it (the completion deduct's own
+# check under the lock then holds the charge, Group 64 review S4: the spool changed
+# weight after the print ended). Edit Spool takes it around its write only: the read
+# its form was drawn from is the page's own, made when it opened, which no lock here
+# can hold, so the page sends Total Used only when the person changed it (Group 64
+# review, S3: a form opened before a charge and saved after it wrote the old used
+# weight back). Spoolman has no compare-and-set, so a write from Spoolman's own
+# page, or another FCC process, can't take this lock. Re-entrant; never held across
+# two spools.
 _SPOOL_WRITE_LOCKS = {}
 _SPOOL_WRITE_LOCKS_GUARD = threading.Lock()
 
 
 def spool_lock(sid):
-    """The lock every FCC weight write of spool `sid` holds from its read to its
-    write (Group 64.2 (1)): the print deduct's charge (print_deduct._spool_lock),
-    /api/spool/update's weight saves, Edit Spool's weight fields and
-    /api/spool/prusament_apply_weights."""
+    """The lock FCC's weight writes of spool `sid` hold (Group 64.2 (1)): from its
+    read to its write, the print deduct's charge (print_deduct._spool_lock),
+    /api/spool/update's weight saves and /api/spool/prusament_apply_weights; around
+    its write only, Edit Spool's weight fields (its read is the page's own)."""
     key = str(sid)
     with _SPOOL_WRITE_LOCKS_GUARD:
         lock = _SPOOL_WRITE_LOCKS.get(key)

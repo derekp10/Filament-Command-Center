@@ -2406,6 +2406,20 @@ def _isolate_archive_takeoff_store(tmp_path, monkeypatch):
     monkeypatch.setattr(archive_takeoff, "_STORE_FAIL_SAID", set())
 
 
+@pytest.fixture(autouse=True)
+def _isolate_weigh_stamps_store(tmp_path, monkeypatch):
+    """Group 64 review (S1): each test gets its own store of FCC's weighings and
+    charges (weigh_stamps). Every print charge notes its grams there, and a print's
+    Decision 1 check takes the charges made after its end read off the change it
+    sees, so a charge left in the run's shared folder by one test would reach a
+    later test whose end read is set in the past. Host-side only, as above."""
+    try:
+        import weigh_stamps  # type: ignore
+    except ImportError:  # pragma: no cover - backend not importable in this env
+        return
+    monkeypatch.setattr(weigh_stamps, "_STORE_PATH", str(tmp_path / "weigh_stamps.json"))
+
+
 # --- Group 38.7 — make `--offline` structurally airtight ---------------------
 #
 # The collection-time gate skips by FIXTURE NAME, which is the right primary

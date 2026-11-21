@@ -342,7 +342,9 @@ def test_a_queued_completion_whose_compute_always_raises_asks_with_its_own_words
 
 def test_a_live_edges_raise_counts_as_the_first_try_and_is_said_only_once(clock, logs):
     """The edge's own ERROR line says it, so the queue's raises log no WARNING on
-    top; the 3 quick tries include the edge's. Red on eb94846."""
+    top; the 3 quick tries include the edge's. Red on eb94846. Since the Group 64
+    review (S5) that line says how the queue keeps trying and carries the "Try again
+    now" button, which no line on this path offered."""
     calls = []
 
     def _review(*a, **k):
@@ -351,7 +353,10 @@ def test_a_live_edges_raise_counts_as_the_first_try_and_is_said_only_once(clock,
     with patch.object(print_deduct, "_create_pending_cancel_review", side_effect=_review):
         print_monitor._on_cancel_edge(XL, "x.gcode", 7, 0.4, "http://fb")
         failed = _lines(logs, "review failed", "ERROR")
-        assert len(failed) == 1 and failed[0].endswith("FCC will try again when the printer is idle."), logs
+        assert len(failed) == 1, logs
+        assert ("FCC tries again when the printer is idle, twice more right away, then less often "
+                "(at most once an hour) for up to 72 hours." in failed[0]), failed
+        assert failed[0].endswith("↻ Try again now</button>"), failed
         assert cancel_fetch_store.get_pending(XL, "7")["raises"] == 1
         clock.now += 60
         _tick()
