@@ -168,3 +168,36 @@ def test_an_excluded_move_under_relative_e_moves_the_mark_too():
     on the old walk too: relative E netted the same.)"""
     body = "M83\nT1\nG1 X1 E2\nG1 E-1\n;EXCLUDE_E_START\nG1 E8\n;EXCLUDE_E_END\nG1 E0.7\nG1 X2 E1\n"
     assert _whole(body, [0, 2.7], default_tool=1) == {1: 2.7}
+
+
+# --------------------------------------------------------------------------- #
+# The slicer's ;FLUSH tags (PrusaSlicer 2.9.6+)                                #
+# --------------------------------------------------------------------------- #
+
+def test_a_pull_back_inside_a_flush_owes_nothing():
+    """update_flush_per_extruder adds a flush's push in full and skips a pull-back:
+    5, then the flush's 2 and 1 (the 0.5 back counts nothing and owes nothing), then
+    1 more: 9. On fb03133's walk the 0.5 was a debt the next moves paid: 8.5. This is
+    the re-sliced flexi-fox's T1 (-0.046 mm before this rule, -0.004 after)."""
+    body = "M83\nT0\nG1 X1 E5\n;FLUSH_START\nG1 X2 E2\nG1 E-0.5\nG1 X3 E1\n;FLUSH_END\nG1 X4 E1\n"
+    assert _whole(body, [9]) == {0: 9.0}
+
+
+def test_a_flush_pays_no_debt_but_the_debt_still_gets_paid():
+    """A retract owed before a flush stays owed through it and is paid after: the
+    total is the same either way (8), and so is a cut after the flush (5 + 2 - 0.8).
+    Passes by design on the old walk."""
+    before = "M83\nT0\nG1 X1 E5\nG1 E-0.8\n;FLUSH_START\nG1 X2 E2\n;FLUSH_END\n"
+    assert _at(before, "G1 E0.8\nG1 X3 E1\n", [8]) == ({0: 6.2}, {0: 8.0})
+
+
+def test_flush_tags_are_read_as_the_exclude_tags_are_and_exclude_wins():
+    """Indented, or with words after them, they are tags (process_tags reads a
+    custom tag right after the ';' as a prefix); an excluded move inside a flush
+    counts nothing (the slicer's !m_exclude_e comes first)."""
+    body = ("M83\nT0\n  ;FLUSH_START purge\nG1 X1 E2\nG1 E-1\nG1 X2 E1\n  ;FLUSH_END\n"
+            ";FLUSH_START\n;EXCLUDE_E_START\nG1 E8\n;EXCLUDE_E_END\nG1 X3 E2\n;FLUSH_END\n")
+    assert _whole(body, [5]) == {0: 5.0}
+    # A bare line is no tag: the pull-back is a debt the next push pays.
+    bare = "M83\nT0\nFLUSH_START\nG1 X1 E2\nG1 E-1\nG1 X2 E1\nFLUSH_END\n"
+    assert _whole(bare, [2]) == {0: 2.0}

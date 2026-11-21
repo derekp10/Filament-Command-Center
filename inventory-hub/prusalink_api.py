@@ -201,6 +201,14 @@ _EXTRUDING_MOVE_RE = re.compile(r'^G0*[0-3](?![0-9])')
 # words as bare lines with no ';' (the raccoon capture): the slicer counted those
 # moves, so a bare line is no tag.
 _EXCLUDE_E_TAG_RE = re.compile(r'\s*;EXCLUDE_E_(START|END)')
+# PrusaSlicer 2.9.6's other custom tags, `;FLUSH_START` / `;FLUSH_END`, read the same
+# way (GCodeProcessor::process_tags): what a move between them pushes out is added to
+# its tool's count in full (UsedFilaments::update_flush_per_extruder), paying no debt,
+# and a pull-back between them owes none (Group 64.5). The INDX profile wraps each
+# pick-up's flush in them; files from a slicer before 2.9.6 carry the tags too, and
+# walk to their footers either way (a pull-back inside a flush is the only place the
+# two counts differ).
+_FLUSH_TAG_RE = re.compile(r'\s*;FLUSH_(START|END)')
 # Group 64.5: G90 / G91 (absolute / relative positioning for every axis, E
 # included), zero-padded or not; G90.1-style subcodes are no such line.
 _POSITIONING_RE = re.compile(r'^G0*9([01])(?![0-9.])')
@@ -236,7 +244,9 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
     is still owed and E past the moved mark counts (the slicer's count, for any
     excluded move). Tool changes and ``G92`` inside the tags act as anywhere else;
     a START with no END leaves out the rest of the file and an END with no START
-    does nothing, as in the slicer.
+    does nothing, as in the slicer. A move between ``;FLUSH_START`` /
+    ``;FLUSH_END`` (`_FLUSH_TAG_RE`) moves the mark with the position too, and what
+    it pushes out counts in full; an excluded move inside a flush counts nothing.
     """
     order = sorted(range(len(cut_bytes)), key=lambda i: cut_bytes[i])
     cuts = [None] * len(cut_bytes)
@@ -249,6 +259,7 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
     extruded_mm: Dict[int, float] = {}
     saw_tool = False
     exclude_e = False            # between ;EXCLUDE_E_START and ;EXCLUDE_E_END
+    flushing = False             # between ;FLUSH_START and ;FLUSH_END
     consumed = 0
 
     for line in gcode_content.splitlines(keepends=True):
@@ -269,6 +280,10 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
                 tag = _EXCLUDE_E_TAG_RE.match(line)
                 if tag:
                     exclude_e = tag.group(1) == 'START'
+            if 'FLUSH_' in line:
+                tag = _FLUSH_TAG_RE.match(line)
+                if tag:
+                    flushing = tag.group(1) == 'START'
             continue
         upper = code.upper()
 
@@ -309,6 +324,12 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
             mark = e_mark.get(active_tool, 0.0)
             if exclude_e:
                 # Not filament, but E moves: the mark moves by the same delta.
+                e_mark[active_tool] = mark + (new - pos)
+            elif flushing:
+                # A flush: what it pushes out counts in full, paying no debt, and a
+                # pull-back owes none (the mark moves with the position).
+                if new > pos:
+                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + (new - pos)
                 e_mark[active_tool] = mark + (new - pos)
             elif new > mark:
                 # Only E past the running mark is new filament (a retract and its

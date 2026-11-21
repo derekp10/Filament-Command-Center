@@ -233,10 +233,11 @@ def test_a_pick_up_walk_lands_on_its_footer_so_no_warning_is_logged(logs):
 def test_the_flexi_fox_capture_walks_to_its_footer_and_its_2pct_cancel_charges_the_share(
         logs, path, footer, early_want):
     """The real 2.5.14-profile file (its footer is the slicer's): every tool walks
-    to its footer's millimetres within 0.05 mm (it was 2.5x to 3.1x before this
+    to its footer's millimetres within 0.01 mm (it was 2.5x to 3.1x before this
     hotfix, then ~0.8 mm under until Group 64.5 counted each tool's last retract,
-    which the file never takes back, as the slicer does), and a cancel at the
-    printer's 2% charges 0.13 g, not 0.05 g."""
+    which the file never takes back, and read the ;FLUSH tags, as the slicer does:
+    the re-sliced file's T1 was 0.046 mm under for a pull-back inside a flush), and a
+    cancel at the printer's 2% charges 0.13 g, not 0.05 g."""
     if not os.path.isfile(path):
         pytest.skip("the flexi-fox captures are git-ignored (only on Derek's PC)")
     with open(path, "rb") as fh:
@@ -249,7 +250,7 @@ def test_the_flexi_fox_capture_walks_to_its_footer_and_its_2pct_cancel_charges_t
     _cuts, (walked_mm, _saw) = prusalink_api._walk_extrusion(g, [], 0)
     assert set(walked_mm) == set(foot_mm), (walked_mm, foot_mm)
     for t, want in foot_mm.items():
-        assert walked_mm[t] == pytest.approx(want, abs=0.05), (t, walked_mm, foot_mm)
+        assert walked_mm[t] == pytest.approx(want, abs=0.01), (t, walked_mm, foot_mm)
     assert measured["partials"][1] == measured["footer"]
     early = measured["partials"][0]
     assert set(early) == set(early_want), early              # T2 hadn't printed yet
