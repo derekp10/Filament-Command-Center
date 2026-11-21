@@ -158,3 +158,29 @@ def test_mmu_slots_sharing_one_number_say_so_on_the_uncharged_grams_card(tmp_pat
     assert why.startswith("MMU slots MMU-1 and MMU-2 share one toolhead number and each held a spool "
                           "(#401 and #402), so FCC charged none of them"), why
     assert "own toolhead number in Settings" in why, why
+
+
+PICK_JS = r"""
+const c = cardOf('k#shortfall');
+const sel = c.querySelector('.fcc-cr-pick');
+return { options: Array.from(sel.querySelectorAll('option')).map((o) => o.textContent.trim()),
+         groups: Array.from(sel.querySelectorAll('optgroup')).map((g) => g.getAttribute('label')) };
+"""
+
+
+def test_the_picker_marks_only_the_run_out_spool_and_names_a_picked_one(tmp_path):
+    """Group 64.2 (7) / (8). RED on 9fc269b: both of the head's spools read as
+    usable (no per-spool mark), and the picked spool read as "on HEAD-1"."""
+    rec = _base("k#shortfall", "shortfall", rev=0, total_grams=2.0, unresolved_usage={"0": 2.0},
+                shortfall_causes={"0": {"why": "not_charged", "sid": None, "toolhead": "HEAD-1",
+                                        "archived": False}},
+                heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": None, "sids": [100, 101],
+                               "archived_sids": [100]},
+                              {"toolhead": "HEAD-1", "position": 0, "sid": 300, "archived": True,
+                               "when": "picked"}])
+    res = run(tmp_path, RESPOND_JS + PICK_JS, {"pending": [rec], "spools": SPOOLS})
+    opts = res["options"]
+    assert any(o.startswith("#100 — on HEAD-1") and o.endswith("(ran out, archived)") for o in opts), opts
+    assert any(o.startswith("#101 — on HEAD-1") and "ran out" not in o for o in opts), opts
+    assert "#300 — picked for HEAD-1 on this card (ran out, archived)" in opts, opts
+    assert "Picked on this card" in res["groups"], res["groups"]

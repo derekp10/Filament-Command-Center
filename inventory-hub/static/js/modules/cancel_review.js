@@ -617,21 +617,29 @@
         const first = own != null
             ? `<option value="${esc(own)}" selected>${esc(ownLabel)}</option>`
             : `<option value="" selected>— pick the spool it used —</option>`;
-        const groups = { end: [], start: [], during: [] };
+        const groups = { end: [], start: [], during: [], picked: [] };
         const listed = new Set(own != null ? [String(own)] : []);
         (atEnd || []).forEach((h) => {
-            const when = h.when === 'start' || h.when === 'during' ? h.when : 'end';
+            const when = ['start', 'during', 'picked'].includes(h.when) ? h.when : 'end';
             const ids = h.sid != null ? [h.sid] : (Array.isArray(h.sids) ? h.sids : []);
             ids.forEach((sid) => {
                 if (sid != null) listed.add(String(sid));
                 if (sid == null || String(sid) === String(own)) return;
                 // 43.2: a spool that ran out is still offered (it is charged what it
-                // has left, 0 g for an empty one, and stays archived), but says so.
-                groups[when].push(`<option value="${esc(sid)}">#${esc(sid)} — on ${esc(h.toolhead)} ${esc(w[when] || w.end)}${h.archived ? ' (ran out, archived)' : ''}</option>`);
+                // has left, 0 g for an empty one, and stays archived), but says so;
+                // Group 64.2 (8): among a head's several spools, only the one that ran
+                // out (`archived_sids`).
+                const ranOut = Array.isArray(h.archived_sids)
+                    ? h.archived_sids.some((x) => String(x) === String(sid)) : !!h.archived;
+                // Group 64.2 (7): a spool picked on an earlier Apply of the card is
+                // offered as such, never as the spool on the head.
+                const where = when === 'picked' ? `picked for ${esc(h.toolhead)} on this card`
+                    : `on ${esc(h.toolhead)} ${esc(w[when] || w.end)}`;
+                groups[when].push(`<option value="${esc(sid)}">#${esc(sid)} — ${where}${ranOut ? ' (ran out, archived)' : ''}</option>`);
             });
         });
         const group = (when, cls) => groups[when].length
-            ? `<optgroup label="${esc(capFirst(w[when] || w.end))}" class="${cls}">${groups[when].join('')}</optgroup>`
+            ? `<optgroup label="${esc(capFirst(when === 'picked' ? 'picked on this card' : (w[when] || w.end)))}" class="${cls}">${groups[when].join('')}</optgroup>`
             : '';
         // The #id box is text, not number: arrow keys on a number box step it
         // (an empty one to 1), and charging spool #1 by accident is a real write.
@@ -641,7 +649,7 @@
                     data-line="${esc(line)}" data-own="${own == null ? '' : esc(own)}"
                     style="max-width:330px;font-size:0.92rem;">
                 ${first}
-                ${group('end', 'fcc-cr-ended')}${group('start', 'fcc-cr-started')}${group('during', 'fcc-cr-during')}
+                ${group('end', 'fcc-cr-ended')}${group('start', 'fcc-cr-started')}${group('during', 'fcc-cr-during')}${group('picked', 'fcc-cr-picked')}
                 ${bufferGroupHtml(listed)}
                 <option value="other">Another spool by #ID…</option>
             </select>

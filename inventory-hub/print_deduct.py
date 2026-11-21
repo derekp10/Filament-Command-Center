@@ -783,7 +783,8 @@ def _uncharged_by_position(usage_map, details, known_positions=None):
 @_sharing_one_list_read
 def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged, details=(),
                             failed=(), fb_url=None, active_locs=None, heads=None,
-                            read_heads=False, heads_source=None, heads_read_at=None, held=None):
+                            read_heads=False, heads_source=None, heads_read_at=None, held=None,
+                            picked=False):
     """Group 43.2 — stash a review card for grams a deduct couldn't charge (a
     spool's record ran out, a head had no spool or two, a write failed), so they
     can still be placed: job 1104's 27.12 g went to no spool after #99's record
@@ -806,6 +807,9 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     "weighed" (its spool pre-picked, the words in `words`) and a filled-in figure in
     `shortfall_prefill`: 0 g when FCC weighed the spool after the end (the scale
     counted the print already), else the print's grams.
+    `picked` (the card Apply's path): `details` are spools picked on a card, so a
+    spool the card doesn't list yet is offered as picked there, never as the spool
+    on the head (64.2 (7)).
     Returns the record, or None when the card exists, was settled, or would be
     empty."""
     key = _shortfall_key(job_id)
@@ -822,8 +826,6 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
         by_line.setdefault(str(_norm_pos(h.get('position'))), h)
 
     def _mark(line, toolhead, sid, archived):
-        entry = {"toolhead": toolhead, "position": _norm_pos(line), "sid": sid,
-                 "archived": bool(archived)}
         # Round 2 (R3): the entry that already names this spool on this head (a
         # card from the print-end read offers every spool the head had), so a
         # split's run-out spool never takes over the head's own entry: that hid
@@ -831,20 +833,27 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
         same = next((h for h in heads if sid is not None and str(h.get('sid')) == str(sid)
                      and str(_norm_pos(h.get('position'))) == line), None)
         if same is not None:
-            same.update(entry)
+            same["archived"] = bool(archived)
             return
         own = by_line.get(line)
-        if own is not None and isinstance(own.get('sids'), list):
-            # Round 2's review: the print-end read's own entry for the head (it
-            # carries `sids`) is what the head held when the print ended, and is
-            # never written over with another spool: one it names among several
-            # stays offered beside the others, and one picked from elsewhere (by its
-            # #) isn't called the spool on the head. The line's cause names it.
+        if own is not None and sid is not None and isinstance(own.get('sids'), list) \
+                and any(str(s) == str(sid) for s in own['sids']):
+            # 64.2 (8): a spool the head's entry names among several gets its own
+            # "ran out, archived" mark (`archived_sids`), never the whole entry's.
+            if archived:
+                marks = own.setdefault("archived_sids", [])
+                if not any(str(m) == str(sid) for m in marks):
+                    marks.append(sid)
             return
-        if own is not None:
-            own.update(entry)
-        else:
-            heads.append(entry)
+        # 64.2 (7): the head's own entry is never written over (an older card, the
+        # automatic path, a #id pick that ran short all overwrote it, and the spool
+        # on the head when the print ended went from the picker): the spool is
+        # offered beside it, as charged from the head (`when` "end") or as picked on
+        # a card ("picked"), whose words the picker reads.
+        entry = {"toolhead": toolhead, "position": _norm_pos(line), "sid": sid,
+                 "archived": bool(archived), "when": "picked" if picked else "end"}
+        heads.append(entry)
+        if own is None:
             by_line[line] = entry
 
     rows, unconfirmed = [], {}
@@ -4965,6 +4974,7 @@ def api_cancel_deduct_confirm():
                 residue_card = _stash_shortfall_review(
                     printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
                     uncharged=residue, details=gone, heads=rec.get("heads_at_end") or [],
+                    picked=True,
                     **_given(heads_source=rec.get("heads_source"),
                              heads_read_at=rec.get("heads_read_at")))
             except Exception as e:

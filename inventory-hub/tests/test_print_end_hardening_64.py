@@ -882,3 +882,49 @@ def test_a_cancel_on_mmu_slots_sharing_one_number_says_why_it_asks():
     assert "MMU slots MMU-1 and MMU-2 share one toolhead number" in note, rec
     assert "own toolhead number in Settings" in note, rec
     assert rig.used(401) == 10.0 and rig.used(402) == 10.0
+
+
+# --------------------------------------------------------------------------- #
+# 64.2 (7) / (8): the uncharged-grams card's spool entries                     #
+# --------------------------------------------------------------------------- #
+
+def _card_heads_of(**kw):
+    kw.setdefault("filename", "f.gcode")
+    kw.setdefault("scale", 1.0)
+    rec = print_deduct._stash_shortfall_review(XL, f"J-{len(kw)}", **kw)
+    return rec["heads_at_end"]
+
+
+def test_an_older_cards_run_out_spool_never_takes_the_heads_own_entry():
+    """64.2 (7). Red on 9fc269b: #200 (charged, then archived off the head) wrote
+    over #100's entry, so the spool on the head went from the picker."""
+    heads = _card_heads_of(uncharged={"0": 2.0},
+                           heads=[{"toolhead": "XL-1", "position": 0, "sid": 100}],
+                           details=[{"sid": 200, "position": 0, "toolhead": "XL-1", "remaining": 0.0,
+                                     "grams": 3.0}])
+    assert {"toolhead": "XL-1", "position": 0, "sid": 100} in heads, heads
+    assert {"toolhead": "XL-1", "position": 0, "sid": 200, "archived": True, "when": "end"} in heads, heads
+
+
+def test_a_spool_picked_on_a_card_that_ran_short_is_offered_as_picked():
+    """64.2 (7), the card Apply's path. Red on 9fc269b: the spool picked by its # was
+    left off the next card's picker (the print-end entry returned early)."""
+    heads = _card_heads_of(uncharged={"0": 2.0}, picked=True,
+                           heads=[{"toolhead": "XL-1", "position": 0, "sid": 100, "sids": [100]}],
+                           details=[{"sid": 300, "position": 0, "toolhead": "XL-1", "remaining": 0.0,
+                                     "grams": 0.0}])
+    own = next(h for h in heads if h.get("sid") == 100)
+    assert own.get("archived") is not True and "when" not in own, heads
+    assert {"toolhead": "XL-1", "position": 0, "sid": 300, "archived": True, "when": "picked"} in heads, heads
+
+
+def test_a_run_out_spool_among_a_heads_several_gets_its_own_mark():
+    """64.2 (8). Red on 9fc269b: the entry naming #100 and #101 got no mark, so #100
+    was offered as if it had filament left."""
+    heads = _card_heads_of(uncharged={"0": 2.0},
+                           heads=[{"toolhead": "XL-1", "position": 0, "sid": None, "sids": [100, 101]}],
+                           details=[{"sid": 100, "position": 0, "toolhead": "XL-1", "remaining": 0.0,
+                                     "grams": 3.0}])
+    entry = next(h for h in heads if h.get("sids") == [100, 101])
+    assert entry.get("archived_sids") == [100] and not entry.get("archived"), heads
+    assert len([h for h in heads if h.get("sid") == 100]) == 0, heads
