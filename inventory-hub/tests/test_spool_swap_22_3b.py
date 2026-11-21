@@ -431,3 +431,49 @@ def test_color_change_byte_offset_matches_partial_parse_space():
     assert segs[0]["byte_offset"] == expected_byte
     total = len(gcode.encode("utf-8"))
     assert abs(segs[0]["fraction"] - expected_byte / total) < 1e-6
+
+
+# =========================================================================== #
+# Group 64.3 (4): the resume's words, and no file_meta on the latch            #
+# =========================================================================== #
+
+def _resume_lines(first, second, pause_state="ATTENTION", runout_job=None):
+    """A start snapshot, a pause, a resume: the Activity Log lines the resume wrote."""
+    with app_module._PRINT_TRACKER_LOCK:
+        app_module._PRINT_TRACKER.clear()      # each call is its own print
+    snap = MagicMock(side_effect=[dict(first), dict(second)])
+    job = dict(runout_job or JOB)
+    with patch.object(print_deduct, "_snapshot_active_spools", snap), \
+            patch.object(app_module.state, "add_log_entry") as log:
+        _latch("PRINTING", job)
+        _latch(pause_state, dict(job, progress=0.6))
+        _latch("PRINTING", dict(job, progress=0.6))
+    return [c.args[0] for c in log.call_args_list if "resumed job" in c.args[0]]
+
+
+def test_a_resume_with_no_change_says_so_in_words():
+    """The resume line names each head's spool in words and says no change was
+    recorded: never "the full footer will be billed" (a print then cancelled is
+    charged only its printed part, on a card) and never raw dicts."""
+    # On 2742bb7: the line read "... no spool mapping change at any toolhead (before={'0': 100,
+    # '1': 7}, after={0: 100, 1: 7}), so no swap was recorded and the full footer will be billed as-is."
+    lines = _resume_lines({0: 100, 1: 7}, {0: 100, 1: 7})
+    assert lines == ["🔁 XL: resumed job 9 at ~60.0% with the same spool on every head (T0 #100, T1 #7), "
+                     "so no change was recorded."], lines
+
+
+def test_a_resume_with_a_change_names_it_in_words():
+    lines = _resume_lines({0: 100}, {0: 200})
+    assert lines == ["🔁 XL: resumed job 9 at ~60.0%, after a run-out, with a spool changed "
+                     "(T0: #100 → #200): FCC splits its grams at the change."], lines
+    lines = _resume_lines({0: 100}, {0: 200}, pause_state="PAUSED")
+    assert lines == ["🔁 XL: resumed job 9 at ~60.0% with a spool changed (T0: #100 → #200): FCC "
+                     "splits its grams at the change."], lines
+
+
+def test_the_latch_keeps_no_file_meta():
+    """Nothing read the slicer's estimate the latch kept ("for slice 5's preview UX"):
+    it is no longer kept."""
+    with patch.object(print_deduct, "_snapshot_active_spools", MagicMock(return_value={0: 100})):
+        _latch("PRINTING", dict(JOB, file_meta={"filament used [g]": "40, 32"}))
+    assert "file_meta" not in app_module._PRINT_TRACKER["XL"], app_module._PRINT_TRACKER["XL"]

@@ -61,7 +61,10 @@ import print_deduct  # type: ignore
 # print_deduct_ledger keeps each deduct exactly-once across ticks and restarts.
 # ---------------------------------------------------------------------------
 
-# {printer_name: {"state": str, "job_id", "filename", "progress", "file_meta"}}
+# {printer_name: {"state": str, "job_id", "filename", "progress", "start_spools",
+#                  "snapshot_job", "swap_log", "pause_progress", "saw_attention",
+#                  "park_heads", "park_read"}}: the latch (each key is described where
+# it is set). Group 64.3 (4) dropped "file_meta", which nothing read.
 _PRINT_TRACKER = {}
 _PRINT_TRACKER_LOCK = threading.Lock()
 
@@ -811,7 +814,6 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         }
                     entry.pop('progress', None)
                     entry.pop('filename', None)
-                    entry.pop('file_meta', None)
                     # 22.3: drop the previous job's start-spool snapshot so the new
                     # job re-captures its OWN start mapping (the snapshot_job!=jid
                     # guard below would catch it anyway, but pop defensively so a
@@ -831,11 +833,6 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     entry['filename'] = job['filename']
                 if new_jid is not None:
                     entry['job_id'] = new_jid
-                # file_meta (the slicer's per-tool 'filament used' estimate) is
-                # latched for slice 5's preview UX, which shows the estimate
-                # alongside the computed partial without re-fetching the job.
-                if job.get('file_meta'):
-                    entry['file_meta'] = job['file_meta']
                 prog = job.get('progress')
                 if isinstance(prog, (int, float)):
                     entry['progress'] = max(float(entry.get('progress', 0.0)), float(prog))
@@ -933,23 +930,27 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         # another slot without any FCC eject/load — looks like.
                         # Previously the count was discarded and nothing was
                         # logged either way.
+                        # Group 64.3 (4): in a person's words, true however the
+                        # print then ends (a completion, a cancel's card, a review):
+                        # never "the full footer will be billed", never raw dicts.
+                        _at = f"~{(swap_progress or 0.0) * 100:.1f}%"
                         if _added:
                             _d = ", ".join(
-                                f"pos {ev.get('position')}: #{ev.get('from_sid')}"
-                                f"->#{ev.get('to_sid')}"
+                                f"T{ev.get('position')}: #{ev.get('from_sid')} → #{ev.get('to_sid')}"
                                 for ev in (e.get('swap_log') or [])[-_added:])
                             state.add_log_entry(
-                                f"🔁 {printer_name}: resumed job {swap_jid} — recorded "
-                                f"{_added} spool swap(s) at ~{(swap_progress or 0.0) * 100:.1f}% "
-                                f"({_d}){' [runout]' if swap_runout else ''}.",
+                                f"🔁 {printer_name}: resumed job {swap_jid} at {_at}"
+                                f"{', after a run-out,' if swap_runout else ''} with a spool "
+                                f"changed ({_d}): FCC splits its grams at the change.",
                                 "INFO", "6cb2eb")
                         else:
+                            _heads = ", ".join(
+                                f"T{_p} #{_s}" if _s is not None else f"T{_p} no spool"
+                                for _p, _s in sorted(snap.items(), key=lambda kv: str(kv[0]).zfill(4)))
                             state.add_log_entry(
-                                f"🔁 {printer_name}: resumed job {swap_jid} — no spool "
-                                f"mapping change at any toolhead "
-                                f"(before={_before or '{}'}, after={snap}), so no swap "
-                                f"was recorded and the full footer will be billed as-is.",
-                                "INFO", "6cb2eb")
+                                f"🔁 {printer_name}: resumed job {swap_jid} at {_at} with the "
+                                f"same spool on every head ({_heads}), so no change was "
+                                f"recorded.", "INFO", "6cb2eb")
                         # Consume the pause markers so a SUBSEQUENT pause/swap in the
                         # same job starts from a clean slate (next runout re-samples).
                         e.pop('pause_progress', None)
@@ -1806,8 +1807,7 @@ def _recover_one_print_latch(name, entry, fb_url):
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {
                 'state': cur, 'job_id': cur_jid, 'filename': job.get('filename'),
-                'progress': float(job.get('progress') or 0.0),
-                'file_meta': job.get('file_meta') or {}}
+                'progress': float(job.get('progress') or 0.0)}
         return True
 
     if cur in _CANCEL_TERMINAL_STATES:
