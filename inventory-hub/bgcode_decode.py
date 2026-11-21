@@ -43,6 +43,11 @@ _BT_PRINTER_META = 3
 _BT_PRINT_META = 4
 _BT_THUMBNAIL = 5
 _META_TYPES = (_BT_FILE_META, _BT_SLICER_META, _BT_PRINTER_META, _BT_PRINT_META)
+# Group 64.6: the slicer settings the G-code walk needs for an MMU print's count
+# (prusalink_api._mmu_rule), read from the Slicer-Metadata block's `key=value` lines.
+_MMU_KEYS = ("single_extruder_multi_material", "wipe_tower", "parking_pos_retraction",
+             "extra_loading_move", "nozzle_diameter")
+_MMU_KEY_RE = re.compile(r"(?m)^[ \t]*(" + "|".join(_MMU_KEYS) + r")[ \t]*=[ \t]*(.*?)[ \t]*$")
 # Compression
 _COMP_NONE = 0
 _COMP_DEFLATE = 1
@@ -249,6 +254,7 @@ def decode_bgcode(raw: bytes) -> Dict:
     mp_no_spaces = False
     footer_g = ""
     footer_mm = ""
+    mmu_cfg: Dict[str, str] = {}
     while off < n:
         bg_start = off
         if off + 8 > n:
@@ -304,6 +310,9 @@ def decode_bgcode(raw: bytes) -> Dict:
                         footer_g = gm.group(1).strip()
                     if mm:
                         footer_mm = mm.group(1).strip()
+                if btype == _BT_SLICER_META:
+                    for key in _MMU_KEY_RE.finditer(ini):
+                        mmu_cfg.setdefault(key.group(1), key.group(2))
         except Exception:
             continue  # skip this block; offsets already advanced
 
@@ -314,6 +323,17 @@ def decode_bgcode(raw: bytes) -> Dict:
     # all the moves keeps the byte-position map intact (footers carry no E).
     if footer_g and footer_mm:
         gcode += f"\n; filament used [mm] = {footer_mm}\n; filament used [g] = {footer_g}\n"
+    # Group 64.6: an MMU print's count (one extruder, several filaments, a wipe
+    # tower) starts each filament owing its parking distance, which the walk reads
+    # from the slicer's settings. A plain .gcode carries them in its config block at
+    # its end; a .bgcode keeps them in the Slicer-Metadata block, so the keys the walk
+    # reads are appended in the plain file's own form, past all the moves like the
+    # footer (no E, so the byte map holds), and only for such a print: every other
+    # file decodes exactly as before.
+    if mmu_cfg.get("single_extruder_multi_material") == "1":
+        gcode += ("; prusaslicer_config = begin\n"
+                  + "".join(f"; {k} = {mmu_cfg[k]}\n" for k in _MMU_KEYS if k in mmu_cfg)
+                  + "; prusaslicer_config = end\n")
     # M73 progress markers: PrusaSlicer emits `M73 P{percent} R{minutes}` lines
     # throughout, and the printer's reported `progress` IS this time-based value
     # (NOT a byte position). Capture each marker's (percent, decoded-byte-pos) so

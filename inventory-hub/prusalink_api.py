@@ -214,9 +214,43 @@ _FLUSH_TAG_RE = re.compile(r'\s*;FLUSH_(START|END)')
 _POSITIONING_RE = re.compile(r'^G0*9([01])(?![0-9.])')
 # An axis word on a G92 line other than E (X, Y, Z, or a rotary axis).
 _AXIS_WORD_RE = re.compile(r'[XYZABC]-?\d*\.?\d')
+# Group 64.6: the slicer's MMU rule. For a single-extruder multi-material print
+# with more than one extruder and a wipe tower (an MMU), GCodeProcessor::apply_config
+# keeps a parking position and an extra loading move (`parking_pos_retraction`,
+# `extra_loading_move`), and UsedFilaments::increase_caches starts each extruder
+# owing the parking distance (its filament waits parked in the MMU, so its first
+# load is no filament used) and counts the first counted move after each tool change
+# the extra loading move less (the wipe tower unloads the parking distance and loads
+# parking + extra back). Read from the file's own config block: a plain .gcode's, or
+# the copy bgcode_decode appends from a .bgcode's Slicer-Metadata block.
+_SLICER_CONFIG_BEGIN = "; prusaslicer_config = begin"
+_MMU_CONFIG_RE = re.compile(
+    r'(?m)^;[ \t]*(single_extruder_multi_material|wipe_tower|parking_pos_retraction'
+    r'|extra_loading_move|nozzle_diameter)[ \t]*=[ \t]*(.*?)[ \t]*$')
 
 
-def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int):
+def _mmu_rule(gcode_content: str):
+    """``(parking mm, extra loading mm)`` when the file's config block says the
+    slicer counted it as an MMU print (single extruder multi material, a wipe tower,
+    more than one extruder by its `nozzle_diameter` list, as apply_config reads
+    them), else None."""
+    at = gcode_content.rfind(_SLICER_CONFIG_BEGIN)
+    if at < 0:
+        return None
+    cfg = {}
+    for m in _MMU_CONFIG_RE.finditer(gcode_content, at):
+        cfg.setdefault(m.group(1), m.group(2))
+    if cfg.get("single_extruder_multi_material") != "1" or cfg.get("wipe_tower") != "1":
+        return None
+    if len([v for v in cfg.get("nozzle_diameter", "").split(",") if v.strip()]) < 2:
+        return None
+    try:
+        return float(cfg["parking_pos_retraction"]), float(cfg["extra_loading_move"])
+    except (KeyError, ValueError):
+        return None
+
+
+def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int, mmu=None):
     """One pass over a print file: each tool's extruded mm up to every byte in
     `cut_bytes`, and over the whole file.
 
@@ -247,15 +281,26 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
     does nothing, as in the slicer. A move between ``;FLUSH_START`` /
     ``;FLUSH_END`` (`_FLUSH_TAG_RE`) moves the mark with the position too, and what
     it pushes out counts in full; an excluded move inside a flush counts nothing.
+    `mmu` (Group 64.6, `_mmu_rule`): ``(parking mm, extra loading mm)`` for an MMU
+    print, counted as the slicer counts one. Each tool starts owing the parking
+    distance; the first counted move (not excluded, not a flush, E moving) after a T
+    naming another tool counts the extra loading move less; the walk starts on the
+    slicer's first extruder, 0, rather than `default_tool` (a file with no T at all
+    is still folded onto its footer's sole tool by the caller). A cut then counts
+    each tool's mm as they are: a debt there may be an unload's parking distance,
+    which was never counted, so it comes off nothing.
     """
     order = sorted(range(len(cut_bytes)), key=lambda i: cut_bytes[i])
     cuts = [None] * len(cut_bytes)
     nxt = 0
-    active_tool = default_tool
+    park, extra_load = mmu if mmu else (0.0, 0.0)
+    active_tool = 0 if mmu else default_tool
+    tool_changed = False         # MMU: a tool change whose first counted move hasn't come
     relative_e = False           # M83 (E relative) vs M82 (E absolute, the default)
     relative_all = False         # G91 (every axis relative) vs G90 (absolute, the default)
     e_pos: Dict[int, float] = {}    # per-tool E position, in its own coordinate
-    e_mark: Dict[int, float] = {}   # per-tool high-water mark of that position
+    e_mark: Dict[int, float] = {}   # per-tool high-water mark of that position (a tool
+                                    # not seen yet owes `park`: 0 but on an MMU)
     extruded_mm: Dict[int, float] = {}
     saw_tool = False
     exclude_e = False            # between ;EXCLUDE_E_START and ;EXCLUDE_E_END
@@ -269,7 +314,7 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
         # the walk ends, below).
         while nxt < len(order) and consumed > cut_bytes[order[nxt]]:
             cuts[order[nxt]] = (dict(extruded_mm),
-                                {t: max(0.0, e_mark.get(t, 0.0) - e_pos.get(t, 0.0)) for t in extruded_mm},
+                                {t: max(0.0, e_mark.get(t, park) - e_pos.get(t, 0.0)) for t in extruded_mm},
                                 saw_tool)
             nxt += 1
         code = line.split(';', 1)[0].strip()
@@ -289,7 +334,10 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
 
         tmatch = _TOOL_RE.match(upper)
         if tmatch:
-            active_tool = int(tmatch.group(1))
+            tool = int(tmatch.group(1))
+            if mmu and tool != active_tool:
+                tool_changed = True
+            active_tool = tool
             saw_tool = True
             continue
         if upper.startswith('M82'):
@@ -309,7 +357,7 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
             # G92 E<v> (a bare G92 is E0) moves E to v: a retract still owed stays
             # owed, so the un-retract after it isn't new filament.
             pos = e_pos.get(active_tool, 0.0)
-            owed = e_mark.get(active_tool, 0.0) - pos
+            owed = e_mark.get(active_tool, park) - pos
             v = float(em.group(1)) if em else 0.0
             e_pos[active_tool] = v
             e_mark[active_tool] = v + owed
@@ -321,22 +369,29 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
             e = float(em.group(1))
             pos = e_pos.get(active_tool, 0.0)
             new = pos + e if (relative_e or relative_all) else e
-            mark = e_mark.get(active_tool, 0.0)
+            mark = e_mark.get(active_tool, park)
             if exclude_e:
                 # Not filament, but E moves: the mark moves by the same delta.
-                e_mark[active_tool] = mark + (new - pos)
+                mark += new - pos
             elif flushing:
                 # A flush: what it pushes out counts in full, paying no debt, and a
                 # pull-back owes none (the mark moves with the position).
                 if new > pos:
                     extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + (new - pos)
-                e_mark[active_tool] = mark + (new - pos)
-            elif new > mark:
-                # Only E past the running mark is new filament (a retract and its
-                # re-prime below the mark add nothing; a retract never taken back
-                # stays counted, as in the slicer's footer).
-                extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + (new - mark)
-                e_mark[active_tool] = new
+                mark += new - pos
+            else:
+                if tool_changed and new != pos:
+                    # MMU: the first counted move after a tool change counts the
+                    # extra loading move less (the slicer's recent_toolchange).
+                    mark += extra_load
+                    tool_changed = False
+                if new > mark:
+                    # Only E past the running mark is new filament (a retract and its
+                    # re-prime below the mark add nothing; a retract never taken back
+                    # stays counted, as in the slicer's footer).
+                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + (new - mark)
+                    mark = new
+            e_mark[active_tool] = mark
             e_pos[active_tool] = new
 
     whole = (dict(extruded_mm), saw_tool)
@@ -351,6 +406,9 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
         if snap is whole:
             continue
         mm_at, owed_at, saw_at = snap
+        if mmu:
+            cuts[i] = (mm_at, saw_at)
+            continue
         cuts[i] = ({t: (mm if mm >= extruded_mm.get(t, 0.0) - 1e-9
                         else max(0.0, mm - owed_at.get(t, 0.0)))
                     for t, mm in mm_at.items()}, saw_at)
@@ -419,7 +477,8 @@ def measure_filament_usage(gcode_content: str, reached_fractions) -> Optional[Di
     # extrusion to the sole tool the footer marks as used. Multi-tool prints
     # have `Tn` changes and start at tool 0.
     default_tool = next(iter(g_per_mm)) if len(g_per_mm) == 1 else 0
-    cuts, whole = _walk_extrusion(gcode_content, cut_bytes, default_tool)
+    cuts, whole = _walk_extrusion(gcode_content, cut_bytes, default_tool,
+                                  mmu=_mmu_rule(gcode_content))
 
     def _fold(walked):
         mm_by_tool, saw_tool = walked

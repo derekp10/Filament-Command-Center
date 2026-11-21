@@ -277,29 +277,31 @@ def test_absolute_e_wipe_tail_keeps_a_late_cancel_under_the_footer():
 
 
 def test_core_one_fixture_still_scales_and_clamps():
-    """The Core One fixture walks ~1.4% over its footer with arcs counted; every
-    partial stays within the footer and the end of the file charges exactly it.
-    It is a Core One MMU3 print (its metadata: COREONEMMU3, five extruders, a wipe
-    tower), and the 30 mm over is its first load, which the slicer's MMU rule leaves
-    out and the walk doesn't read. Group 64.5 moved its whole from 6.4374 g to
-    6.4394 g: the print's last retract, never taken back, now counts."""
+    """The Core One fixture is a Core One MMU3 print (its metadata: COREONEMMU3, five
+    extruders, a wipe tower). Since Group 64.6 it walks to its footer as the slicer
+    counts an MMU print, 2130.152 mm against 2130.15: it walked 30 mm (1.4%) over
+    before, the start's load to the nozzle, which the slicer's MMU rule leaves out
+    (Group 64.5 had moved it from 6.4374 g to 6.4394 g). Every partial stays within
+    the footer, and the end of the file charges exactly it."""
     if not os.path.isfile(_CORE1):
         pytest.skip("sample.bgcode fixture not present")
     g = bgcode_decode.decode_bgcode(open(_CORE1, "rb").read())["gcode"]
     measured = prusalink_api.measure_filament_usage(g, [0.25, 0.5, 0.75, 0.99, 1.0])
     assert measured["footer"] == {1: 6.35}
-    assert 1.01 < measured["whole"][1] / 6.35 < 1.02, measured["whole"]
-    assert measured["whole"][1] == pytest.approx(6.4394, abs=5e-5), measured["whole"]
+    assert measured["whole"][1] == pytest.approx(6.35, abs=1e-4), measured["whole"]
     vals = [p[1] for p in measured["partials"]]
     assert vals == sorted(vals) and all(v <= 6.35 for v in vals), vals
     assert vals[-1] == pytest.approx(6.35)
-    # The mid-file charge IS the footer's share (~1.4% under the walk's own grams):
-    # this tells scaling from no scaling, which the clamp alone can't.
+    # The mid-file charge IS the footer's share of the walk, counted by the slicer's
+    # MMU rule; the walk before 64.6 counted the start's load and charged more.
     total = len(g.encode("utf-8"))
-    cuts, whole = prusalink_api._walk_extrusion(g, [int(0.5 * total)], 1)
+    mmu = prusalink_api._mmu_rule(g)
+    assert mmu == (84.0, -52.0)
+    cuts, whole = prusalink_api._walk_extrusion(g, [int(0.5 * total)], 1, mmu=mmu)
     expected = round(6.35 * cuts[0][0][1] / whole[0][1], 4)
     assert vals[1] == expected, (vals[1], expected)
-    assert vals[1] < cuts[0][0][1] * 6.35 / 2130.15 - 0.03, "the unscaled walk would charge more"
+    plain_cuts, plain_whole = prusalink_api._walk_extrusion(g, [int(0.5 * total)], 1)
+    assert vals[1] < round(6.35 * plain_cuts[0][0][1] / plain_whole[0][1], 4) - 0.02, vals
 
 
 def test_several_cuts_are_measured_in_one_pass_in_the_order_asked():
