@@ -1109,6 +1109,9 @@ _HEADS_WORDS = {
     "restart": "when FCC restarted after the print",
     "job_change": "when the next print started",
     "late": "when FCC logged the print",
+    # Group 64.3 (4): an end straight from an ATTENTION park (a cancel from the
+    # printer's prompt) names the spools read when it first parked.
+    "park": "when the printer paused",
     "start": "when the print started",
     "during": "during the print",
 }
@@ -1973,7 +1976,23 @@ def _is_sid_swap(before, after):
     return before is not None and after is not None and str(before) != str(after)
 
 
-def _record_swap_events(entry, end_snap, progress, runout=False):
+def _park_mapping(park_heads):
+    """Group 64.3 (4): {position(str): the one spool on it, or None} from a park read
+    (`park_heads['heads']`), for the resume's swap check; None when it holds none."""
+    heads = (park_heads or {}).get("heads") if isinstance(park_heads, dict) else None
+    if not isinstance(heads, list) or not heads:
+        return None
+    out = {}
+    for h in heads:
+        if not isinstance(h, dict) or h.get("position") is None:
+            continue
+        sids = _head_sids(h)
+        pos = str(_norm_pos(h.get("position")))
+        out[pos] = sids[0] if len(sids) == 1 and pos not in out else None
+    return out or None
+
+
+def _record_swap_events(entry, end_snap, progress, runout=False, before=None):
     """22.3(b): append ordered mid-print spool-swap events to entry['swap_log'] by
     diffing a resume-time snapshot (`end_snap` = {position: loaded sid or None}) against
     the mapping in effect for the segment just printed — start_spools advanced by the
@@ -1987,7 +2006,12 @@ def _record_swap_events(entry, end_snap, progress, runout=False):
     append order so a downstream apportionment can align segment k → the spool loaded
     after the k-th resume. Detection only fires when the spool MAPPING changes — i.e.
     an FCC eject/load at the pause updates Spoolman `location`; a purely physical roll
-    swap with no FCC action is invisible (documented limitation, same as 22.3(c))."""
+    swap with no FCC action is invisible (documented limitation, same as 22.3(c)).
+
+    `before` (Group 64.3 (4)): the mapping read when the printer first parked at
+    ATTENTION (_park_mapping), the spools that were feeding the segment when it
+    stopped; it stands for the start mapping advanced by the swaps, position by
+    position, where it names one."""
     start = entry.get('start_spools') or {}
     log = list(entry.get('swap_log') or [])
     # Reconstruct what the just-printed segment was feeding from: the start mapping,
@@ -1995,6 +2019,9 @@ def _record_swap_events(entry, end_snap, progress, runout=False):
     running = {str(k): v for k, v in start.items()}
     for ev in log:
         running[str(ev.get('position'))] = ev.get('to_sid')
+    for pos, sid in (before or {}).items():
+        if sid is not None:
+            running[str(pos)] = sid
     added = 0
     for pos, to_sid in end_snap.items():
         from_sid = running.get(str(pos))

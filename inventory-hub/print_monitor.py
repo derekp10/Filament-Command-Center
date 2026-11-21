@@ -429,7 +429,8 @@ def _capture_end_heads(printer_name, job_id, fb_url, heads_when=None):
             seen = "no spool on any head (a Spoolman blip?), so the read isn't used"
         else:
             seen = "couldn't read them"
-        state.logger.info(f"🔎 {printer_name}: heads at the end of job {job_id} ({source}, "
+        when = "at the park of" if source == "park" else "at the end of"
+        state.logger.info(f"🔎 {printer_name}: heads {when} job {job_id} ({source}, "
                           f"read in {time.time() - started:.1f}s): {seen}")
     except Exception:
         pass
@@ -449,7 +450,7 @@ def _edge_kwargs(start_spools=None, swap_log=None, heads_when=None, **more):
 
 
 def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
-                    start_spools=None, swap_log=None, heads_when=None):
+                    start_spools=None, swap_log=None, heads_when=None, park_heads=None):
     """Action taken when a cancel edge is detected. SLICE 5: compute the partial
     and stash it for preview-and-confirm (§9.7) — Derek reviews/nudges before it
     writes (automating the manual Connect-reading he does today). The detector
@@ -463,7 +464,9 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
     download, so a restart in either loses nothing and no tick downloads it a
     second time; the record is dropped once the review is stashed. A review that
     fails stays queued. A record already there keeps its first heads read, and the
-    review is computed with that one (_hold_end_heads)."""
+    review is computed with that one (_hold_end_heads). Group 64.3 (4): a cancel with no
+    printing since an ATTENTION park (from the printer's prompt) takes the read made when
+    it first parked (`park_heads`), never one made after a spool was changed at the prompt."""
     # INSTANT ACK (2026-06-13): log the moment the STOPPED edge fires, BEFORE the
     # slow async gcode download+decode. On a slow XL .bgcode download the review
     # line is 30-60s out; without this the user faces silence and thinks nothing
@@ -486,7 +489,8 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
             if _charged_before(rec, printer_name, job_id, filename):
                 return
             try:
-                end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
+                end_heads = park_heads or _capture_end_heads(printer_name, job_id, fb_url,
+                                                             heads_when=heads_when)
             except Exception:
                 end_heads = None
             rec, start_spools, swap_log, end_heads = _hold_end_heads(
@@ -511,11 +515,11 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
 
 
 def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url,
-                          start_spools=None, swap_log=None, heads_when=None):
+                          start_spools=None, swap_log=None, heads_when=None, park_heads=None):
     """Run the cancel-edge action OFF the heartbeat thread, so a slow gcode
     download never stalls the pulse. Synchronous when _CANCEL_DEDUCT_RUN_ASYNC
     is False (tests)."""
-    extra = _edge_kwargs(start_spools, swap_log, heads_when)
+    extra = _edge_kwargs(start_spools, swap_log, heads_when, park_heads=park_heads)
     if _CANCEL_DEDUCT_RUN_ASYNC:
         threading.Thread(
             target=_on_cancel_edge,
@@ -611,7 +615,7 @@ def _dispatch_completion_edge(printer_name, filename, job_id, fb_url, start_spoo
 
 def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                        progress_unknown=False, unmeasured_reason="replaced",
-                       start_spools=None, swap_log=None, heads_when=None):
+                       start_spools=None, swap_log=None, heads_when=None, park_heads=None):
     """Action when a latched in-progress job reaches IDLE/READY WITHOUT our ever
     sampling the terminal STOPPED or FINISHED (2026-06-13): a fast cancel→restart
     that slipped the poll, or a PRINTING→offline→IDLE printer power-cycle. We
@@ -633,7 +637,8 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
     progress_unknown end: its card has no usage to charge). Scope C: as the cancel
     edge, the print is claimed and queued before its heads read and its download,
     and a record already there keeps its first heads read (not a progress_unknown
-    end, which reads and downloads nothing)."""
+    end, which reads and downloads nothing). Group 64.3 (4): an end with no printing
+    since an ATTENTION park (a hard reset out of the prompt) takes the park's read."""
     # Instant ack (the ambiguous analogue of the cancel instant-ack), so the user
     # isn't met with silence during the async download.
     try:
@@ -664,8 +669,8 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                 if _charged_before(rec, printer_name, job_id, filename):
                     return
                 try:
-                    end_heads = _capture_end_heads(printer_name, job_id, fb_url,
-                                                   heads_when=heads_when)
+                    end_heads = park_heads or _capture_end_heads(printer_name, job_id, fb_url,
+                                                                 heads_when=heads_when)
                 except Exception:
                     end_heads = None
                 rec, start_spools, swap_log, end_heads = _hold_end_heads(
@@ -695,12 +700,12 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
 
 def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                              progress_unknown=False, unmeasured_reason="replaced",
-                             start_spools=None, swap_log=None, heads_when=None):
+                             start_spools=None, swap_log=None, heads_when=None, park_heads=None):
     """Run the ambiguous-edge action OFF the heartbeat thread (mirrors
     _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
     (tests)."""
     kwargs = {"progress_unknown": progress_unknown, "unmeasured_reason": unmeasured_reason}
-    kwargs.update(_edge_kwargs(start_spools, swap_log, heads_when))
+    kwargs.update(_edge_kwargs(start_spools, swap_log, heads_when, park_heads=park_heads))
     if _CANCEL_DEDUCT_RUN_ASYNC:
         threading.Thread(
             target=_on_ambiguous_edge,
@@ -745,6 +750,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
         need_snapshot = False  # 22.3: flag a once-per-job start-spool snapshot
         snap_jid = None
         need_swap_snapshot = False  # 22.3(b): flag a resume-edge mid-print swap capture
+        park_was = None  # Group 64.3 (4): the park's read, spent at a PRINTING tick
         swap_jid = None
         swap_progress = None
         swap_runout = False
@@ -752,6 +758,11 @@ def _track_print_edge(printer_name, state_info, fb_url):
             entry = _PRINT_TRACKER.setdefault(printer_name, {})
             prev_state = entry.get('state')  # 22.3(b): pre-overwrite, for resume detection
             entry['state'] = cur
+            if cur == 'PRINTING':
+                # Group 64.3 (4): printing again, the park's read is spent: a resume
+                # checks for a swap against it (below), and the next park reads afresh.
+                park_was = entry.pop('park_heads', None)
+                entry.pop('park_read', None)
             if job:
                 # Reject blank/zero ids (None/''/'0'/0) — same "blank job" set
                 # print_deduct_ledger keys on, so the tracker and the ledger
@@ -814,6 +825,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     # job can't inherit the prior job's frozen pause position / flag.
                     entry.pop('pause_progress', None)
                     entry.pop('saw_attention', None)
+                    entry.pop('park_heads', None)
+                    entry.pop('park_read', None)
                 if job.get('filename'):
                     entry['filename'] = job['filename']
                 if new_jid is not None:
@@ -901,8 +914,18 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         _before = dict(e.get('start_spools') or {})
                         for _ev in (e.get('swap_log') or []):
                             _before[str(_ev.get('position'))] = _ev.get('to_sid')
+                        # Group 64.3 (4): against what fed the segment when it
+                        # parked, where FCC read it (the park's read, this job's,
+                        # taken off the latch at this resume's tick).
+                        _park = park_was
+                        _park_map = (print_deduct._park_mapping(_park)
+                                     if isinstance(_park, dict)
+                                     and str(_park.get('job_id')) == str(swap_jid) else None)
+                        for _pos, _sid in (_park_map or {}).items():
+                            if _sid is not None:
+                                _before[str(_pos)] = _sid
                         _added = print_deduct._record_swap_events(
-                            e, snap, swap_progress, runout=swap_runout)
+                            e, snap, swap_progress, runout=swap_runout, before=_park_map)
                         # Say what the diff actually found. A zero here is the
                         # interesting case: FCC looked and the Spoolman mapping
                         # was unchanged, which is what a purely physical roll
@@ -969,6 +992,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
     # AMBIGUOUS-idle edge against the latched prev state.
     fire = None
     cancel_without_latch = False
+    park_read_job = None         # Group 64.3 (4): the job whose first park's heads to read
     # 22.3(b) runout accuracy: an ATTENTION park (filament runout / M600) FREEZES the job
     # at the pause byte position, and /api/v1/job reports that frozen progress. The
     # in-progress block is SKIPPED for ATTENTION (it's not an in-progress state), so
@@ -1060,6 +1084,15 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 # 22.3(b): the ordered mid-print swap history rides along too (same
                 # snapshot_job guard via _validated_swap_log).
                 'swap_log': entry.get('swap_log'),
+                # Group 64.3 (4): an end with no printing since the printer first parked
+                # at ATTENTION (a cancel from its prompt, after a filament loaded there
+                # with the printer BUSY too, or a reset out of it) names the spools read
+                # when it parked, this job's, never ones loaded at the prompt. A PRINTING
+                # tick spends the read, so its being here says the print never resumed.
+                'park_heads': (entry.get('park_heads')
+                               if isinstance(entry.get('park_heads'), dict)
+                               and str(entry['park_heads'].get('job_id')) == str(entry.get('job_id', ''))
+                               else None),
             }
             # Reset the latch to the terminal state so the edge can't re-fire.
             _PRINT_TRACKER[printer_name] = {'state': cur}
@@ -1086,12 +1119,32 @@ def _track_print_edge(printer_name, state_info, fb_url):
                             f"— will check for a spool swap on resume.",
                             "INFO", "6cb2eb")
                     entry['saw_attention'] = True
+                    if not entry.get('park_read'):
+                        # Group 64.3 (4): one read of the heads per park (off the lock, below).
+                        entry['park_read'] = True
+                        park_read_job = entry.get('job_id')
                     if pause_progress is not None:
                         entry['pause_progress'] = max(
                             float(entry.get('pause_progress', 0.0)), pause_progress)
             else:
                 _PRINT_TRACKER[printer_name] = {'state': cur}
 
+    if park_read_job is not None:
+        # Group 64.3 (4), off the tracker lock as the start snapshot is: the spools on
+        # the heads when the print first parked, before anyone changes one at the
+        # printer's prompt. An end with no printing since takes it as its end read; a
+        # resume checks for a swap against it. A read that finds nothing keeps nothing.
+        try:
+            park = _capture_end_heads(printer_name, park_read_job, fb_url, heads_when="park")
+        except Exception:
+            park = None
+        if park:
+            park = dict(park, job_id=str(park_read_job), progress=pause_progress)
+            with _PRINT_TRACKER_LOCK:
+                e = _PRINT_TRACKER.get(printer_name)
+                if (e is not None and e.get('state') == 'ATTENTION' and e.get('filename')
+                        and str(e.get('job_id')) == str(park_read_job)):
+                    e['park_heads'] = park
     if cancel_without_latch:
         state.add_log_entry(
             f"🛑 Cancel detected on {printer_name}, but no active job was latched "
@@ -1108,6 +1161,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
             # read when the print ended against its start snapshot and swap log.
             snapshot = _edge_kwargs(print_deduct._validated_start_spools(fire, fire['job_id']),
                                     print_deduct._validated_swap_log(fire, fire['job_id']))
+            if fire.get('park_heads'):
+                snapshot["park_heads"] = fire['park_heads']
             if fire['kind'] == 'ambiguous':
                 _dispatch_ambiguous_edge(
                     printer_name, fire['filename'], fire['job_id'], fire['progress'],
