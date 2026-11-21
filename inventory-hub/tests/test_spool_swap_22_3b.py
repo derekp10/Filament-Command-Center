@@ -14,8 +14,10 @@ snapshot diff. 22.3(b) builds the FOUNDATION for full per-segment apportionment:
     and the deferred-fetch record (finish-screen lock) into deduct_completed_print, with
     the same snapshot_job guard as start_spools.
   - ROUTING (safe degrade): a non-empty swap_log at a used position routes the completion
-    to the SAME spool_changed review (manual split) — the validated automatic per-segment
-    GRAMS split is deferred until Derek's real M600 capture data confirms the math.
+    to the SAME spool_changed review, never auto-applied. (Its grams are split at the
+    swaps since the print-end hotfix, 2026-11-11, scope B: _compute_swap_split, from the
+    print's one download; a head FCC can't split is held as a set. This file pins the
+    capture and the route.)
   - SEGMENTATION primitive: parse_color_change_segments scans decoded gcode for
     ;COLOR_CHANGE markers → ordered cut boundaries. Pure; NOT wired to any weight write.
 """
@@ -34,46 +36,24 @@ import app as app_module
 import print_deduct  # L316: patch targets / live seams for moved symbols
 import print_monitor  # L316: patch targets for moved symbols  # noqa: E402
 import prusalink_api  # noqa: E402
-import print_deduct_ledger  # noqa: E402
 import cancel_review_store  # noqa: E402
 import cancel_fetch_store  # noqa: E402
-import print_tracker_store  # noqa: E402
+import functools  # noqa: E402
 
+# Group 64.3 (9): the isolation fixture (autouse), the latch driver, the
+# completion's mocks and the made-up XL, shared with test_spool_swap_22_3.py.
+from spool_swap_harness import ACTIVE, PM, completion_ctx, reset  # noqa: E402,F401  (reset: autouse)
+from spool_swap_harness import creds as _creds  # noqa: E402,F401
+from spool_swap_harness import latch as _latch  # noqa: E402
 
-@pytest.fixture(autouse=True)
-def _reset(tmp_path, monkeypatch):
-    monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
-    monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "review.json"))
-    monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetch.json"))
-    monkeypatch.setattr(print_tracker_store, "_STORE_PATH", str(tmp_path / "latch.json"))
-    # Hotfix 2026-11-11: the edge handlers read the heads when a print ends (a real
-    # one runs on a job change here); no read keeps them off locations.json and
-    # Spoolman, on main's path.
-    monkeypatch.setattr(print_deduct, "_capture_print_heads", lambda *a, **k: None)
-    prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
-    print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False
-    with app_module._PRINT_TRACKER_LOCK:
-        app_module._PRINT_TRACKER.clear()
-    try:
-        yield
-    finally:
-        print_monitor._CANCEL_DEDUCT_RUN_ASYNC = prev_async
-        with app_module._PRINT_TRACKER_LOCK:
-            app_module._PRINT_TRACKER.clear()
-
-
-def _creds(*a, **k):
-    return {"ip_address": "1.2.3.4", "api_key": "k"}
-
-
-PM = {"XL-1": {"printer_name": "XL", "position": 0},
-      "XL-2": {"printer_name": "XL", "position": 1}}
-ACTIVE = [("XL-1", {"position": 0}), ("XL-2", {"position": 1})]
+# This file's completion row is #100, the spool its swaps start from.
+_completion_ctx = functools.partial(completion_ctx, default_sid=100)
 
 
 # =========================================================================== #
 # _record_swap_events — the diff-and-append helper                            #
 # =========================================================================== #
+
 
 def test_is_sid_swap_predicate():
     """Shared predicate: confident 1→1 only; None either side = no swap; string-compared
@@ -151,11 +131,6 @@ def test_record_multi_position_one_resume():
 # =========================================================================== #
 # Resume capture in _track_print_edge                                         #
 # =========================================================================== #
-
-def _latch(state, job, fb="http://fb"):
-    with patch.object(app_module.prusalink_api, "get_printer_job", return_value=job):
-        app_module._track_print_edge("XL", {"state": state}, fb)
-
 
 JOB = {"filename": "m600.gcode", "job_id": 9, "progress": 0.5}
 
@@ -334,25 +309,6 @@ def test_deferred_retry_threads_swap_log():
 # =========================================================================== #
 # Routing in deduct_completed_print (the A→B→A safe degrade)                   #
 # =========================================================================== #
-
-def _completion_ctx(usage_map, end_snap, rows=None):
-    apply_mock = MagicMock(name="_apply_usage_to_printer")
-    ctx = [
-        patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
-        patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds),
-        patch.object(print_deduct, "_compute_cancel_usage", return_value=(dict(usage_map), None)),
-        patch.object(app_module.locations_db, "get_active_printer_map", return_value=PM),
-        patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=ACTIVE),
-        patch.object(print_deduct, "_snapshot_active_spools", return_value=dict(end_snap)),
-        patch.object(print_deduct, "_resolve_usage_to_spools",
-                     return_value=(rows if rows is not None else
-                                   [{"sid": 100, "grams": 25.0, "color": "ff0000",
-                                     "toolhead": "XL-1", "position": 0}])),
-        patch.object(print_deduct, "_apply_usage_to_printer", apply_mock),
-        patch.object(app_module.state, "add_log_entry"),
-    ]
-    return ctx, apply_mock
-
 
 def test_swap_log_routes_when_start_equals_end():
     """A→B→A: start_spools == end_snap (so the 2-point diff finds NO change), but the
