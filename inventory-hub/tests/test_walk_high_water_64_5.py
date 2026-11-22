@@ -149,10 +149,11 @@ _REVIEW_SLICES = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "
 
 def test_the_reviews_prusaslicer_slices_walk_to_their_footers():
     """Real PrusaSlicer 2.9.7 slices, one shape each (absolute E with a custom tool
-    change, G91, an XL 5T, the INDX, MMU3 on T0 and T1 first, a CR LF copy, a start
-    G-code holding the config marker: the folder's README): every tool walks to its
-    footer's millimetres within 0.01 mm. Git-ignored, as every capture is: skipped
-    where the folder is absent."""
+    change, G91, the INDX, MMU3 on T0 and T1 first, a CR LF copy, a start G-code
+    holding the config marker, and since the fix review real XL 5T slices from the
+    slicer's own XL profile, among them an absolute-E custom tool change: the
+    folder's README): every tool walks to its footer's millimetres within 0.01 mm.
+    Git-ignored, as every capture is: skipped where the folder is absent."""
     import glob
     import bgcode_decode  # noqa: E402
     files = sorted(glob.glob(os.path.join(_REVIEW_SLICES, "*.gcode"))
@@ -160,7 +161,7 @@ def test_the_reviews_prusaslicer_slices_walk_to_their_footers():
     if not files:
         import pytest
         pytest.skip("the review's slices aren't on this PC (.captures/g64-review-slices-2026-11-20)")
-    assert len(files) == 15, files
+    assert len(files) == 20, files
     for path in files:
         with open(path, "rb") as fh:
             raw = fh.read()

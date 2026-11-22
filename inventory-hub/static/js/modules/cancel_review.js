@@ -1695,6 +1695,29 @@
         // after it goes on, however soon it comes (Group 64 review, O1: "#2" and a
         // quick Enter was in flight, isScanInFlight's 500 ms, and moved the line to
         // spool #2: a bare in-flight test is never a scan here).
+        // Group 64 fix review (FP1): when each key typed on a picker came, so a
+        // bare-number label (an old label with no prefix, "57") read at a scanner's
+        // pace is still a scan: it has no ':' or '/', and two digits are never a
+        // scanner burst. A person's typeahead goes slower, and the picker's options
+        // all start with '#', so digits alone jump nowhere anyway.
+        const pickKeys = { el: null, at: [] };
+        const PICK_SCAN_GAP_MS = 80;
+        overlay.addEventListener('keydown', (e) => {
+            const t = e.target;
+            if (!t || !t.classList || !t.classList.contains('fcc-cr-pick') || e.key === 'Enter') return;
+            const now = Date.now();
+            if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) { pickKeys.el = null; pickKeys.at = []; return; }
+            const last = pickKeys.at[pickKeys.at.length - 1];
+            if (pickKeys.el !== t || (last != null && now - last > PICK_SCAN_GAP_MS)) { pickKeys.el = t; pickKeys.at = []; }
+            pickKeys.at.push(now);
+        }, true);
+        const bareLabelAtScannerPace = (t, buf) => {
+            const text = String(buf || '').trim();
+            const keys = pickKeys.at;
+            if (!/^#?\d+$/.test(text) || pickKeys.el !== t || keys.length !== text.length) return false;
+            for (let i = 1; i < keys.length; i += 1) if (keys[i] - keys[i - 1] > PICK_SCAN_GAP_MS) return false;
+            return Date.now() - keys[keys.length - 1] <= PICK_SCAN_GAP_MS;
+        };
         overlay.addEventListener('keydown', (e) => {
             const t = e.target;
             if (e.key !== 'Enter' || e.isComposing || !t || !t.classList || !t.classList.contains('fcc-cr-pick')) return;
@@ -1702,8 +1725,10 @@
             // property: read it by name, as the buffer list above does.
             const st = (typeof state !== 'undefined') ? state : window.state;
             const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+            const bare = bareLabelAtScannerPace(t, buf);
+            pickKeys.el = null; pickKeys.at = [];
             if (!buf.trim() || !((window.looksLikeScanPayload && window.looksLikeScanPayload(buf.trim()))
-                    || (window.isScannerBurst && window.isScannerBurst()))) return;
+                    || (window.isScannerBurst && window.isScannerBurst()) || bare)) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             if (st) st.lastScanEnterAt = Date.now();     // as the accumulator marks a scan's Enter
@@ -1910,7 +1935,20 @@
                     if (d.status === 'confirmed' && d.kept) {
                         // 43.2: the picks couldn't take everything (a run-out or
                         // near-empty spool); the rest stays on the card to pick again.
-                        const msg = `Charged ${fmtG(took)}g. ${fmtG(d.shortfall_g)}g still have no spool — pick another spool, or Discard.`;
+                        // Group 64 fix review (FS2): the card's weighed lines (kept_weighed)
+                        // wait at what it filled in; they are no grams with no spool.
+                        const kw = Array.isArray(d.kept_weighed) ? d.kept_weighed : [];
+                        const kwG = kw.reduce((a, l) => a + (Number(l.grams) || 0), 0);
+                        const other = Math.max(0, (Number(d.shortfall_g) || 0) - kwG);
+                        const parts = [`Charged ${fmtG(took)}g.`];
+                        if (other > 0.05 || !kw.length) parts.push(`${fmtG(other)}g still have no spool — pick another spool, or Discard.`);
+                        if (kw.length) {
+                            parts.push(`${fmtG(kwG)}g on ${spoolListWords(kw.map((l) => l.sid))}, `
+                                + (kw.every((l) => l.known_order)
+                                    ? 'weighed after the print, stay on the card: Apply again to leave them uncharged, or Discard.'
+                                    : 'whose weight changed after the print, stay on the card: check them, then Apply again or Discard.'));
+                        }
+                        const msg = parts.join(' ');
                         toast(msg, 'warning', 7000);
                         const kept = await rerenderCard(card, true);
                         sayOnCard(kept, headPieces(kept, msg));

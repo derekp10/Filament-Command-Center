@@ -75,6 +75,21 @@ def parse_footer_usage(gcode_content: str) -> Dict[int, float]:
     return _parse_weights_from_match(m) if m else {}
 
 
+def pushed_before(gcode_content: str, reached_fraction) -> bool:
+    """Group 64 fix review (FW1): whether any tool pushed filament out before the cut
+    at `reached_fraction` (the file-byte fraction, as measure_filament_usage reads it),
+    counted with no MMU rule: an MMU print's first load is no filament used by the
+    slicer's count, though its E moves run (a purge line). False when nothing was
+    pushed out (a cancel during preheat), or the file can't be walked."""
+    try:
+        total = len(gcode_content.encode('utf-8'))
+        cut = int(max(0.0, min(1.0, float(reached_fraction))) * total)
+        cuts, _whole = _walk_extrusion(gcode_content, [cut], 0, mmu=None)
+        return any(mm > 0 for mm in cuts[0][0].values())
+    except Exception:
+        return False
+
+
 def footer_usage_present(gcode_content: str) -> bool:
     """True when the file carries a per-tool ``filament used [g] = …`` footer line,
     even one that lists only zeros: Group 56.3 tells a completion whose footer
@@ -316,9 +331,11 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int,
     tool_changed = False         # MMU: a tool change whose first counted move hasn't come
     relative_e = False           # M83 (E relative) vs M82 (E absolute, the default)
     relative_all = False         # G91 (every axis relative) vs G90 (absolute, the default)
-    e_pos: Dict[int, float] = {}    # per-tool E position, in its own coordinate
-    e_mark: Dict[int, float] = {}   # per-tool high-water mark of that position (a tool
-                                    # not seen yet owes `park`: 0 but on an MMU)
+    e_pos: Dict[int, float] = {}    # the one E axis: the active tool's entry is where it
+                                    # is; an idle tool's entry only keeps, with its mark,
+                                    # what that tool owes (the T branch hands it the axis)
+    e_mark: Dict[int, float] = {}   # per-tool high-water mark of the axis (a tool not
+                                    # seen yet owes `park`: 0 but on an MMU)
     extruded_mm: Dict[int, float] = {}
     saw_tool = False
     exclude_e = False            # between ;EXCLUDE_E_START and ;EXCLUDE_E_END

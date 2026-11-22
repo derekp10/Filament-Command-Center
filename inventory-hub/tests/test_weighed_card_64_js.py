@@ -380,3 +380,45 @@ def test_a_double_clicks_second_press_never_applies_the_next_card(tmp_path):
     assert res["gone"] is True and res["shields"] >= 1, res
     assert res["after"] == ["a"], res
     assert res["then"] == ["a", "b"], res
+
+
+KEPT_JS = r"""
+const c = cardOf('x#shortfall');
+const L = lineOf(c, 'pos:1');
+pickIn(L.sel, 'other');
+L.box.value = '57'; key(L.box, 'Enter');
+await settle(40);
+const box = c.querySelector('.fcc-cr-shortline[data-pos="1"] .fcc-cr-pgrams');
+box.value = '3'; box.dispatchEvent(new Event('input', { bubbles: true }));
+cardOf('x#shortfall').querySelector('.fcc-cr-confirm').click();
+await settle(80);
+return { toasts: __rec.toasts };
+"""
+
+
+def test_a_kept_cards_toast_counts_its_weighed_line_apart(tmp_path):
+    """Group 64 fix review (FS2), red on abb67aa ("14.4g still have no spool — pick
+    another spool", the weighed line's 12.4 g among them, which the scale counted).
+    The picked spool took 1 g of its 3, so the card is kept: 2 g with no spool, and
+    #200's weighed line waiting apart."""
+    confirm = {"status": "confirmed", "kept": True, "rev": 1, "shortfall_g": 14.4,
+               "applied": [{"sid": 57, "grams": 1.0, "remaining": 0.0}], "errors": [],
+               "kept_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}]}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + KEPT_JS,
+              {"pending": [_mixed("x#shortfall")], "spools": SPOOLS, "confirm": confirm})
+    warned = [t for t in res["toasts"] if t["type"] == "warning"]
+    assert warned and warned[0]["msg"] == (
+        "Charged 1g. 2g still have no spool — pick another spool, or Discard. 12.4g on #200, weighed "
+        "after the print, stay on the card: Apply again to leave them uncharged, or Discard."), res["toasts"]
+
+
+def test_a_kept_cards_toast_with_no_weighed_line_keeps_its_words(tmp_path):
+    """Passes on abb67aa by design (an answer with no kept_weighed, as from an older
+    server, reads as before)."""
+    confirm = {"status": "confirmed", "kept": True, "rev": 1, "shortfall_g": 2.0,
+               "applied": [{"sid": 57, "grams": 1.0, "remaining": 0.0}], "errors": []}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + KEPT_JS,
+              {"pending": [_mixed("x#shortfall")], "spools": SPOOLS, "confirm": confirm})
+    warned = [t for t in res["toasts"] if t["type"] == "warning"]
+    assert warned and warned[0]["msg"] == "Charged 1g. 2g still have no spool — pick another spool, or Discard.", \
+        res["toasts"]

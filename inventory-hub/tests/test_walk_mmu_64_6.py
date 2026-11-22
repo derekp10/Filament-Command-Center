@@ -332,3 +332,27 @@ def test_an_mmu_cancel_inside_its_first_load_says_so(monkeypatch):
     lines.clear()
     print_deduct._compute_cancel_usage("XL", "p.gcode", 78, 0.0, "ip", "key")
     assert len(lines) == 1 and "before any extrusion" in lines[0], lines
+
+
+def test_an_mmu_cancel_before_any_e_move_keeps_its_words(monkeypatch):
+    """Group 64 fix review (FW1), red on abb67aa: a cancel during preheat (cut after
+    the fixture's "M140 S60", before its first E move) was told it stopped within the
+    MMU's first load and that a purge line may have printed. Nothing moved, so the
+    old words are the true ones; the purge line's cut keeps the MMU words
+    (test_an_mmu_cancel_inside_its_first_load_says_so)."""
+    import print_deduct  # noqa: E402
+    import state  # noqa: E402
+    with open(_THREE_CUBES, "rb") as fh:
+        g = bgcode_decode.decode_bgcode(fh.read())["gcode"]
+    end = g.index("\n", g.index("M140 S60")) + 1
+    frac = len(g[:end].encode("utf-8")) / len(g.encode("utf-8"))
+    assert prusalink_api.pushed_before(g, frac) is False
+    j = g.index("\n", g.index("G0X145E36")) + 1
+    assert prusalink_api.pushed_before(g, len(g[:j].encode("utf-8")) / len(g.encode("utf-8"))) is True
+    monkeypatch.setattr(prusalink_api, "fetch_cancel_gcode", lambda *a, **k: {"gcode": g, "fraction": frac})
+    lines = []
+    monkeypatch.setattr(state, "add_log_entry", lambda msg, *a, **k: lines.append(msg))
+    usage, terminal = print_deduct._compute_cancel_usage("MMU", "cubes.bgcode", 77, frac, "ip", "key")
+    assert usage is None and terminal["reason"] == "nothing_reached", terminal
+    assert len(lines) == 1 and "cancelled before any extrusion" in lines[0], lines
+    assert "first load" not in lines[0], lines

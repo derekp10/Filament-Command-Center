@@ -579,6 +579,10 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                                 # Group 51 review (engine-4): whether the spool was
                                 # stock before the attempt (the write archives it at 0 g).
                                 "attempt_was_archived": bool(spool_data.get('archived')),
+                                # Group 64 fix review (FS4): when the write was sent, so a
+                                # later Apply that finds it landed notes it as FCC's own
+                                # charge from then (weigh_stamps.note_charge).
+                                "attempt_sent_at": sent_at,
                                 "remaining_before": None if remaining is None else round(remaining, 1),
                                 "remaining_after": None if new_remaining is None else round(new_remaining, 1),
                                 "display": disp.get('text', f"#{sid}"), "color": disp.get('color', '888888'),
@@ -879,8 +883,8 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     for f in failed or []:
         line = str(_norm_pos(f.get('position')))
         row = {k: f.get(k) for k in ("sid", "toolhead", "position", "grams", "attempt_used_before",
-                                     "attempt_used_after", "attempt_was_archived", "remaining_before",
-                                     "remaining_after", "display", "color")}
+                                     "attempt_used_after", "attempt_was_archived", "attempt_sent_at",
+                                     "remaining_before", "remaining_after", "display", "color")}
         row.update(ambiguous=False, unconfirmed_write=True)
         rows.append(row)
         unconfirmed[line] = f
@@ -2105,7 +2109,8 @@ def _record_swap_events(entry, end_snap, progress, runout=False, before=None):
     return added
 
 
-def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content, reason=None):
+def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content, reason=None,
+                             cut_fraction=None):
     """Operator-facing log for a cancel whose partial we couldn't compute,
     distinguishing the reasons so a cancel never goes SILENTLY
     un-deducted. Returns the status string the caller should surface.
@@ -2140,9 +2145,12 @@ def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content, 
             "WARNING", "ffaa00")
         return "no_usage"
     has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
-    if has_footer and reason in (None, "nothing_reached") and prusalink_api._mmu_rule(content):
+    if (has_footer and reason in (None, "nothing_reached") and cut_fraction is not None
+            and prusalink_api._mmu_rule(content) and prusalink_api.pushed_before(content, cut_fraction)):
         # Group 64 review (W1): an MMU print's count leaves out its first load, as the
         # slicer's does (64.6), and that load can run into a purge line that printed.
+        # Only when E moved before the cut (`cut_fraction`, the decoded file's): a
+        # cancel during preheat keeps "before any extrusion" (fix review, FW1).
         state.add_log_entry(
             f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
             f"no partial usage to deduct: it was cancelled within the MMU's first load, "
@@ -2265,7 +2273,7 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
             if not (ambiguous and reason != "nothing_reached"):
                 # Cancel-specific "weigh the spool" log.
                 _log_cancel_uncomputable(printer_name, filename, reached_fraction, content,
-                                         reason=reason)
+                                         reason=reason, cut_fraction=prepared.get("fraction"))
         return None, terminal
 
     # Single-toolhead printer + single-material print (Derek's Core One: one
@@ -2300,10 +2308,11 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
 # three-filament MMU3 slice, absolute-E slices). A head past 2% is a file FCC reads
 # differently from the slicer (a new tag, a firmware command it doesn't know).
 _PARSE_GAP_PCT = 2.0
-# ... and by at least this many grams: below it a tiny tool's footer, rounded to
-# 0.01 g, can be 2% out on its own (Group 56 review, round 2, set it for a start
+# ... and by at least this many grams. Group 56 review, round 2, set it for a start
 # G-code the walk then counted and the slicer didn't, which 64.6 now counts as the
-# slicer does).
+# slicer does, so no capture needs it today (the check compares the walk's mm with
+# the footer's mm: the grams' rounding cancels out). It stays as a margin: a gap
+# under 0.1 g is too small to weigh a spool over, so the WARNING keeps quiet for it.
 _PARSE_GAP_MIN_G = 0.1
 
 
@@ -4316,7 +4325,7 @@ def _rows_from_charges(rec, kind, charges):
                "remaining_before": before,
                "remaining_after": None if before is None else round(max(0.0, before - grams), 1)}
         if kept and stamped:
-            for key in ("attempt_used_before", "attempt_used_after", "attempt_was_archived"):
+            for key in ("attempt_used_before", "attempt_used_after", "attempt_was_archived", "attempt_sent_at"):
                 if key in original:
                     row[key] = original[key]
         rows[sid] = row
@@ -4706,8 +4715,17 @@ def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
 
 
 def _cents(grams):
-    """Grams as whole cents, rounded as the page's Math.round rounds them."""
-    return int(math.floor(float(grams) * 100 + 0.5))
+    """Grams as whole cents, rounded as the page's Math.round rounds them; None for a
+    figure no card holds (not a number, not finite, or past a billion grams), never a
+    raise: the Apply has already taken its card off the store (Group 64 fix review,
+    FS1: 1e307 overflowed, NaN raised, and the card was lost with a 500)."""
+    try:
+        g = float(grams)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(g) or abs(g) > 1e9:
+        return None
+    return int(math.floor(g * 100 + 0.5))
 
 
 def _set_check_refusal(rec, kind, charges, data):
@@ -4738,21 +4756,22 @@ def _set_check_refusal(rec, kind, charges, data):
             if isinstance(c, dict) and c.get("row") is None and str(c.get("position")) == str(line):
                 try:
                     placed += float(c.get("grams") or 0)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
         # Group 64 review (Y1): whole cents, as the page rounds the card's figure and
         # its boxes (Math.round): 9.95 against 10 was 0.0500000000000007 here, and a
         # set the page passed was refused as a page out of date.
-        if abs(_cents(placed) - _cents(total)) <= 5:
+        placed_c, total_c = _cents(placed), _cents(total)
+        if placed_c is None:
+            return (f"The grams typed for {heads.get(str(line)) or f'T{line}'} aren't a figure FCC can "
+                    f"use: check them and Apply again.", False)
+        if total_c is not None and abs(placed_c - total_c) <= 5:
             continue
         if not isinstance(acks, dict):
             return ("This page is out of date, so it can't check the grams of a head with several "
                     "spools: reload it (Ctrl+F5), then Apply again.", True)
-        try:
-            seen = float(acks.get(str(line)))
-        except (TypeError, ValueError):
-            seen = None
-        if seen is None or abs(_cents(seen) - _cents(placed)) > 5:
+        seen_c = _cents(acks.get(str(line)))
+        if seen_c is None or abs(seen_c - placed_c) > 5:
             changed.append(heads.get(str(line)) or f"T{line}")
     if changed:
         return (f"The grams typed for {_and_list(changed)} changed since FCC asked about them: "
@@ -4922,7 +4941,17 @@ def api_cancel_deduct_confirm():
             cancel_review_store.add_pending(rec)   # the pop was the claim: keep the review
             state.add_log_entry(f"⚠️ {printer}: review Apply refused — {_esc(why)}.", "WARNING", "ffaa00")
             return jsonify({"status": "error", "msg": why})
-        set_refusal = _set_check_refusal(rec, kind, charges, data)
+        try:
+            set_refusal = _set_check_refusal(rec, kind, charges, data)
+        except Exception as e:
+            # The pop was the claim: an unexpected raise must not lose the review
+            # (Group 64 fix review, FS1).
+            cancel_review_store.add_pending(rec)
+            state.add_log_entry(
+                f"❌ {printer}: review Apply failed (job {job_id}): {_esc(e)} — review kept for retry.",
+                "ERROR", "ff4444")
+            return jsonify({"status": "error", "msg": "FCC couldn't check the grams typed: check them "
+                                                       "and Apply again."}), 500
         if set_refusal:
             cancel_review_store.add_pending(rec)   # the pop was the claim: keep the review
             msg, stale = set_refusal
@@ -5073,6 +5102,11 @@ def api_cancel_deduct_confirm():
                     # landed attempt archived a spool it emptied, so the record read
                     # now says archived, and its filament's "is out" was never said.
                     was = rec_rows[sid].get('attempt_was_archived')
+                    # Group 64 fix review (FS4): the landed attempt is FCC's own charge,
+                    # noted from when it was sent (never on a guess: only here, where
+                    # it is proven), so a print ended before it isn't held over it.
+                    if rec_rows[sid].get('attempt_sent_at') is not None:
+                        weigh_stamps.note_charge(sid, done_g, at=rec_rows[sid]['attempt_sent_at'])
                     applied.append({"sid": sid, "grams": done_g,
                                     "remaining": None if remaining is None else round(remaining, 1),
                                     "was_archived": bool(spool.get('archived') if was is None else was)})
@@ -5126,7 +5160,7 @@ def api_cancel_deduct_confirm():
                     failed_sids.add(sid)
                     # Stamped even when the re-read shows the old weight: the retry
                     # then also catches a weigh-out made before it ("changed" below).
-                    attempts[sid] = (used, new_used, bool(spool.get('archived')))
+                    attempts[sid] = (used, new_used, bool(spool.get('archived')), sent_at)
                     state.add_log_entry(
                         f"❌ {where}: cancel-deduct failed for Spool #{sid}: {_esc(err)}", "ERROR", "ff4444")
                     continue
@@ -5171,13 +5205,15 @@ def api_cancel_deduct_confirm():
                     row.pop('attempt_used_before', None)
                     row.pop('attempt_used_after', None)
                     row.pop('attempt_was_archived', None)
+                    row.pop('attempt_sent_at', None)
                     if attempts[sid_] is not None:
                         # 43.6 — the attempt the retry judges by, and the grams it
                         # was for (so the card shows what was really confirmed).
-                        before_, after_, was_ = attempts[sid_]
+                        before_, after_, was_, at_ = attempts[sid_]
                         row['attempt_used_before'] = round(before_, 2)
                         row['attempt_used_after'] = round(after_, 2)
                         row['attempt_was_archived'] = was_
+                        row['attempt_sent_at'] = at_
                         row['grams'] = round(after_ - before_, 2)
                 retry_rows.append(row)
             retry_rec = dict(rec)
@@ -5250,14 +5286,19 @@ def api_cancel_deduct_confirm():
                 kept["requested_total"] = requested_total
             _note_drained(kept, drained)
             cancel_review_store.add_pending(kept)
+            # Group 64 fix review (FS2): the card's weighed lines are no grams with no
+            # spool: they wait at what the card filled in, and saying "pick another"
+            # for them sent the person to charge grams the scale had counted.
+            kept_weighed = _weighed_lines_left(kept, left)
             state.add_log_entry(
                 f"⚠️ {printer}: charged {charged_now:.2f}g of the uncharged grams from "
-                f"'{_esc(rec.get('filename'))}'; {kept['total_grams']:.2f}g still have no spool — pick "
-                f"another in 🛑 Review, or Discard.", "WARNING", "ffaa00",
+                f"'{_esc(rec.get('filename'))}'; {_kept_card_words(kept['total_grams'], kept_weighed)}.",
+                "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending", "printer_name": printer, "job_id": str(job_id)})
             _low_stock_after_review(applied, printer, job_id)
             return jsonify({"status": "confirmed", "applied": applied, "errors": errors,
-                            "shortfall_g": kept['total_grams'], "kept": True, "rev": kept["rev"]})
+                            "shortfall_g": kept['total_grams'], "kept": True, "rev": kept["rev"],
+                            "kept_weighed": kept_weighed})
     elif not print_deduct_ledger._is_blank_job(job_id):
         # 43.2 — on any other review, grams the spools couldn't take (an empty or
         # near-empty pick, archived or not) go to a new uncharged-grams card, so
@@ -5340,6 +5381,28 @@ def _weighed_lines_left(rec, lines):
         out.append({"line": str(line), "sid": cause.get("sid"), "grams": g,
                     "known_order": bool(cause.get("known_order"))})
     return out
+
+
+def _kept_card_words(total, kept_weighed):
+    """Group 64 fix review (FS2): what a kept uncharged-grams card still holds, its
+    weighed lines (Decision 1's, from _weighed_lines_left) apart from the grams no
+    spool took: "2.00g still have no spool — pick another in 🛑 Review, or Discard;
+    12.40g on #200, weighed after the print ended, stay on the card: Apply again to
+    leave them uncharged, or Discard"."""
+    weighed_g = round(sum(float(l.get("grams") or 0) for l in kept_weighed or []), 2)
+    other_g = round(float(total or 0) - weighed_g, 2)
+    parts = []
+    if other_g > 0.05 or not kept_weighed:
+        parts.append(f"{other_g:.2f}g still have no spool — pick another in 🛑 Review, or Discard")
+    if kept_weighed:
+        who = _and_list(f"#{l.get('sid')}" for l in kept_weighed)
+        if all(l.get("known_order") for l in kept_weighed):
+            parts.append(f"{weighed_g:.2f}g on {who}, weighed after the print ended, stay on the card: "
+                         f"Apply again to leave them uncharged, or Discard")
+        else:
+            parts.append(f"{weighed_g:.2f}g on {who}, whose weight changed after the print ended, stay on "
+                         f"the card: check them, then Apply again or Discard")
+    return "; ".join(parts)
 
 
 def _settle_with_picks(rec, left, drained, data):

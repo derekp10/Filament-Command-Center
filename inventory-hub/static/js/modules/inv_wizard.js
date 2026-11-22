@@ -987,6 +987,12 @@ const wizardReset = () => {
     // was filled from the record, so Save sends the used weight only when the box
     // changed.
     wizardState.usedShown = null;
+    // Group 64 fix review (FP2 / FP3): Total Used worked out as an addition ("+ Add
+    // Printed Wt", or Weigh from Scale's Additive mode): {base, shown}, the used
+    // weight it was added to and the box's text it gave. Save sends the base, so the
+    // server refuses it if a print's charge moved that weight meanwhile, and stamps
+    // no weighing for it (typed grams are no reading of the scale).
+    wizardState.usedAdd = null;
     // Group 54.8: nothing is shown from the filament until an open puts it there.
     wizardState.spoolPriceFrom = null;
     wizardState.spoolEmptyWeightFrom = null;
@@ -1587,6 +1593,7 @@ window.wizardCalcFromRecentUsage = () => {
     if (newTotal < 0) newTotal = 0;
 
     document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(newTotal);
+    wizardState.usedAdd = recent ? { base: baseUsed, shown: document.getElementById('wiz-spool-used').value } : null;
     window.wizardCalcRemainingFromUsed();
 };
 
@@ -1622,6 +1629,11 @@ window.wizardOpenWeightEntry = () => {
     let net = num('wiz-spool-initial_weight');
     if (net === null) net = num('wiz-fil-weight');
     const currentUsed = num('wiz-spool-used') || 0;
+    // FP2 / FP3: what an Additive reading adds to. The box shows the record's used
+    // weight to 0.1 g; while it is untouched, the record's own figure is the base.
+    const usedBox = document.getElementById('wiz-spool-used');
+    const usedBase = (usedBox && wizardState.usedShown != null && usedBox.value === wizardState.usedShown)
+        ? (wizardState.original_used_weight || 0) : currentUsed;
     const initialKnown = net !== null && net > 0;
 
     // Context for the header + missing-tare prompt. The human-readable vendor
@@ -1666,8 +1678,12 @@ window.wizardOpenWeightEntry = () => {
                 // Unknown-net path: record what's on the spool now as its full capacity.
                 setVal('wiz-spool-initial_weight', window.fmtGramsPrecise(payload.derived_initial));
                 setVal('wiz-spool-used', '0');
+                wizardState.usedAdd = null;
             } else {
                 setVal('wiz-spool-used', window.fmtGramsPrecise(payload.used_weight));
+                // FP2 / FP3: Additive adds grams to the used weight; any other mode is a reading.
+                wizardState.usedAdd = payload.mode === 'additive'
+                    ? { base: usedBase, shown: document.getElementById('wiz-spool-used').value } : null;
             }
             // Recompute remaining from the freshly-set net + used; clear the raw scale field.
             window.wizardCalcRemainingFromUsed();
@@ -4217,6 +4233,11 @@ window.wizardSubmit = async () => {
         if (isWizardEdit && wizardState.usedShown != null && getVal('wiz-spool-used') === wizardState.usedShown) {
             delete sp_payload.used_weight;
         }
+        // Group 64 fix review (FP2 / FP3): a Total Used the box still shows as an
+        // addition's result goes with the used weight it was added to.
+        const usedBasedOn = (isWizardEdit && 'used_weight' in sp_payload && wizardState.usedAdd
+            && getVal('wiz-spool-used') === wizardState.usedAdd.shown)
+            ? { mode: 'additive', used: wizardState.usedAdd.base } : null;
 
         // Purchase Link (Spool Extra)
         const purchaseUrl = document.getElementById('wiz-spool-purchase_url')?.value?.trim();
@@ -4466,6 +4487,7 @@ window.wizardSubmit = async () => {
             confirmed_fed_heads: [],
         };
         if (spool_overrides) payload.spool_overrides = spool_overrides;
+        if (usedBasedOn) payload.used_based_on = usedBasedOn;
         // The picker's choice for the Location (wizardState.pendingPlacement): an
         // edit sends its fields; a create sends one placement per new spool.
         const placement = wizardState.pendingPlacement;
@@ -4529,6 +4551,7 @@ window.wizardSubmit = async () => {
             // Group 64 review (S3): the box shows what this Save wrote, so the next
             // Save in this session sends it only if it changes again.
             if (isWizardEdit) wizardState.usedShown = document.getElementById('wiz-spool-used').value;
+            if (isWizardEdit) wizardState.usedAdd = null;
             if (isWizardEdit && data.location_moved) {
                 // Group 40.7: where the Location move put it, in short arrows.
                 const lr = data.location_result;

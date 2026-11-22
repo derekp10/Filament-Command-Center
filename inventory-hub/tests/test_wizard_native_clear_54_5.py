@@ -576,3 +576,54 @@ def test_a_second_save_sends_total_used_only_if_it_changed_again(wiz):
     second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
     assert "used_weight" not in second["spool_data"], second["spool_data"]
     assert second["spool_data"]["comment"] == "fixed note", second["spool_data"]
+
+
+# --- Group 64 fix review (FP2 / FP3): an addition goes with the weight it was added to ---
+
+def test_add_printed_wt_sends_the_used_weight_it_was_added_to(wiz):
+    """FP2 / FP3, red on abb67aa (no base: the server wrote the sum over a charge that
+    landed behind the open form, and stamped it as a weighing)."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-recent-usage").press_sequentially("50")
+    body = _save(wiz, EDIT)
+    assert body["used_based_on"] == {"mode": "additive", "used": 100.37}, body.get("used_based_on")
+    assert body["spool_data"]["used_weight"] == pytest.approx(150.4, abs=0.05)
+
+
+def _weigh_from_scale(page, mode, add=50.0):
+    """The wizard's Weigh from Scale, its overlay stood in for: what the wizard gives
+    the window, and the window's answer in `mode` (Additive adds `add` grams)."""
+    page.evaluate("""() => { window.WeightEntry = { openModal: (o) => { window.__weOpts = o; } };
+                             window.wizardOpenWeightEntry(); }""")
+    page.evaluate("""([mode, add]) => {
+        const o = window.__weOpts;
+        const used = mode === 'additive' ? o.spool.used_weight + add : 130.0;
+        o.onSubmit({ mode, used_weight: used, remaining: 1000 - used, empty_spool_weight: null,
+                     derived_initial: undefined, typed_tare: null });
+    }""", [mode, add])
+
+
+def test_weigh_from_scales_additive_mode_sends_the_records_own_used_weight(wiz):
+    """FP2 / FP3, red on abb67aa. The box showed 100.37 as 100.4; while untouched, the
+    record's own figure is the base, so the server's check matches it exactly."""
+    _open_edit_used(wiz, 100.37)
+    _weigh_from_scale(wiz, "additive")
+    body = _save(wiz, EDIT)
+    assert body["used_based_on"] == {"mode": "additive", "used": 100.37}, body.get("used_based_on")
+
+
+def test_a_reading_or_a_typed_total_used_sends_no_base(wiz):
+    """A Gross reading is a weighing, and a Total Used typed over an addition is the
+    person's own figure: neither carries a base (the server stamps them as before)."""
+    _open_edit_used(wiz, 100.37)
+    _weigh_from_scale(wiz, "gross")
+    body = _save(wiz, EDIT)
+    assert "used_based_on" not in body and body["spool_data"]["used_weight"] == 130, body
+
+
+def test_a_total_used_typed_over_an_addition_sends_no_base(wiz):
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-recent-usage").press_sequentially("50")
+    wiz.locator("#wiz-spool-used").fill("140")
+    body = _save(wiz, EDIT)
+    assert "used_based_on" not in body and body["spool_data"]["used_weight"] == 140, body

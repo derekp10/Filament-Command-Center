@@ -1177,6 +1177,53 @@ def test_a_persons_typeahead_and_a_quick_enter_is_no_scan_of_the_pickers(tmp_pat
     assert res["acEnters"] == 1 and res["scans"] == [["#2", "barcode"]], res
 
 
+BARE_LABEL_JS = r"""
+const c = cardOf('ns');
+const L = lineOf(c, '4');
+const out = {};
+const typeOn = async (sel, text, gap) => {
+  sel.focus();
+  for (const ch of text) { const ev = key(sel, ch); if (!ev.defaultPrevented) typeahead(sel, ch); if (gap) await settle(gap); }
+  const enter = key(sel, 'Enter');
+  await settle(30);
+  return enter.defaultPrevented;
+};
+const one = async (name, text, gap) => {
+  pickIn(L.sel, '229');
+  L.box.value = '';                         // the last case's box text (hidden off "other")
+  const before = window.__scans.length;
+  const prevented = await typeOn(L.sel, text, gap);
+  out[name] = { prevented, value: L.sel.value, box: L.box.value, info: L.info.textContent,
+                toProcessScan: window.__scans.slice(before) };
+  await settle(150);
+  state.scanBuffer = ''; state.scanStartTime = 0;
+};
+await one('bare2_fast', '57', 0);           // an old digits-only label, scanner speed
+await one('bare3_slow', '300', 70);         // three digits from a slower scanner, 70 ms a key
+await one('person', '#2', 90);              // a person's typeahead, 90 ms a key
+return out;
+"""
+
+
+def test_a_bare_number_label_at_a_scanners_pace_picks_its_spool_on_the_line(tmp_path):
+    """Group 64 fix review (FP1), red on abb67aa: O1's gate (a ':' or '/', or a
+    scanner burst of 3+ characters) dropped an old digits-only label, which has no
+    ':' and, at two digits, is never a burst: the scan went to the scan path (the
+    spool joined the scan buffer) and the line kept #229. Digits typed on the picker
+    at a scanner's pace (every key and the Enter within 80 ms) are a scan again; a
+    person's typeahead, slower, still moves the picker and its Enter goes on."""
+    scenario = PICKER_SCAN_JS.split("const out = {};")[0] + BARE_LABEL_JS
+    res = run(tmp_path, _picker_pre() + _scenario(scenario), {"pending": [NO_SPOOL], "spools": SPOOLS})
+    f = res["bare2_fast"]
+    assert f["prevented"] and f["value"] == "other" and f["box"] == "57", f
+    assert f["info"] == "#57 Ocean Blue" and f["toProcessScan"] == [], f
+    s = res["bare3_slow"]
+    assert s["prevented"] and s["value"] == "other" and s["box"] == "300" and s["toProcessScan"] == [], s
+    p = res["person"]
+    assert not p["prevented"] and p["value"] != "other" and p["box"] == "", p
+    assert p["toProcessScan"] == [["#2", "barcode"]], p
+
+
 def test_every_grams_box_is_a_weight_box(tmp_path):
     """Group 64.2 (11): a row's grams and a line's grams, on every card kind."""
     res = run(tmp_path, _scenario(WEIGHT_BOXES_JS),
