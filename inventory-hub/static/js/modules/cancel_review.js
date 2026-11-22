@@ -2050,6 +2050,9 @@
                     const d = await r.json();
                     if (d.status === 'dismissed' || d.status === 'already_handled') {
                         toast(d.status === 'dismissed' ? 'Review discarded (no deduct).' : 'Already handled elsewhere.', 'info');
+                        // Group 64 fix review: the next card slides up under the pointer
+                        // here too, as after Confirm (R1).
+                        if (window.fccShieldNextPress) window.fccShieldNextPress();
                         card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
                     } else {
                         btn.disabled = false; disarmDiscard(btn);

@@ -627,3 +627,19 @@ def test_a_total_used_typed_over_an_addition_sends_no_base(wiz):
     wiz.locator("#wiz-spool-used").fill("140")
     body = _save(wiz, EDIT)
     assert "used_based_on" not in body and body["spool_data"]["used_weight"] == 140, body
+
+
+def test_a_failed_save_keeps_total_useds_baseline(wiz):
+    """S3: a Save the server refused leaves the box's baseline as the record filled
+    it, so the next Save sends the changed Total Used again (moved to after any
+    answer, it was dropped from the retry)."""
+    _open_edit_used(wiz, 100.37)
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: false, msg: 'refused (test)' }; }")
+    wiz.locator("#wiz-spool-used").fill("130")
+    assert _save(wiz, EDIT)["spool_data"]["used_weight"] == 130
+    wiz.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57 }; }")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert second["spool_data"]["used_weight"] == 130, second["spool_data"]

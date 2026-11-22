@@ -1375,7 +1375,10 @@ def test_a_set_figure_fcc_cant_use_keeps_the_card(raw):
         r = app_module.app.test_client().post("/api/cancel_deduct/confirm", data=body,
                                               content_type="application/json")
     answer = r.get_json()
-    assert answer["status"] == "error", answer
+    # The set check refuses it itself (a 200 in its own words), never the net's 500.
+    assert r.status_code == 200 and answer["status"] == "error", (r.status_code, answer)
+    assert ("aren't a figure FCC can use" in answer["msg"]
+            or "changed since FCC asked" in answer["msg"]), answer
     assert cancel_review_store.get_pending(XL, str(JOB)) is not None, "the card was lost"
     assert rig.used(200) == 100.0 and rig.used(300) == 50.0
     assert not print_deduct_ledger.was_deducted(XL, str(JOB))
@@ -1444,7 +1447,8 @@ def test_a_kept_card_counts_its_weighed_line_apart_beside_another_unpicked_line(
 
 
 def test_a_kept_card_of_only_unweighed_lines_keeps_its_words(warn_lines, monkeypatch):
-    """Passes on abb67aa by design: no weighed line, the words as before."""
+    """No weighed line: the words as before (red on abb67aa only for the answer's
+    new `kept_weighed` key, which was missing)."""
     monkeypatch.setattr(print_deduct.stock_report, "check_after_deduct", lambda *a, **k: None)
     rig = TwoHeadsOverHTTP()
     rec = cancel_review_store.pop_pending(XL, _mixed_card()["job_id"])
@@ -1658,3 +1662,54 @@ def test_a_quick_weigh_additive_save_is_no_weighing_but_its_other_modes_are(stam
             "based_on": {"mode": "gross", "screen": "quick", "capacity": 1000.0}})
     assert rig.used(200) == 110.0 and stamps.last(200) is None
     assert stamps.last(300)["how"] == "the Quick-Weigh"
+
+
+def test_a_cards_own_write_found_landed_later_is_noted_from_when_it_was_sent(stamps, monkeypatch):
+    """FS4's other path, red on abb67aa (nothing noted). A card's Apply charges #200;
+    its PATCH lands but the answer is lost and the read-back fails, so the card keeps
+    a 43.6 retry row, which now carries when the write was sent. The next Apply finds
+    the write landed and notes it as FCC's own charge from then."""
+    import requests
+    monkeypatch.setattr(print_deduct.stock_report, "check_after_deduct", lambda *a, **k: None)
+    rig = TwoHeadsOverHTTP()
+    before = rig.sm.records["spool"][200]["used_weight"]
+    rec = {"printer_name": XL, "job_id": f"{JOB}#shortfall", "shortfall_of": str(JOB), "kind": "shortfall",
+           "rev": 0, "filename": "x.gcode", "progress": 1.0, "total_grams": 12.4, "spools": [],
+           "ambiguous": False, "unresolved_usage": {"0": 12.4},
+           "shortfall_causes": {"0": {"why": "no_spool", "toolhead": "XL-1"}},
+           "heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": None}]}
+    cancel_review_store.add_pending(rec)
+    lost = {"done": False, "fail_get": 0}
+    real_patch, real_get = rig.sm.patch, rig.sm.get
+
+    def _patch(url, json=None, **kw):
+        r = real_patch(url, json=json, **kw)
+        if url.rstrip("/").endswith("/spool/200") and not lost["done"] and (json or {}).get("used_weight"):
+            lost["done"], lost["fail_get"] = True, 1
+            raise requests.exceptions.ReadTimeout("read timed out (test)")
+        return r
+
+    def _get(url, **kw):
+        if lost["fail_get"] and url.rstrip("/").endswith("/spool/200"):
+            lost["fail_get"] -= 1
+            raise requests.exceptions.ConnectionError("refused (test)")
+        return real_get(url, **kw)
+
+    rig.sm.patch, rig.sm.get = _patch, _get
+    with rig:
+        first = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": f"{JOB}#shortfall", "rev": 0,
+            "charges": [{"position": 0, "sid": 200, "grams": 12.4}]}).get_json()
+    assert first["errors"], first
+    assert rig.used(200) == pytest.approx(before + 12.4)              # it landed
+    card = cancel_review_store.get_pending(XL, f"{JOB}#shortfall")
+    row = card["spools"][0]
+    assert row["sid"] == 200 and row.get("attempt_sent_at") is not None, row
+    assert stamps.charged_after(200, 0) == 0.0
+    with rig:
+        second = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": f"{JOB}#shortfall", "rev": card["rev"],
+            "updates": {"200": row["grams"]}}).get_json()
+    assert second["status"] == "confirmed", second
+    assert rig.used(200) == pytest.approx(before + 12.4), "charged twice"
+    assert stamps.charged_after(200, row["attempt_sent_at"] - 1) == pytest.approx(12.4)

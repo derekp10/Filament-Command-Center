@@ -422,3 +422,29 @@ def test_a_kept_cards_toast_with_no_weighed_line_keeps_its_words(tmp_path):
     warned = [t for t in res["toasts"] if t["type"] == "warning"]
     assert warned and warned[0]["msg"] == "Charged 1g. 2g still have no spool — pick another spool, or Discard.", \
         res["toasts"]
+
+
+DISCARD_JS = r"""
+window.__shields = 0;
+window.fccShieldNextPress = () => { window.__shields += 1; };
+const __base2 = window.__respond;
+window.__respond = (url, method, body) => (url.startsWith('/api/cancel_deduct/dismiss')
+    ? { body: { status: 'dismissed' } } : __base2(url, method, body));
+const btn = cardOf('a').querySelector('.fcc-cr-discard');
+btn.click();                              // arms it
+await settle(750);                        // past the double-press window
+btn.click();                              // the discard itself
+await settle(60);
+return { gone: !cardOf('a'), shields: window.__shields };
+"""
+
+
+def test_a_discard_shields_the_press_behind_it_too(tmp_path):
+    """Group 64 fix review (the page reviewer's note on R1), red on 89fa17b: a
+    Discard's card goes, the next card slides up under the pointer, and a press under
+    700 ms there would land on it; the removal shields it, as Confirm's does."""
+    cards = [_base(j, "partial", total_grams=3.6, spools=[_row(300, 3.6, toolhead="HEAD-2", position=1)],
+                   heads_at_end=[{"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}])
+             for j in ("a", "b")]
+    res = run(tmp_path, RESPOND_JS + DISCARD_JS, {"pending": cards, "spools": SPOOLS})
+    assert res["gone"] is True and res["shields"] == 1, res

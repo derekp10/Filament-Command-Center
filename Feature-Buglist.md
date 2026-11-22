@@ -371,14 +371,12 @@
   the card's Apply, is charged on top as before (the Apply re-reads the used weight so it doesn't overwrite the scale,
   then adds the grams). Direction: at the Apply, check each row's spool's weigh stamp (`weigh_stamps`) against the
   print's end read time (`heads_read_at`) and ask, as the card does at its making. Standalone.
-* **⚖️ Two rare Decision 1 edges the Group 64 review's fixes leave (found 2026-11-20 fixing the review).** (1) A
-  charge whose write reported failure and that a later Apply found had landed (43.6's "already applied" path) isn't
-  noted as FCC's own (`weigh_stamps.note_charge`): when it landed is unknown, so a print that ended between the
-  attempt and its discovery is held as one FCC can't place, its own grams filled in (the safe side: a card nobody
-  needed). Direction: carry the attempt's moment on the retry row (`attempt_at`) and note the charge at it. (2) An
-  uncharged-grams card kept because a pick couldn't take all its grams, with a weighed line left at 0 g beside it,
-  still says "still have no spool" for the weighed line's grams too (`settle_held` settles weighed lines only when
-  every line left is one). Standalone, small.
+* **🔎 A person's typeahead and Enter on a 🛑 card's spool picker reach the scan path (found 2026-11-21 by Group
+  64's fix review; older than the group).** The dashboard's scan accumulator reads a `<select>`'s keys, so typing
+  "#2" to jump in a card's picker and then pressing Enter sends "#2" to processScan, and spool #2 joins the scan
+  buffer (the picker's own scan capture leaves a person's Enter alone since the fix review's O1). Not checked in a
+  real browser. Direction: on a picker, an Enter that isn't a scan swallows the keys the picker saw as its
+  typeahead (stop it before the accumulator, clear the buffer), or the accumulator skips a select's keys. Small.
 * **🧵 An MMU's SpoolJoin is invisible to FCC (found 2026-11-20 building Group 64.6; no hardware here).** An MMU that
   switches to another slot by itself when a filament runs out (SpoolJoin) neither parks at ATTENTION nor makes an FCC
   move, so FCC charges the whole print to the first slot's spool. Needs a real MMU, and whether its firmware or
