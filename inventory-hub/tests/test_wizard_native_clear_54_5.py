@@ -811,3 +811,148 @@ def test_a_saves_late_answer_leaves_a_form_opened_since_for_another_spool_alone(
     wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
     second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
     assert second["spool_id"] == 58 and "used_weight" not in second["spool_data"], second
+
+
+
+# --- Group 64 fix review 5 (VP1-VP5): a Save's answer in another session, a failed load ---
+
+REJECT_JS = r"""() => {
+  const real = window.fetch;
+  window.fetch = function (url, opts) {
+    const path = String(url).split('?')[0];
+    if (path === '/api/edit_spool_wizard' && window.__gateNext) {
+      window.__gateNext = false;
+      window.__posts.push({ url: path, body: opts.body ? JSON.parse(opts.body) : null });
+      return new Promise((res, rej) => { window.__release = () => rej(new TypeError('Failed to fetch')); });
+    }
+    return real.apply(this, arguments);
+  };
+}"""
+
+
+def _recording(page):
+    page.evaluate("""() => {
+        window.__reprint = [];
+        window._maybePromptLabelReprint = (...a) => { window.__reprint.push(a); };
+        window.renderBuffer = () => {};
+    }""")
+
+
+def _open_sid(page, sid, used):
+    d = _details()
+    d.update(id=sid, used_weight=used, remaining_weight=round(1000 - used, 2))
+    page.evaluate("(d) => { window.__answers['/api/spool_details'] = d; window.openEditWizard(d.id); }", d)
+    page.wait_for_function("(sid) => wizardState.mode === 'edit_spool' && wizardState.editSpoolId == sid"
+                           " && document.getElementById('wiz-fil-color_name').value === 'Red'"
+                           " && wizardState.usedShown != null"
+                           " && !document.getElementById('btn-wiz-submit').disabled", arg=sid)
+
+
+def _save_held(page, answer, fail=False):
+    """Save on the open form, its answer (or its failure) held until window.__release()."""
+    page.evaluate(REJECT_JS if fail else GATE_JS)
+    page.evaluate("(a) => { window.__answers['/api/edit_spool_wizard'] = a; window.__gateNext = true; }", answer)
+    page.locator("#btn-wiz-submit").click()
+    page.wait_for_function("() => typeof window.__release === 'function'")
+
+
+def _released_in_58s_form(page):
+    """#57's answer, let go once Edit Spool shows #58; waits for the toast naming #57."""
+    _open_sid(page, 58, 199.97)
+    page.evaluate("() => window.__release()")
+    page.wait_for_function("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                           ".some((t) => t.innerText.includes('#57'))")
+
+
+def _toast_list(page):
+    return page.evaluate("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                         ".map((t) => [t.className.replace('toast-msg toast-', ''), t.innerText])")
+
+
+def test_a_late_answer_still_flags_the_filaments_labels(wiz):
+    """VP1, red on 0e6db3ea (UP5's guard skipped it: the filament's spools were never flagged
+    for a new label, and the reprint nudge never showed). The Save renamed #57's filament;
+    its answer comes after Edit Spool was opened for #58: the label check runs, from the
+    filament as #57's form opened it."""
+    _recording(wiz)
+    _open_sid(wiz, 57, 100.37)
+    wiz.locator("#wiz-fil-color_name").fill("Crimson")
+    _save_held(wiz, {"success": True, "spool_id": 57})
+    _released_in_58s_form(wiz)
+    calls = wiz.evaluate("() => window.__reprint.map((a) => [a[0], Object.keys(a[2] || {})])")
+    assert calls and calls[0][0] == 7 and "name" in calls[0][1], calls
+
+
+def test_a_late_not_moved_answer_still_takes_a_swaps_spool_and_says_why(wiz):
+    """VP2, red on 0e6db3ea (in another session the answer was one generic toast: the Swap's
+    old spool never reached this page's scan buffer, which then drops it from the server's
+    copy, and the refusal's own words were never said)."""
+    _recording(wiz)
+    _open_sid(wiz, 57, 100.37)
+    msg = "Saved your other changes, but #57 was not moved to SHELF-1: Spoolman refused the write (test)."
+    _save_held(wiz, {"success": False, "spool_saved": True, "location_moved": False,
+                     "location_result": {"status": "error", "msg": "Spoolman refused the write (test)"},
+                     "to_buffer": [{"id": 99, "display": "#99 Old Spool"}], "msg": msg})
+    _released_in_58s_form(wiz)
+    out = wiz.evaluate("() => ({ buffer: (state.heldSpools || []).map((s) => s.id), id: wizardState.editSpoolId })")
+    assert 99 in out["buffer"] and out["id"] == 58, out
+    assert ["error", "❌ " + msg] in _toast_list(wiz), _toast_list(wiz)
+
+
+@pytest.mark.parametrize("answer", [
+    {"success": False, "spool_saved": True, "archived_now": False,
+     "msg": "Spool saved, but filament update rejected: Spoolman refused it (test)"},
+    {"success": False, "spool_saved": False, "location_moved": False, "may_have_saved": True,
+     "msg": "Couldn't tell whether Spool #57 saved: Spoolman didn't answer in time. Check where FCC shows it, "
+            "then save again."}], ids=["spool_saved", "may_have_saved"])
+def test_a_late_answer_whose_spool_write_landed_is_never_said_not_saved(wiz, answer):
+    """VP3, red on 0e6db3ea ("Spool #57 wasn't saved: Spool saved, but ..."; a person told so
+    may do it again, an addition charging twice): the server's own words, the spool named."""
+    _open_sid(wiz, 57, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    _save_held(wiz, answer)
+    _released_in_58s_form(wiz)
+    toasts = _toast_list(wiz)
+    assert ["error", "Spool #57: " + answer["msg"]] in toasts, toasts
+    assert not [t for _ty, t in toasts if "wasn't saved" in t], toasts
+
+
+def test_a_save_with_no_answer_after_a_reopen_is_said_in_a_toast(wiz):
+    """VP4, red on 0e6db3ea ("Frontend Error: Failed to fetch" on #58's form, its Save
+    enabled, and nothing said of #57, whose write may have landed)."""
+    _open_sid(wiz, 57, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    _save_held(wiz, {}, fail=True)
+    _released_in_58s_form(wiz)
+    out = wiz.evaluate("() => ({ status: document.getElementById('wiz-status-msg').innerText,"
+                       " id: wizardState.editSpoolId })")
+    assert "Frontend Error" not in out["status"] and out["id"] == 58, out
+    assert ["error", "FCC didn't answer #57's Save, so it may or may not have landed: open it in Edit Spool "
+                     "to check."] in _toast_list(wiz), _toast_list(wiz)
+
+
+@pytest.mark.parametrize("how", ["no_answer", "no_filament"])
+def test_an_edit_that_never_loaded_offers_no_save(wiz, how):
+    """VP5 (fix review 5's skeptic, a follow-up older than this group), red on 0e6db3ea: after
+    "Failed to connect for edit." Save was enabled on wizardReset's create form under a SAVE
+    CHANGES label (and after "Failed to fetch spool data." any typing enabled it), and a press
+    created an "Unknown" filament and spool. Save stays off, also after typing, and a press
+    by any means posts nothing."""
+    if how == "no_answer":
+        wiz.evaluate("""() => { const real = window.fetch; window.fetch = function (url, opts) {
+            if (String(url).split('?')[0] === '/api/spool_details') return Promise.reject(new TypeError('Failed to fetch'));
+            return real.apply(this, arguments); }; }""")
+    else:
+        wiz.evaluate("() => { window.__answers['/api/spool_details'] = { success: false }; }")
+    wiz.evaluate("() => { window.openEditWizard(58); }")
+    wiz.wait_for_function("() => /Failed to (connect for edit|fetch spool data)/"
+                          ".test(document.getElementById('wiz-status-msg').innerText)")
+    wiz.locator("#wiz-spool-comment").fill("typed")
+    for kind in ("manual", "external"):      # New Manual Form sets Save itself; Import Database runs the check
+        wiz.evaluate("(k) => wizardSelectType(k)", kind)
+        assert wiz.evaluate("() => document.getElementById('btn-wiz-submit').disabled") is True, kind
+    wiz.evaluate("() => window.wizardSubmit()")
+    wiz.wait_for_timeout(200)
+    posted = wiz.evaluate("() => window.__posts.filter((p) => /inventory_wizard|edit_spool_wizard/.test(p.url))"
+                          ".map((p) => p.url)")
+    assert posted == [], posted

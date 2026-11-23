@@ -5316,6 +5316,9 @@ def api_cancel_deduct_confirm():
     rec = cancel_review_store.pop_pending(printer, job_id)
     if rec is None:
         return jsonify({"status": "already_handled"})
+    # Group 64 fix review 5 (VS4): the card as it came off the store, for a refusal that
+    # puts it back (what this Apply would have changed on it, its rows_short, isn't).
+    popped = rec
     # Group 64 review (O4): a cancel's or an ambiguous end's rows marked weighed
     # (Decision 1), before the picks replace the rows.
     weighed_rows = [r for r in rec.get("spools") or []
@@ -5732,8 +5735,9 @@ def api_cancel_deduct_confirm():
         if not applied and not leftover:
             # Nothing was charged and no row of this review failed: every update
             # named a spool outside it (a stale card). Keep the review as it was,
-            # or it is gone with no ledger entry and no log line.
-            cancel_review_store.add_pending(rec)
+            # or it is gone with no ledger entry and no log line. As it was popped
+            # (VS4): the rows this refused post left out are no rows left short.
+            cancel_review_store.add_pending(popped)
             why = "; ".join(f"#{e_['sid']}: {e_['error']}" for e_ in errors)
             state.add_log_entry(f"⚠️ {printer}: review Apply refused — {_esc(why)}. Review kept.",
                                 "WARNING", "ffaa00")
@@ -5770,6 +5774,11 @@ def api_cancel_deduct_confirm():
                         row.pop('prefill', None)
                 if sid_ in held_rows:
                     row.update(held_rows[sid_])
+                    # Group 64 fix review 5 (VS1): at the grams this Apply asked of it (a
+                    # box nudged from the card's figure), which the ask counts: left at 0 g
+                    # later, the card's figure came off the shortfall and hid other grams.
+                    if sid_ in asked:
+                        row['grams'] = round(asked[sid_], 2)
                 retry_rows.append(row)
             # Group 64 fix review 3 (TS3 / TS5) and 4 (US1 / US3 / US6): a weighed row this
             # Apply left at its 0 g was dropped with the retry card and never named. On a
@@ -5789,8 +5798,12 @@ def api_cancel_deduct_confirm():
             else:
                 # (A cancel's marked row redirected to another spool was charged on its
                 # head: _weighed_rows_left judges by the head, as the Apply's success does.)
+                # Fix review 5 (VS3): a row is a line and a spool; one whose spool failed
+                # or was held on ANOTHER line is still left here, and named.
+                on_retry = {(str(_norm_pos((rec_rows.get(s) or {}).get('position'))), str(s))
+                            for s in set(failed_sids) | set(held_rows) if s in rec_rows}
                 left_now = [l for l in _weighed_rows_left(weighed_rows, rec_rows, asked)
-                            if l.get("sid") not in held_rows and l.get("sid") not in failed_sids]
+                            if (str(l.get("line")), str(l.get("sid"))) not in on_retry]
             retry_rec = dict(rec)
             retry_rec["spools"] = retry_rows
             # The retry reports the job's shortfall when it finally commits.
@@ -5816,6 +5829,9 @@ def api_cancel_deduct_confirm():
                 done = dict(rec, spools=[r for r in rec.get("spools", []) if r["sid"] not in failed_sids])
                 left, drained = _card_leftover(done, applied, asked)
                 retry_rec["unresolved_usage"] = left
+                # Fix review 5 (VS2): a weighed line this Apply left unposted (its box at 0)
+                # stays at 0, as a held row does (US6).
+                retry_rec["shortfall_prefill"] = _weighed_lines_at_0(rec, left)
                 _note_drained(retry_rec, drained)
                 retry_rec["total_grams"] = round(
                     sum(float(r.get('grams') or 0) for r in retry_rows) + sum(left.values()), 2)
@@ -5898,6 +5914,8 @@ def api_cancel_deduct_confirm():
             # can't place fills in the print's grams; redrawn so, an Apply as drawn charged
             # them on top).
             held_kept = [dict(r, prefill=0.0) for r in held_kept]
+            # Fix review 5 (VS2): and a weighed line it left unposted (its box at 0).
+            kept["shortfall_prefill"] = _weighed_lines_at_0(rec, left)
             kept.update(spools=held_kept, unresolved_usage=left,
                         total_grams=round(sum(left.values()) + sum(float(r.get('grams') or 0) for r in held_kept), 2),
                         rev=int(rec.get("rev") or 0) + 1, applied_g=applied_total)
@@ -6008,6 +6026,22 @@ def api_cancel_deduct_confirm():
         _say_uncharged(printer, say_rec, say_short, residue_card,
                        clamped=round(float(rec.get("clamped_g") or 0) + clamp_g, 2))
     return jsonify(resp)
+
+
+def _weighed_lines_at_0(rec, lines):
+    """Group 64 fix review 5 (VS2): an uncharged-grams card's figures once an Apply keeps
+    it: each weighed line (Decision 1's cause) among `lines` that the Apply left unposted
+    (the person's box at 0 g: a weighed line's spool is always picked, so only a 0 leaves
+    it unposted; still in `rec`'s unresolved_usage, which the picks reduced) is filled in
+    at 0 from now on. Redrawn at the print's grams, an unsure line's Apply as drawn charged
+    them on top of a change the person had judged at 0 g. The rest as the card had them."""
+    out = dict(rec.get("shortfall_prefill") or {})
+    causes = rec.get("shortfall_causes") or {}
+    unposted = {str(k) for k in (rec.get("unresolved_usage") or {})}
+    for line in lines or {}:
+        if str(line) in unposted and (causes.get(str(line)) or {}).get("why") == "weighed":
+            out[str(line)] = 0.0
+    return out
 
 
 def _left_in_ask(left, keys):
