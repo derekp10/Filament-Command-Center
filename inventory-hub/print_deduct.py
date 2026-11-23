@@ -1418,6 +1418,10 @@ def _held_heads(heads, start_spools, swap_log, usage_map):
             info["mmu_shared"] = list(head['mmu_shared'])      # Group 64.6
         if swaps.get(pos):
             held[pos] = dict(info, why="swapped", events=swaps[pos])
+            if _split_start_check(start.get(pos), swaps[pos]):
+                # Group 64 full review (SP1): a swap that took off a spool FCC didn't see
+                # go on is no split; the head is a set of every spool it had.
+                held[pos]["split"] = "start_differs"
         elif len(sids) > 1:
             held[pos] = dict(info, why="two_spools")
         elif len(sids) == 1 and _is_sid_swap(running.get(pos), sids[0]):
@@ -1504,7 +1508,9 @@ def _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_c
     stays held, its `split` saying why: the print-end read names another spool
     than the last swap loaded ("end_differs"), no spool ("end_empty") or two
     ("end_two"); else the walk gave no figures for its swaps, or figures that go
-    backwards or past the cancel ("unmeasured")."""
+    backwards or past the cancel ("unmeasured"). A head whose swaps don't follow on
+    from the spool FCC saw before each ("start_differs", put on `held` by _held_heads)
+    is never split (Group 64 full review, SP1)."""
     out = {}
     swapped = {p: i for p, i in held.items() if i.get('why') == 'swapped'}
     if not swapped:
@@ -1514,6 +1520,8 @@ def _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_c
     path_g = _path_filament_g(printer_name)
     for pos, info in swapped.items():
         events = info.get('events') or []
+        if info.get('split') == 'start_differs':
+            continue
         refused = _split_end_check(by_pos.get(pos), events)
         if refused:
             info['split'] = refused
@@ -1548,6 +1556,37 @@ def _split_end_check(head, events):
     if str(sids[0]) != str(last):
         return 'end_differs'
     return None
+
+
+def _chain_break(start, events):
+    """(k, before) for the first recorded swap at a head whose `from_sid` isn't the
+    spool FCC saw feeding the head before it (`before`: the start snapshot's spool for
+    the first swap, the swap before's `to_sid` after that), else None. A swap recorded
+    against the park read (64.3 (4)) takes off the spool that read named, which can be
+    one moved onto the head while it printed: a change FCC saw but can't place (Group
+    64 full review, SP1). With no start spool, the first swap's `from_sid` is the
+    start, as the split takes it. `events` in the order they were recorded."""
+    try:
+        evs = [e for e in events or [] if isinstance(e, dict)]
+        if not evs:
+            return None
+        before = start if start is not None else evs[0].get('from_sid')
+        for k, ev in enumerate(evs):
+            if str(ev.get('from_sid')) != str(before):
+                return k, before
+            before = ev.get('to_sid')
+    except Exception:
+        return None
+    return None
+
+
+def _split_start_check(start, events):
+    """"start_differs" when a head's recorded swaps don't follow on from the spool FCC
+    saw before each (_chain_break), else None. A split there pre-filled the spool before
+    the break with the stretch the spool taken off ran, and gave the spool taken off
+    nothing (Group 64 full review, SP1). The head is held as a set of every spool it had
+    (_set_spools), nothing pre-filled: a change during the print always asks."""
+    return 'start_differs' if _chain_break(start, events) is not None else None
 
 
 def _accept_splits(printer_name, job_id, split, rows, held, heads):
@@ -1610,8 +1649,8 @@ def _splits_sharing_a_row(split, rows):
 
 def _set_spools(info, head):
     """[(sid, when)]: the spools a held head had during the print, in the order FCC
-    saw them (the start spool, each recorded swap's, then the print-end read's;
-    `when` start / during / end). Only a head whose spool changed during the print
+    saw them (the start spool, each recorded swap's, the spool it took off and the one
+    it put on, then the print-end read's; `when` start / during / end). Only a head whose spool changed during the print
     (`why` swapped or changed) is a set; [] for any other."""
     if (info or {}).get('why') not in ('swapped', 'changed'):
         return []
@@ -1626,6 +1665,9 @@ def _set_spools(info, head):
         first = events[0].get('from_sid')
     _add(first, 'start')
     for ev in events:
+        # Group 64 full review (SP1): a swap that took off a spool FCC didn't see go on
+        # (recorded against the park read) names it, and the set offers it.
+        _add(ev.get('from_sid'), 'during')
         _add(ev.get('to_sid'), 'during')
     for sid in _head_sids(head):
         _add(sid, 'end')
@@ -1714,7 +1756,15 @@ def _explain_unresolved_lines(unresolved, heads, held, start_spools, unread, wor
                                    for ev in info['events'])
             phrases[line] = f"whose spool was swapped during the print ({steps})"
             split = info.get('split')
-            if split == "end_differs":
+            brk = _chain_break(info.get('start'), info.get('events')) if split == "start_differs" else None
+            if brk is not None:
+                # Group 64 full review (SP1).
+                k, before = brk
+                evs = info.get('events') or []
+                seen = (f"#{before} was on it {words['start']}" if k == 0 else
+                        f"#{before} went on at ~{_pct(evs[k - 1].get('progress'))}%")
+                why_not = f", but {seen}, and FCC didn't see when #{evs[k].get('from_sid')} took over"
+            elif split == "end_differs":
                 why_not = f", but #{sids[0]} was on it {words['end']}"
             elif split == "end_empty":
                 why_not = f", but no spool was on it {words['end']}"
@@ -1911,27 +1961,37 @@ def _seen_mark(rec, row):
     return None
 
 
-def _held_at_apply(rec, row, sid, used_now):
+def _held_at_apply(rec, row, sid, used_now, shown=None):
     """Decision 1 at a card's Apply, under the spool's lock (Group 64 full review: RW1 /
     OR1 / SP3 / PR1, and OR2 / SP2 for a spool that left its head at a swap): the info
     to hold row `row` with when spool `sid` changed after its print ended (or, having
     left its head at a swap, was weighed on FCC after that) and the card didn't show
     that change; else None. A change the card marked (_seen_mark) is one the person saw,
     so their figure stands until the spool changes again. A card waits for its person,
-    and a spool weighed meanwhile was charged the card's grams on top of the scale."""
+    and a spool weighed meanwhile was charged the card's grams on top of the scale.
+    `shown`: the spool's mark on the card's rows as they were before the picks rebuilt
+    them (Group 64 full review, FX1: a redirect, or any pick, sends the rows as picks,
+    which carry no mark, and a change the card showed was held again)."""
     end_at = _card_end_at(rec)
     then = _card_end_used(rec, sid)
-    mark = _seen_mark(rec, row)
+    mark = _seen_mark(rec, row) or (shown if isinstance(shown, dict) else None)
     if then is not None and end_at is not None:
         info = _weighed_info(sid, then, used_now, end_at)
         if info is None:
             return None
         if mark is not None and mark.get("then") is not None:
             try:
-                was = float(mark["now"]) - float(mark["then"]) - float(mark.get("ours") or 0)
+                if "ours" in mark:
+                    was = float(mark["now"]) - float(mark["then"]) - float(mark.get("ours") or 0)
+                    seen = info["now"] - info["then"] - info["ours"]
+                else:
+                    # Group 64 full review (FX4): a mark from before the full review keeps
+                    # no `ours`; it showed the change up to its `now`, FCC's charges in it.
+                    was = float(mark["now"]) - float(mark["then"])
+                    seen = info["now"] - info["then"]
             except (TypeError, ValueError):
                 was = None
-            if was is not None and abs((info["now"] - info["then"] - info["ours"]) - was) <= 0.02:
+            if was is not None and abs(seen - was) <= 0.02:
                 return None
         return dict(info, toolhead=row.get("toolhead"))
     left = (rec.get("swap_left_at") or {}).get(str(sid))
@@ -2907,7 +2967,9 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
         sets = _held_sets(unresolved, heads, held)
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0, usage_map=usage_map,
                                         no_spool=True, notes=notes, phrases=phrases,
-                                        **dict(card, **_given(sets=sets or None)))
+                                        **dict(card, **_given(sets=sets or None,
+                                                              swap_left_at=_swap_left_at(swap_log) or None,
+                                                              end_at_s=_end_epoch(end_heads))))
     if spools_updated == 0 and not failed and not weighed:
         # Footer had usage but NO spool is bound at the active toolhead(s). Don't
         # burn a terminal grams=0 ledger entry (it permanently blocks recovery —
@@ -3306,6 +3368,15 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 path_filament_g=_path_filament_g(printer_name),
                 single_position=single_pos)
             if split:
+                # Group 64 full review (SP1): a head whose swaps don't follow on from the
+                # spool FCC saw before each is no split. With the print-end read it is held
+                # as a set (_held_heads says why); without, it gets the full-footer row to
+                # split by hand, as a swap the walk didn't measure does.
+                chain = _swaps_by_position(live_swaps)
+                first = _start_map(start_spools)
+                split = {p: segs for p, segs in split.items()
+                         if not _split_start_check(first.get(_norm_pos(p)), chain.get(_norm_pos(p)) or [])} or None
+            if split:
                 split_rows = _split_to_review_rows(split, active_locs)
     # Every position a row charges (the split's own, and whatever the resolver
     # finds), so a used head with no spool rides along as unresolved (43.4).
@@ -3429,7 +3500,8 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 printer_name, filename, job_id, 1.0, usage_map=usage_map, no_spool=True,
                 heads=card["heads"], heads_source=heads_source, notes=card["notes"],
                 phrases=card["phrases"],
-                **_given(heads_read_at=heads_read_at, sets=card["sets"] or None))
+                **_given(heads_read_at=heads_read_at, sets=card["sets"] or None,
+                         swap_left_at=_swap_left_at(swap_log) or None, end_at_s=end_at))
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
                                         usage_map=usage_map, no_spool=True)
     left_at = _swap_left_at(swap_log)
@@ -3647,7 +3719,7 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                              usage_map=None, *, no_spool=False,
                              progress_unknown=False, ambiguous=False, reason=None,
                              heads=None, heads_source=None, heads_read_at=None,
-                             notes=None, phrases=None, sets=None):
+                             notes=None, phrases=None, sets=None, swap_left_at=None, end_at_s=None):
     """Stash a persistent, RECOVERABLE review for a print whose usage couldn't be
     finalized — INSTEAD of writing a destructive terminal grams=0 ledger entry that
     would permanently block recovery (the 2026-06-13 silent-loss bug). Two kinds:
@@ -3677,6 +3749,10 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
     whose spool changed during the print, shown as a set of every spool they had.
     Its Apply then needs a pick per line (api_cancel_deduct_confirm refuses one
     without; a set's line takes one per spool): it never re-reads the heads.
+    `swap_left_at` and `end_at_s` (Group 64 full review, FX2): what its Apply checks
+    Decision 1 against, as a card with rows keeps them (_swap_left_at, the print-end
+    read's moment): a set's spool that left its head at a swap and was weighed on FCC
+    after that is held at the Apply, not charged its share on top.
 
     Writes NO ledger entry — the review stays recoverable until confirm/dismiss.
     Idempotent: no-ops if a review is already pending or the job was already settled.
@@ -3736,6 +3812,10 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
         in_sets = {k: v for k, v in (sets or {}).items() if k in (record["usage_map"] or {})}
         if in_sets:
             record["unresolved_sets"] = in_sets
+        if swap_left_at:
+            record["swap_left_at"] = swap_left_at
+        if end_at_s is not None:
+            record["end_at_s"] = end_at_s
     elif no_spool:
         # 43.3 — the heads at PRINT END: what the card's picker can name as "the
         # spool that was there", so Apply never silently charges a spool loaded
@@ -4286,7 +4366,9 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
         return _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                                         usage_map=usage_map, no_spool=True, ambiguous=ambiguous,
                                         heads=card_heads, heads_source=source, notes=notes,
-                                        phrases=phrases, **_given(heads_read_at=read_at, sets=sets or None))
+                                        phrases=phrases, **_given(heads_read_at=read_at, sets=sets or None,
+                                                                  swap_left_at=_swap_left_at(swap_log) or None,
+                                                                  end_at_s=end_at))
     # Re-check after the (slow) gcode download+parse — if the job was processed
     # in the meantime, don't stash a stale pending.
     if print_deduct_ledger.was_deducted(printer_name, job_id):
@@ -5005,6 +5087,10 @@ def api_cancel_deduct_confirm():
     # (Decision 1), before the picks replace the rows.
     weighed_rows = [r for r in rec.get("spools") or []
                     if isinstance(r, dict) and r.get("weighed") and rec.get("kind") != "shortfall"]
+    # Group 64 full review (FX1): each spool's mark as the card showed it, before the
+    # picks rebuild the rows without their marks, for the Apply's Decision 1 check.
+    shown_marks = {str(r.get("sid")): r["weighed"] for r in rec.get("spools") or []
+                   if isinstance(r, dict) and isinstance(r.get("weighed"), dict)}
 
     kind = rec.get("kind", "partial")
     if kind == "shortfall" and str(data.get("rev")) != str(rec.get("rev", 0)):
@@ -5014,6 +5100,19 @@ def api_cancel_deduct_confirm():
         cancel_review_store.add_pending(rec)
         return jsonify({"status": "error", "stale": True,
                         "msg": "This card changed since you opened it — reopen the review."})
+    if kind != "shortfall" and rec.get("rev") is not None and str(data.get("rev")) != str(rec.get("rev")):
+        # Group 64 full review (FX7): a card an Apply kept with a spool held has a
+        # revision too. An Apply from a view drawn before the hold (another window)
+        # charged what that view showed: the held row's old grams on top of the
+        # weighing. A page from before the revision sends none, and is told to reload.
+        cancel_review_store.add_pending(rec)
+        if data.get("rev") is None:
+            return jsonify({"status": "error", "stale_page": True,
+                            "msg": "This card changed since this page drew it (another window applied "
+                                   "part of it). Reload the page (Ctrl+F5) to see it as it is now."})
+        return jsonify({"status": "error", "stale": True,
+                        "msg": "This card changed since it was drawn (another window applied part of "
+                               "it). It's drawn again as it is now: check it, then Apply."})
     # What this job asked for, so the grams no spool took are reported (a tool
     # left unpicked, or a clamp). A retry re-stashed by an earlier Apply carries
     # it, with the grams that Apply already charged; otherwise this Apply sets it.
@@ -5236,7 +5335,7 @@ def api_cancel_deduct_confirm():
                 # in a way the card didn't show, is charged nothing: the card waits,
                 # its line marked, for the person to look again (a 43.6 retry row is
                 # judged by its attempt, below).
-                late = _held_at_apply(rec, rec_rows[sid], sid, used)
+                late = _held_at_apply(rec, rec_rows[sid], sid, used, shown=shown_marks.get(str(sid)))
                 if late is not None:
                     mark = _held_mark(late, grams)
                     held_rows[sid] = mark
@@ -5410,6 +5509,12 @@ def api_cancel_deduct_confirm():
                 carried = round(float(rec.get("clamped_g") or 0) + clamp_g, 2)
                 if carried > 0.005:
                     retry_rec["clamped_g"] = carried
+                if held_rows:
+                    # Group 64 full review (FX7): a hold changed the card (its line now
+                    # marked, 0 g filled in), so a view drawn before this Apply is refused
+                    # (the check above), as a shortfall card's is. A failed write's retry
+                    # row needs none: 43.6 judges it by its attempt.
+                    retry_rec["rev"] = int(rec.get("rev") or 0) + 1
             cancel_review_store.add_pending(retry_rec)
             # Re-emit the Review affordance so the retry is discoverable even if
             # the original cancel log line has scrolled off.

@@ -382,3 +382,136 @@ def test_a_no_spool_card_s_set_takes_a_pick_per_spool(logs):
         assert body["status"] == "confirmed", body
         assert p.sm.used(42) == pytest.approx(720.0) and p.sm.used(229) == pytest.approx(40.0)
     assert body["shortfall_g"] == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 full review (SP1): a swap that took off a spool FCC didn't see go on #
+# --------------------------------------------------------------------------- #
+# A swap recorded against the park read (64.3 (4)) takes off the spool that read
+# named. When that spool was moved onto the head while it printed (no pause, so no
+# swap recorded then), the swap's `from_sid` isn't the spool FCC saw before it, and
+# the split gave the start spool the run-out spool's stretch (and its "ran out"),
+# and the spool that ran out no row. Now the head is a set of every spool it had.
+# Each test here is red on 89faa0b unless it says otherwise.
+
+CUMS_42 = {0.42: {4: 30.0, 6: 26.8, 7: 7.8}}
+
+
+def _moved_on_then_ran_out(p, end="STOPPED"):
+    """#42 on RCOI-5 at the start; #300 moved onto it at 35% while it printed; #300
+    runs out at 42% (the park read names it); #229 loaded at the prompt."""
+    p.sm.spools[300] = _spool(5.0, "SHELF-1")
+    _tick("PRINTING", _job(0.30))
+    p.at["RCOI-5"] = [300]
+    p.sm.spools[300]["location"] = "RCOI-5"
+    p.sm.spools[42]["location"] = "CR-CT-2-R1"
+    _tick("PRINTING", _job(0.35))
+    _tick("ATTENTION", _job(0.42))
+    p.at["RCOI-5"] = [229]
+    p.sm.spools[229]["location"] = "RCOI-5"
+    p.sm.spools[300]["location"] = "SHELF-1"
+    _tick("PRINTING", _job(0.42))
+    log = [(e["position"], e["from_sid"], e["to_sid"]) for e in print_monitor._PRINT_TRACKER[INDX]["swap_log"]]
+    _tick("PRINTING", _job(0.60))
+    _tick(end)
+    return log
+
+
+SP1_NOTE = ("RCOI-5's spool was swapped during the print (#300 to #229 at ~42%), but #42 was on it when "
+            "the print started, and FCC didn't see when #300 took over: split the 84.28 g among them, or "
+            "put it all on one.")
+
+
+def test_a_swap_from_a_spool_fcc_didnt_see_go_on_is_a_set_on_a_cancels_card(logs, path_g):
+    # On 89faa0b: #42 a row of 32.0 g marked "ran out", #229 54.28 g, #300 nothing.
+    with Indx() as p, _measured(USAGE, CUMS_42):
+        log = _moved_on_then_ran_out(p)
+    assert log == [(4, 300, 229)], log
+    rec = _rec()
+    assert all(r["position"] != 4 for r in rec["spools"]), _rows(rec)
+    assert _set(rec) == [(42, "start"), (300, "during"), (229, "during")]
+    assert rec["unresolved_usage"]["4"] == pytest.approx(84.28)
+    assert rec["unresolved_notes"]["4"] == SP1_NOTE
+
+
+def test_a_swap_from_a_spool_fcc_didnt_see_go_on_is_a_set_on_a_completions_card(logs, path_g):
+    # On 89faa0b: the completion auto-split, #42 32.0 g and #229 54.28 g.
+    with Indx() as p, _measured({4: 84.28, 6: 75.32, 7: 21.9}, CUMS_42):
+        log = _moved_on_then_ran_out(p, end="FINISHED")
+    assert log == [(4, 300, 229)], log
+    rec = _rec()
+    assert rec["kind"] == "spool_changed" and rec["auto_split"] is False, rec.get("kind")
+    assert all(r["position"] != 4 for r in rec["spools"]), _rows(rec)
+    assert _set(rec) == [(42, "start"), (300, "during"), (229, "during")]
+    assert rec["unresolved_notes"]["4"] == SP1_NOTE
+
+
+def test_a_second_park_after_a_move_while_printing_is_a_set_naming_where_the_chain_broke(logs, path_g):
+    """#42 runs out at 20% (#229 loaded: a clean swap); #300 is moved onto RCOI-5 at
+    40% while it prints and runs out at 60% (#500 loaded). On 89faa0b #229 got 20-60%
+    and #300 nothing."""
+    with Indx() as p, _measured(USAGE, {0.2: {4: 20.0, 6: 15.0, 7: 4.0}, 0.6: {4: 60.0, 6: 45.0, 7: 13.0}}):
+        p.sm.spools[300] = _spool(5.0, "SHELF-1")
+        _tick("PRINTING", _job(0.10))
+        _tick("ATTENTION", _job(0.20))
+        p.at["RCOI-5"] = [229]
+        p.sm.spools[229]["location"] = "RCOI-5"
+        p.sm.spools[42]["location"] = "SHELF-1"
+        _tick("PRINTING", _job(0.20))
+        _tick("PRINTING", _job(0.40))
+        p.at["RCOI-5"] = [300]
+        p.sm.spools[300]["location"] = "RCOI-5"
+        p.sm.spools[229]["location"] = "SHELF-1"
+        _tick("PRINTING", _job(0.45))
+        _tick("ATTENTION", _job(0.60))
+        p.at["RCOI-5"] = [500]
+        p.sm.spools[500] = _spool(1.0, "RCOI-5")
+        p.sm.spools[300]["location"] = "SHELF-1"
+        _tick("PRINTING", _job(0.60))
+        _tick("PRINTING", _job(0.70))
+        _tick("STOPPED")
+    rec = _rec()
+    assert all(r["position"] != 4 for r in rec["spools"]), _rows(rec)
+    assert _set(rec) == [(42, "start"), (229, "during"), (300, "during"), (500, "during")]
+    assert rec["unresolved_notes"]["4"] == (
+        "RCOI-5's spool was swapped during the print (#42 to #229 at ~20%, then #300 to #500 at ~60%), "
+        "but #229 went on at ~20%, and FCC didn't see when #300 took over: split the 84.28 g among them, "
+        "or put it all on one.")
+
+
+def test_an_unmeasured_swap_from_a_spool_fcc_didnt_see_go_on_offers_it_in_the_set(logs):
+    # On 89faa0b: the set was #42 and #229, and the note named #300 alone.
+    from test_print_end_heads_hotfix import _compute
+    with Indx() as p, _compute(USAGE):
+        _moved_on_then_ran_out(p)
+    rec = _rec()
+    assert _set(rec) == [(42, "start"), (300, "during"), (229, "during")]
+    assert rec["unresolved_notes"]["4"] == SP1_NOTE
+
+
+def test_a_completion_with_no_print_end_read_gets_the_full_footer_row_to_split_by_hand(logs, path_g):
+    """No usable print-end read: the head isn't auto-split onto #42; it gets the older
+    manual review's row (the whole head's grams on the spool there now), to split by
+    hand. On 89faa0b: auto_split, #42 32.0 g and #229 54.28 g."""
+    swap = [{"seq": 0, "position": 4, "progress": 0.42, "from_sid": 300, "to_sid": 229, "runout": True}]
+    with Indx() as p:
+        p.load_229()
+        print_deduct._route_completion_to_review(
+            INDX, FILE, JOB, dict(USAGE), "http://fb", {4}, swap_log=swap,
+            start_spools={"4": 42}, swap_cums=dict(CUMS_42))
+    rec = _rec()
+    assert rec["auto_split"] is False, rec
+    assert [(r["sid"], r["grams"]) for r in rec["spools"] if r["position"] == 4] == [(229, 84.28)]
+
+
+def test_a_swap_chain_that_follows_on_still_splits():
+    """The check itself (new; errors on 89faa0b, which has no such check): a chain where
+    each swap takes off the spool before it is no break, one that doesn't is."""
+    log = [{"seq": 0, "position": 4, "from_sid": 42, "to_sid": 229},
+           {"seq": 1, "position": 4, "from_sid": 229, "to_sid": 300}]
+    assert print_deduct._chain_break(42, log) is None
+    assert print_deduct._chain_break(None, log) is None
+    assert print_deduct._chain_break(7, log) == (0, 7)
+    log[1]["from_sid"] = 500
+    assert print_deduct._chain_break(42, log) == (1, 229)
+    assert print_deduct._split_start_check(42, log) == "start_differs"

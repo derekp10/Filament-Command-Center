@@ -686,7 +686,7 @@ def test_the_id_box_reads_a_number_or_a_spool_label_in_every_form(tmp_path):
         assert got["looked"] == ["/api/spools/42"], got
         assert got["info"] == "#42 Galaxy Black (SHELF-2)", got
     assert res["changed"] == "#43 Signal Red (SHELF-3)", res["changed"]
-    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "ns",
+    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "ns", "rev": 0,
                                 "charges": [{"position": 4, "sid": 42, "grams": 84.28}]}], res["confirms"]
     assert res["elsewhere"] == [{"job": "s#shortfall", "info": "#57 Ocean Blue"},
                                 {"job": "set", "info": "#57 Ocean Blue"}], res["elsewhere"]
@@ -886,7 +886,7 @@ def test_every_picker_lists_the_scan_buffer(tmp_path):
     assert [g.get("cls") or g.get("option") for g in row] == [
         "243", "fcc-cr-ended", "fcc-cr-started", "fcc-cr-buffer", "other"], row
     assert res["remaining"] == "412.4", res["remaining"]
-    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "p",
+    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "p", "rev": 0,
                                 "charges": [{"row": 243, "sid": 57, "grams": 75.32}]}], res["confirms"]
 
 
@@ -966,7 +966,7 @@ def test_the_buffer_list_follows_the_buffer(tmp_path):
     assert opening["row"] == ["777"] and opening["short"] == ["777"], opening
     assert opening["untouched"] == ["57"], opening
     assert res["empty"] == {"row": [], "line": ["57"], "picked": "57"}, res["empty"]
-    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "ns",
+    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "ns", "rev": 0,
                                 "charges": [{"position": 4, "sid": 57, "grams": 84.28}]}], res["confirms"]
     assert res["listening"] == 1, res["listening"]
     assert res["closed"] == {"open": False, "listening": 0}, res["closed"]

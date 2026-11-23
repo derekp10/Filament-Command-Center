@@ -1133,6 +1133,7 @@
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-kind="${esc(kind)}" data-ambiguous="${rec.ambiguous ? '1' : '0'}"
+                 data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
                  data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
                  data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
@@ -1245,6 +1246,7 @@
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-ambiguous="${ambiguous ? '1' : '0'}" data-kind="${esc(kind)}"
+                 data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
                  data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
                  data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
@@ -1908,10 +1910,12 @@
                     }
                     if (!settleHeld) { if (redirected) payload.charges = charges; else payload.updates = updates; }
                     if (settleLeft && redirected) payload.settle_held = true;
-                    // 43.2: the card's revision, so an Apply from a view opened before
-                    // another Apply changed it is refused instead of charging again.
-                    if (card.dataset.kind === 'shortfall') payload.rev = Number(card.dataset.rev || 0);
                 }
+                // 43.2: the card's revision, so an Apply from a view opened before
+                // another Apply changed it is refused instead of charging again. Every
+                // card since the Group 64 full review (FX7): a hold keeps a card too, and
+                // a view drawn before it charged the held row's old grams on top.
+                payload.rev = Number(card.dataset.rev || 0);
                 // Review fix: a set whose boxes don't add up to its grams (left
                 // empty, part placed, or over) is said in the set and on the card;
                 // a second press with the same grams goes ahead (never a double
@@ -1954,15 +1958,21 @@
                         sayOnCard(kept, headPieces(kept, msg));
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
-                    } else if (d.status === 'confirmed' && Array.isArray(d.held) && d.held.length) {
+                    } else if (Array.isArray(d.held) && d.held.length) {
                         // Group 64 full review: a spool weighed (or changed) after the
                         // card was shown is charged nothing; the card stays, its line
-                        // marked and filled in again, for the person to look again.
+                        // marked and filled in again, for the person to look again. A
+                        // hold with nothing else applied answers status 'error' (FX3: it
+                        // read as a failed Apply); a write that failed beside it is said too.
                         const why = d.held.map((h) => h.words + '.').join(' ');
+                        const heldSids = new Set(d.held.map((h) => String(h.sid)));
+                        const failed = (d.errors || []).filter((x) => !heldSids.has(String(x.sid)));
+                        const failWords = failed.length ? ` ${failed.length} other spool(s) failed — check the log.` : '';
                         if (took > 0) toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
-                        toast(`${why} Nothing was charged to it: check its line and Apply again.`, 'warning', 7000);
+                        toast(`${why} Nothing was charged to it: check its line and Apply again.${failWords}`,
+                            failed.length ? 'error' : 'warning', 7000);
                         const fresh = await rerenderCard(card, true);
-                        sayOnCard(fresh, headPieces(fresh, `${why} Nothing was charged to it: check its line and Apply again.`));
+                        sayOnCard(fresh, headPieces(fresh, `${why} Nothing was charged to it: check its line and Apply again.${failWords}`));
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'confirmed') {

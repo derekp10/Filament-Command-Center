@@ -196,7 +196,7 @@ def test_a_set_left_empty_is_never_applied_by_one_press(tmp_path):
     assert res["dbl"] == {"posted": 0, "alertShown": True}, res
     # A second press goes ahead: what nobody placed is the job's shortfall.
     # Group 64.2 (2): the second press says what the person saw of the set (set_ack).
-    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "ps", "updates": {"243": 75.32},
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "ps", "rev": 0, "updates": {"243": 75.32},
                               "set_ack": {"4": 0}}], res
 
 

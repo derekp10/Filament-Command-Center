@@ -330,7 +330,7 @@ def test_a_cancels_weighed_row_left_at_0g_is_said_by_name(tmp_path):
                "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}]}
     res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + ROW_LEFT_JS,
               {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
-    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "r", "updates": {}}], res["posted"]
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "r", "updates": {}, "rev": 0}], res["posted"]
     assert res["toasts"] == [{"msg": "Left 12.4g uncharged on #200: it was weighed after the print.",
                               "type": "success", "duration": 2000}], res["toasts"]
 
@@ -480,3 +480,75 @@ def test_a_held_line_keeps_the_card_on_screen_and_says_why(tmp_path):
     assert warned and warned[0]["msg"] == words + ". Nothing was charged to it: check its line and Apply again.", res
     assert not any("failed" in t["msg"] for t in res["toasts"]), res["toasts"]
     assert "Nothing was charged to it" in " ".join(res["notice"].split()), res["notice"]
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 full review, chunk 2: a hold with nothing else applied (FX3), and   #
+# every card's revision (FX7)                                                  #
+# --------------------------------------------------------------------------- #
+
+def test_a_hold_with_nothing_else_applied_is_a_hold_not_a_failed_apply(tmp_path):
+    """FX3, red on 89faa0b (a 7 s error toast, as if the Apply had failed). A one-row
+    card's only spool is held: the server answers status 'error' with `held`; the
+    page warns, keeps the card and draws it again, as for a hold beside a charge."""
+    words = "#200 on HEAD-1 was weighed on the Quick-Weigh at 14:05, after this print ended (at 13:50), " \
+            "so the scale already counted its 12.40 g"
+    rec = _base("h", "partial", total_grams=12.4, spools=[_row(200, 12.4)],
+                heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}])
+    confirm = {"status": "error", "applied": [],
+               "errors": [{"sid": 200, "error": words + ". Nothing was charged to it: check its line and Apply again."}],
+               "held": [{"sid": 200, "words": words, "known_order": True}]}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + HELD_JS, {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
+    assert res["kept"] is True, res
+    assert not [t for t in res["toasts"] if t["type"] == "error"], res["toasts"]
+    warned = [t for t in res["toasts"] if t["type"] == "warning"]
+    assert warned and warned[0]["msg"] == words + ". Nothing was charged to it: check its line and Apply again.", res
+    assert "Nothing was charged to it" in " ".join(res["notice"].split()), res["notice"]
+
+
+def test_a_hold_beside_a_failed_write_says_both(tmp_path):
+    """FX3's other side: a write that failed beside the hold is said too, in red."""
+    words = "#200 on HEAD-1 was weighed on the Quick-Weigh at 14:05, after this print ended (at 13:50), " \
+            "so the scale already counted its 12.40 g"
+    rec = _base("h", "partial", total_grams=16.0,
+                spools=[_row(200, 12.4), _row(300, 3.6, toolhead="HEAD-2", position=1)],
+                heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                              {"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}])
+    confirm = {"status": "error", "applied": [],
+               "errors": [{"sid": 200, "error": words + ". Nothing was charged to it: check its line and Apply again."},
+                          {"sid": 300, "error": "HTTP 500: database is locked"}],
+               "held": [{"sid": 200, "words": words, "known_order": True}]}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + HELD_JS, {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
+    assert res["kept"] is True, res
+    said = [t for t in res["toasts"] if t["type"] == "error"]
+    assert said and "1 other spool(s) failed" in said[0]["msg"] and said[0]["msg"].startswith(words), res["toasts"]
+
+
+REV_JS = r"""
+for (const j of ['p', 'n']) {
+  const c = cardOf(j);
+  if (j === 'n') {
+    const L = c.querySelector('.fcc-cr-pickline');
+    const sel = L.querySelector('.fcc-cr-pick');
+    pickIn(sel, '229');
+    const g = L.querySelector('.fcc-cr-pgrams'); g.value = '84.28';
+    g.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  c.querySelector('.fcc-cr-confirm').click();
+  await settle(120);
+}
+return { posted: posts('/api/cancel_deduct/confirm') };
+"""
+
+
+def test_every_cards_apply_sends_its_revision(tmp_path):
+    """FX7, red on 89faa0b (only an uncharged-grams card sent one): a review card
+    and a no_spool card each send the revision they were drawn with, so an Apply
+    from a view drawn before a hold is refused instead of charging the held row."""
+    held = _base("p", "partial", rev=1, total_grams=12.4, spools=[_row(200, 12.4)],
+                 heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}])
+    plain = _base("n", "no_spool", usage_map={"4": 84.28},
+                  heads_at_end=[{"toolhead": "HEAD-5", "position": 4, "sid": 229, "sids": [229]}])
+    res = run(tmp_path, RESPOND_JS + REV_JS, {"pending": [held, plain], "spools": SPOOLS})
+    revs = {str(b.get("job_id")): b.get("rev") for b in res["posted"]}
+    assert revs == {"p": 1, "n": 0}, res["posted"]

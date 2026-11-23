@@ -1734,10 +1734,16 @@ def _quick_weigh(rig, sid, used):
             "based_on": {"mode": "set_used", "screen": "quick"}}).get_json()
 
 
-def _apply_card(rig, updates):
+def _apply_card(rig, updates, rev=None, charges=None):
+    body = {"printer_name": XL, "job_id": str(JOB)}
+    if charges is not None:
+        body["charges"] = charges
+    else:
+        body["updates"] = updates
+    if rev is not None:
+        body["rev"] = rev           # what today's page sends (Group 64 full review, FX7)
     with rig:
-        return app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
-            "printer_name": XL, "job_id": str(JOB), "updates": updates}).get_json()
+        return app_module.app.test_client().post("/api/cancel_deduct/confirm", json=body).get_json()
 
 
 @pytest.fixture
@@ -1779,7 +1785,7 @@ def test_a_held_line_is_charged_as_typed_once_the_card_has_shown_it(stamps, quie
     rec, rows = _cancel_card(rig, end)
     _quick_weigh(rig, 200, 130.0)
     _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]})
-    body = _apply_card(rig, {"200": 5.0})
+    body = _apply_card(rig, {"200": 5.0}, rev=1)
     assert body["status"] == "confirmed" and not body.get("held"), body
     assert rig.used(200) == pytest.approx(135.0)
     assert cancel_review_store.get_pending(XL, str(JOB)) is None
@@ -1907,3 +1913,168 @@ def test_a_cards_apply_judges_the_order_by_the_end_reads_own_moment(stamps, quie
     stamps.note(200, "the Quick-Weigh", at=end["at_s"] + 30)
     body = _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]})
     assert body["held"][0]["known_order"] is True, body
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 full review, chunk 2: a view drawn before a hold (FX7), a no_spool   #
+# card's swapped-out spool (FX2), a mark the picks dropped (FX1), a mark from   #
+# before the full review (FX4). Each is red on 89faa0b unless it says otherwise. #
+# --------------------------------------------------------------------------- #
+
+def _view_a_holds(rig):
+    """A cancel's card applied once in view A: #300 charged, #200 (weighed on the
+    Quick-Weigh after the card was made) held. Returns the rows view B still shows."""
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    rec, rows = _cancel_card(rig, end)
+    _quick_weigh(rig, 200, 130.0)
+    body = _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]}, rev=0)
+    assert [h["sid"] for h in body["held"]] == [200], body
+    return rows
+
+
+def test_a_view_drawn_before_a_hold_is_refused_and_charges_nothing(stamps, quiet_saves):
+    """FX7. On 89faa0b view B's Apply charged #200 its 12.40 g on top of the scale's
+    130 g and closed the card. Now the hold bumped the card's revision; B quotes the
+    old one and is refused, nothing charged, the card kept."""
+    rig = TwoHeadsOverHTTP()
+    rows = _view_a_holds(rig)
+    assert cancel_review_store.get_pending(XL, str(JOB))["rev"] == 1
+    body = _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]}, rev=0)
+    assert body["status"] == "error" and body.get("stale") is True, body
+    assert "drawn again" in body["msg"], body
+    assert rig.used(200) == 130.0, "charged on top of the scale"
+    kept = cancel_review_store.get_pending(XL, str(JOB))
+    assert kept is not None and kept["rev"] == 1 and [r["sid"] for r in kept["spools"]] == [200], kept
+
+
+def test_a_page_from_before_the_revision_is_told_to_reload(stamps, quiet_saves):
+    """FX7: an older page sends no revision for this card; it is told to reload (its
+    own redraw would never send one), nothing charged, the card kept."""
+    rig = TwoHeadsOverHTTP()
+    rows = _view_a_holds(rig)
+    body = _apply_card(rig, {"200": rows[200]["grams"]})
+    assert body["status"] == "error" and body.get("stale_page") is True and "Reload" in body["msg"], body
+    assert rig.used(200) == 130.0
+    assert cancel_review_store.get_pending(XL, str(JOB)) is not None
+
+
+def test_a_card_never_held_needs_no_revision():
+    """Passes on 89faa0b by design: a card no Apply kept with a hold has no revision,
+    so a page that sends none (or 0) applies it as before."""
+    rig = TwoHeadsOverHTTP()
+    _set_card()
+    body = _post_set(rig, 12.4)
+    assert body["status"] == "confirmed", body
+
+
+def _swapped_set_heads():
+    return [{"toolhead": "XL-1", "position": 0, "sid": 200, "sids": [200], "used": {"200": 100.0}},
+            {"toolhead": "XL-2", "position": 1, "sid": 300, "sids": [300], "used": {"300": 50.0}}]
+
+
+@pytest.mark.parametrize("how", ["cancel", "completion"])
+def test_a_no_spool_cards_set_spool_that_left_at_a_swap_and_was_weighed_after_is_held(stamps, quiet_saves, how):
+    """FX2. A one-tool print on XL-1 starts on #100; at a pause #100 is swapped for
+    #400 (recorded, with when the printer stopped); the print-end read names #200, so
+    the head is a set {#100, #400, #200} and, no other head having printed, the card a
+    no_spool card. #100 is weighed on the Quick-Weigh after its swap. On 89faa0b the
+    card kept no swap_left_at, and #100 was charged its share on top of the scale."""
+    import time as _t
+    rig = TwoHeadsOverHTTP()
+    for sid in (100, 400):
+        rig.sm.add("spool", sid, location="SHELF-1", used_weight=300.0, initial_weight=1000.0,
+                   archived=False, filament={"weight": 1000.0})
+    t_swap = _t.time() - 300
+    swap = [{"seq": 0, "position": 0, "progress": 0.4, "from_sid": 100, "to_sid": 400, "runout": True,
+             "at": t_swap}]
+    end_at = _t.time() - 120
+    with rig:
+        if how == "cancel":
+            print_deduct._stash_cancel_review_from_heads(
+                XL, "x.gcode", JOB, 0.5, "http://fb", False, {0: 12.4},
+                (_swapped_set_heads(), "print_end", "2026-11-22 20:00:00"), {"0": 100}, swap, end_at=end_at)
+        else:
+            print_deduct._route_completion_to_review(
+                XL, "x.gcode", JOB, {0: 12.4}, "http://fb", {0}, swap_log=swap, start_spools={"0": 100},
+                heads=_swapped_set_heads(), heads_source="print_end", heads_read_at="2026-11-22 20:00:00",
+                end_at=end_at)
+    rec = cancel_review_store.get_pending(XL, str(JOB))
+    assert rec["kind"] == "no_spool", rec["kind"]
+    assert [e["sid"] for e in rec["unresolved_sets"]["0"]] == [100, 400, 200], rec["unresolved_sets"]
+    assert rec["swap_left_at"] == {"100": t_swap} and rec["end_at_s"] == end_at, rec
+    stamps.note(100, "the Quick-Weigh", at=t_swap + 30)
+    rig.sm.records["spool"][100]["used_weight"] = 306.2           # the scale's reading
+    body = _apply_card(rig, None, charges=[{"position": 0, "sid": 100, "grams": 4.34},
+                                           {"position": 0, "sid": 400, "grams": 5.0},
+                                           {"position": 0, "sid": 200, "grams": 3.06}])
+    assert rig.used(100) == 306.2, "charged on top of the scale"
+    assert [h["sid"] for h in body["held"]] == [100], body
+    assert rig.used(400) == pytest.approx(305.0) and rig.used(200) == pytest.approx(103.06)
+    row = next(r for r in cancel_review_store.get_pending(XL, str(JOB))["spools"] if r["sid"] == 100)
+    assert row["prefill"] == 0.0 and "left XL-1 at a swap" in row["weighed"]["words"], row
+
+
+def test_a_change_the_card_showed_isnt_held_again_when_the_apply_goes_out_as_picks(stamps, quiet_saves):
+    """FX1. #200 was edited in Spoolman's own page after the print ended: the card
+    marks it (FCC can't tell the order) and fills in its 12.40 g. The person keeps
+    that and redirects XL-2's row to #400, so the Apply goes out as picks, which carry
+    no mark. On 89faa0b #200 was held again ('check its line'); the card showed the
+    change, so it is charged as typed."""
+    rig = TwoHeadsOverHTTP()
+    rig.sm.add("spool", 400, location="SHELF-1", used_weight=10.0, initial_weight=1000.0,
+               archived=False, filament={"weight": 1000.0})
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    rig.sm.records["spool"][200]["used_weight"] = 104.0
+    rec, rows = _cancel_card(rig, end)
+    assert rows[200]["weighed"]["known_order"] is False and rows[200]["prefill"] == rows[200]["grams"], rows[200]
+    body = _apply_card(rig, None, charges=[{"row": 200, "sid": 200, "grams": rows[200]["grams"]},
+                                           {"row": 300, "sid": 400, "grams": rows[300]["grams"]}])
+    assert body["status"] == "confirmed" and not body.get("held"), body
+    assert rig.used(200) == pytest.approx(104.0 + rows[200]["grams"])
+    assert rig.used(400) == pytest.approx(10.0 + rows[300]["grams"])
+    assert cancel_review_store.get_pending(XL, str(JOB)) is None
+
+
+def test_a_mark_from_before_the_full_review_isnt_held_again_after_fccs_own_charge(stamps, quiet_saves):
+    """FX4. A card made before 89faa0b marked #200 with no `ours`: after the print
+    ended FCC charged it another print's 5 g and it was edited in Spoolman's page, the
+    mark showing the whole 9 g. Nothing changes after that. On 89faa0b the Apply took
+    FCC's 5 g off its own side only and held #200; the card showed exactly this."""
+    import time as _t
+    rig = TwoHeadsOverHTTP()
+    end_at = _t.time() - 300
+    stamps.note_charge(200, 5.0, at=end_at + 30)
+    rig.sm.records["spool"][200]["used_weight"] = 109.0
+    rec = {"printer_name": XL, "job_id": str(JOB), "filename": "x.gcode", "progress": 0.5, "total_grams": 12.4,
+           "ambiguous": False, "kind": "partial", "created": "2026-11-22 00:00:00", "end_at_s": end_at,
+           "spools": [{"sid": 200, "toolhead": "XL-1", "position": 0, "grams": 12.4, "display": "#200",
+                       "color": "ff0000", "ambiguous": False, "prefill": 12.4,
+                       "weighed": {"words": "#200 on XL-1 changed weight after this print ended", "known_order": False,
+                                   "then": 100.0, "now": 109.0}}],
+           "heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": 200, "sids": [200], "used": {"200": 100.0}}]}
+    cancel_review_store.add_pending(rec)
+    body = _apply_card(rig, {"200": 12.4})
+    assert body["status"] == "confirmed" and not body.get("held"), body
+    assert rig.used(200) == pytest.approx(121.4)
+
+
+def test_a_mark_from_before_the_full_review_still_holds_a_later_change(stamps, quiet_saves):
+    """FX4's other side, red on no commit (89faa0b holds it too): the spool changed
+    again after that card was made, so the Apply holds it."""
+    import time as _t
+    rig = TwoHeadsOverHTTP()
+    end_at = _t.time() - 300
+    rig.sm.records["spool"][200]["used_weight"] = 130.0
+    rec = {"printer_name": XL, "job_id": str(JOB), "filename": "x.gcode", "progress": 0.5, "total_grams": 12.4,
+           "ambiguous": False, "kind": "partial", "created": "2026-11-22 00:00:00", "end_at_s": end_at,
+           "spools": [{"sid": 200, "toolhead": "XL-1", "position": 0, "grams": 12.4, "display": "#200",
+                       "color": "ff0000", "ambiguous": False, "prefill": 12.4,
+                       "weighed": {"words": "#200 on XL-1 changed weight after this print ended", "known_order": False,
+                                   "then": 100.0, "now": 104.0}}],
+           "heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": 200, "sids": [200], "used": {"200": 100.0}}]}
+    cancel_review_store.add_pending(rec)
+    body = _apply_card(rig, {"200": 12.4})
+    assert [h["sid"] for h in body["held"]] == [200], body
+    assert rig.used(200) == 130.0
