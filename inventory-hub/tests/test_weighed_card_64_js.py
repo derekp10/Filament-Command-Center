@@ -1126,6 +1126,40 @@ def test_weighed_spools_settled_beside_a_failed_write_are_named(tmp_path):
     assert res["notice"] == words and ["error", words] in res["toasts"], res
 
 
+CORNER_JS = r"""
+const out = {};
+for (const c of document.querySelectorAll('.fcc-cr-card')) {
+  // The element beside the title, found by its place, so the old corner (no class) is read too.
+  const t = c.querySelector('.fcc-cr-short-title');
+  const corner = [...t.parentNode.childNodes].filter((n) => n.nodeType === 1)[1];
+  out[c.dataset.job] = corner.textContent.replace(/\s+/g, ' ').trim();
+}
+return out;
+"""
+
+
+def test_a_retry_cards_corner_says_its_grams_are_unconfirmed(tmp_path):
+    """The picture walk (Derek, 2026-11-23, his pick "12.4g unconfirmed"): a failed
+    write's retry row may have landed, FCC checking before it tries again, so the card's
+    corner calls its grams unconfirmed, never uncharged. A card with other grams too
+    counts the two apart, and a card with no retry row keeps "uncharged". Red on
+    bfe09a9f ("12.4g uncharged" on a card whose banner says the write may have landed)."""
+    one = _shortfall_with_rows(
+        "o#shortfall", [_row(200, 12.4, attempt_used_before=100.0, attempt_used_after=112.4)], 12.4)
+    two = _shortfall_with_rows(
+        "t#shortfall", [_row(200, 12.4, attempt_used_before=100.0, attempt_used_after=112.4),
+                        _row(300, 3.6, toolhead="HEAD-2", position=1, attempt_used_before=50.0,
+                             attempt_used_after=53.6)], 16.0)
+    mixed = _shortfall_with_rows(
+        "m#shortfall", [_row(300, 12.4, toolhead="HEAD-2", position=1, prefill=0.0,
+                             weighed={"words": WORDS_KNOWN.replace("#200", "#300"), "known_order": True}),
+                        _row(200, 5.0, attempt_used_before=100.0, attempt_used_after=105.0)], 17.4)
+    plain = _shortfall_with_rows("p#shortfall", [], 3.6, lines={"1": 3.6})
+    res = run(tmp_path, RESPOND_JS + CORNER_JS, {"pending": [one, two, mixed, plain], "spools": SPOOLS})
+    assert res == {"o#shortfall": "12.4g unconfirmed", "t#shortfall": "16g unconfirmed",
+                   "m#shortfall": "12.4g uncharged; 5g unconfirmed", "p#shortfall": "3.6g uncharged"}, res
+
+
 def test_several_retry_rows_are_worded_for_several_writes(tmp_path):
     """UP6, red on 5af23516 ("The 9g picked for #200 and #300 weren't written (Spoolman
     didn't take the write) ... whether it landed"): several writes, and none of them

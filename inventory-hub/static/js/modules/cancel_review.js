@@ -1130,9 +1130,18 @@
         }
         return parts.join(' ');
     }
+    // The picture walk (Derek, 2026-11-23, "12.4g unconfirmed"): a failed write's retry
+    // row may have landed (FCC checks before it tries again), so the corner calls its
+    // grams unconfirmed, never uncharged; a card with other grams too counts the two
+    // apart, and a card with no retry row keeps "uncharged".
+    function shortfallCorner(rec, h) {
+        if (!h.retry.length) return `${fmtG(rec.total_grams)}g uncharged`;
+        const rest = Math.max(0, (Number(rec.total_grams) || 0) - h.retryG);
+        if (rest <= 0.05) return `${fmtG(h.retryG)}g unconfirmed`;
+        return `${fmtG(rest)}g uncharged; ${fmtG(h.retryG)}g unconfirmed`;
+    }
 
     function shortfallCardHtml(rec) {
-        const total = fmtG(rec.total_grams);
         const head = shortfallHead(rec);
         // A failed write's retry keeps its row (the picked spool) on the card.
         const rows = (rec.spools || []).map((s) => spoolRowHtml(s, rec)).join('');
@@ -1144,7 +1153,7 @@
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div class="fcc-cr-short-title" style="font-weight:bold;color:#ffd27a;">⚖️ ${esc(rec.printer_name)} — ${esc(shortfallTitle(rec, head))}</div>
-                    <div style="color:#9aa;font-size:0.92rem;">${total}g uncharged</div>
+                    <div class="fcc-cr-short-total" style="color:#9aa;font-size:0.92rem;">${esc(shortfallCorner(rec, head))}</div>
                 </div>
                 <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
                 <div class="fcc-cr-short-banner" style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
