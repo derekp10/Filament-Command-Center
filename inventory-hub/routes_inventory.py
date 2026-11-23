@@ -1294,6 +1294,8 @@ def api_edit_spool_wizard():
     # Group 64 fix review (FP2 / FP3): a used weight the page worked out as an addition,
     # and the used weight it was added to.
     additive = _additive_base(data)
+    # Group 64 full review (PI2): whether that used weight is a scale reading.
+    reading = _used_from_a_reading(data)
 
     if not spool_id:
         return jsonify({"success": False, "msg": "Missing Spool ID for edit session."})
@@ -1438,11 +1440,12 @@ def api_edit_spool_wizard():
                 stamped = False
                 with _weight_lock(spool_id, spool_data):
                     spool_res = spoolman_api.update_spool(spool_id, spool_data)
-                    if spool_res and "used_weight" in spool_data and additive is None:
+                    if spool_res and "used_weight" in spool_data and additive is None and reading:
                         # Group 64 fix review (FS3): inside the lock, so a print's charge
                         # waiting on this write finds the stamp with the new weight (it
                         # read the weight and no stamp, and held the print as one FCC
-                        # can't place). An addition is no weighing (FP3).
+                        # can't place). An addition is no weighing (FP3), nor a figure
+                        # typed in the box or a scan's digits left there (PI2).
                         weigh_stamps.note(spool_id, "Edit Spool", at=stamp_at)
                         stamped = True
                 if not spool_res:
@@ -1521,7 +1524,7 @@ def api_edit_spool_wizard():
                 # the pre snapshot — None when get_spool blipped, handled by helper).
                 if any(k in spool_data for k in ("used_weight", "initial_weight")):
                     _log_manual_weight_change(spool_id, original_spool, spool_res)
-                if "used_weight" in spool_data and not stamped and additive is None:
+                if "used_weight" in spool_data and not stamped and additive is None and reading:
                     # Group 64, Decision 1: when FCC weighed it, for a print charged later
                     # (here a write whose lost answer a read-back showed had landed; one
                     # that answered was stamped inside the lock, above).
@@ -1872,6 +1875,18 @@ def _additive_base(data):
     except (TypeError, ValueError, OverflowError):
         return None
     return g if math.isfinite(g) else None
+
+
+def _used_from_a_reading(data):
+    """Group 64 full review (PI2): whether Edit Spool's Total Used is a scale reading,
+    as the page says (`used_based_on: {mode: "reading"}`: the box still shows what Weigh
+    from Scale's Gross, Net or Set Used, or the Scale box, put there). Only then is the
+    save stamped as FCC's weighing (Decision 1). A figure typed in the box is no reading
+    FCC can place, and a spool label scanned into it left its digits there (ID:57 read
+    57): stamped, the print that ended before the save was held at 0 g as weighed. A
+    change FCC can't place keeps the print's grams on its card, loudly noted."""
+    based = data.get('used_based_on') if isinstance(data, dict) else None
+    return isinstance(based, dict) and str(based.get('mode') or '').lower() == 'reading'
 
 
 def _addition_base_moved(spool_id, original, base, dirty):

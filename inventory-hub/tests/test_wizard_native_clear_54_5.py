@@ -612,13 +612,35 @@ def test_weigh_from_scales_additive_mode_sends_the_records_own_used_weight(wiz):
     assert body["used_based_on"] == {"mode": "additive", "used": 100.37}, body.get("used_based_on")
 
 
-def test_a_reading_or_a_typed_total_used_sends_no_base(wiz):
-    """A Gross reading is a weighing, and a Total Used typed over an addition is the
-    person's own figure: neither carries a base (the server stamps them as before)."""
+def test_a_scale_reading_says_it_is_one(wiz):
+    """Group 64 full review (PI2), red on c1ee3e0 (it said nothing, and the server
+    stamped every used weight as a weighing, a label's digits scanned into the box
+    included). A Gross reading is a weighing: it says so, and the server stamps it."""
     _open_edit_used(wiz, 100.37)
     _weigh_from_scale(wiz, "gross")
     body = _save(wiz, EDIT)
-    assert "used_based_on" not in body and body["spool_data"]["used_weight"] == 130, body
+    assert body.get("used_based_on") == {"mode": "reading"} and body["spool_data"]["used_weight"] == 130, body
+
+
+def test_the_scale_boxs_gross_reading_says_it_is_one(wiz):
+    """PI2, red on c1ee3e0: the Scale box works Total Used out from a gross reading
+    (1066 g on the scale, 1000 g net, a 196 g spool: 130 g used)."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-scale").press_sequentially("1066")
+    assert _value(wiz, "#wiz-spool-used") == "130"
+    body = _save(wiz, EDIT)
+    assert body.get("used_based_on") == {"mode": "reading"} and body["spool_data"]["used_weight"] == 130, body
+
+
+def test_a_total_used_typed_by_hand_or_over_a_reading_says_nothing(wiz):
+    """PI2: a figure typed in Total Used (or a label's digits a scan left there) is no
+    reading FCC can place, so the server stamps no weighing for it (passes on c1ee3e0,
+    which sent nothing either)."""
+    _open_edit_used(wiz, 100.37)
+    _weigh_from_scale(wiz, "gross")
+    wiz.locator("#wiz-spool-used").fill("57")
+    body = _save(wiz, EDIT)
+    assert "used_based_on" not in body and body["spool_data"]["used_weight"] == 57, body
 
 
 def test_a_total_used_typed_over_an_addition_sends_no_base(wiz):

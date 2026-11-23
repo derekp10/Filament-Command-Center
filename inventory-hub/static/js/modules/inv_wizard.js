@@ -993,6 +993,10 @@ const wizardReset = () => {
     // server refuses it if a print's charge moved that weight meanwhile, and stamps
     // no weighing for it (typed grams are no reading of the scale).
     wizardState.usedAdd = null;
+    // Group 64 full review (PI2): {shown} when the used weight is a scale reading
+    // (Weigh from Scale's Gross, Net or Set Used, or the Scale box): only then does
+    // Edit Spool's Save tell FCC it weighed the spool.
+    wizardState.usedRead = null;
     // Group 54.8: nothing is shown from the filament until an open puts it there.
     wizardState.spoolPriceFrom = null;
     wizardState.spoolEmptyWeightFrom = null;
@@ -1545,6 +1549,8 @@ window.wizardCalcUsedWeight = () => {
     // reconciled (used + remaining == netWt).
     document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(used);
     document.getElementById('wiz-spool-remaining').value = window.fmtGramsPrecise(netWt - used);
+    wizardState.usedRead = { shown: document.getElementById('wiz-spool-used').value };      // PI2
+    wizardState.usedAdd = null;
 };
 
 window.wizardCalcUsedFromRemaining = () => {
@@ -1561,6 +1567,7 @@ window.wizardCalcUsedFromRemaining = () => {
     if (used < 0) used = 0;
     if (used > netWt) used = netWt;
 
+    wizardState.usedRead = null;      // PI2: a figure typed in Remaining is no reading
     document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(used);
     document.getElementById('wiz-spool-scale').value = '';
     window.wizardRecheckScale();
@@ -1594,6 +1601,7 @@ window.wizardCalcFromRecentUsage = () => {
 
     document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(newTotal);
     wizardState.usedAdd = recent ? { base: baseUsed, shown: document.getElementById('wiz-spool-used').value } : null;
+    wizardState.usedRead = null;      // PI2
     window.wizardCalcRemainingFromUsed();
 };
 
@@ -1679,11 +1687,14 @@ window.wizardOpenWeightEntry = () => {
                 setVal('wiz-spool-initial_weight', window.fmtGramsPrecise(payload.derived_initial));
                 setVal('wiz-spool-used', '0');
                 wizardState.usedAdd = null;
+                wizardState.usedRead = { shown: document.getElementById('wiz-spool-used').value };   // PI2
             } else {
                 setVal('wiz-spool-used', window.fmtGramsPrecise(payload.used_weight));
                 // FP2 / FP3: Additive adds grams to the used weight; any other mode is a reading.
                 wizardState.usedAdd = payload.mode === 'additive'
                     ? { base: usedBase, shown: document.getElementById('wiz-spool-used').value } : null;
+                wizardState.usedRead = payload.mode === 'additive'
+                    ? null : { shown: document.getElementById('wiz-spool-used').value };          // PI2
             }
             // Recompute remaining from the freshly-set net + used; clear the raw scale field.
             window.wizardCalcRemainingFromUsed();
@@ -4235,9 +4246,14 @@ window.wizardSubmit = async () => {
         }
         // Group 64 fix review (FP2 / FP3): a Total Used the box still shows as an
         // addition's result goes with the used weight it was added to.
-        const usedBasedOn = (isWizardEdit && 'used_weight' in sp_payload && wizardState.usedAdd
-            && getVal('wiz-spool-used') === wizardState.usedAdd.shown)
-            ? { mode: 'additive', used: wizardState.usedAdd.base } : null;
+        // Group 64 full review (PI2): one a scale reading set says so; a figure typed in
+        // the box (or a label's digits a scan left there) says nothing, and isn't stamped
+        // as FCC's weighing.
+        const usedSent = isWizardEdit && 'used_weight' in sp_payload;
+        const usedBasedOn = (usedSent && wizardState.usedAdd && getVal('wiz-spool-used') === wizardState.usedAdd.shown)
+            ? { mode: 'additive', used: wizardState.usedAdd.base }
+            : (usedSent && wizardState.usedRead && getVal('wiz-spool-used') === wizardState.usedRead.shown)
+                ? { mode: 'reading' } : null;
 
         // Purchase Link (Spool Extra)
         const purchaseUrl = document.getElementById('wiz-spool-purchase_url')?.value?.trim();
@@ -4552,6 +4568,7 @@ window.wizardSubmit = async () => {
             // Save in this session sends it only if it changes again.
             if (isWizardEdit) wizardState.usedShown = document.getElementById('wiz-spool-used').value;
             if (isWizardEdit) wizardState.usedAdd = null;
+            if (isWizardEdit) wizardState.usedRead = null;
             if (isWizardEdit && data.location_moved) {
                 // Group 40.7: where the Location move put it, in short arrows.
                 const lr = data.location_result;

@@ -646,3 +646,25 @@ def test_an_outcome_is_said_on_the_panel_while_another_card_keeps_it_up(tmp_path
     assert res["afterArm"]["shown"] is False, res
     assert res["afterDiscard"] == {"shown": True, "text": "Review discarded (no deduct)."}, res
     assert res["gone"] is True, res
+
+
+
+SETTLE_ROW_JS = r"""
+cardOf('s#shortfall').querySelector('.fcc-cr-confirm').click();
+await settle(120);
+return { posted: posts('/api/cancel_deduct/confirm'),
+         notice: ((cardOf('s#shortfall') || document).querySelector('.fcc-cr-card-notice') || {}).textContent || '' };
+"""
+
+
+def test_a_held_pick_left_at_0g_on_an_uncharged_grams_card_settles(tmp_path):
+    """FX6, red on c1ee3e0 ("Pick the spool that took these grams (or Discard)", and
+    nothing sent). The card an earlier Apply kept holds #300 as a row marked weighed,
+    0 g filled in: Apply sends settle_held."""
+    rec = _base("s#shortfall", "shortfall", rev=1, total_grams=12.4, unresolved_usage={},
+                spools=[_row(300, 12.4, toolhead="HEAD-2", position=1, prefill=0.0,
+                             weighed={"words": WORDS_KNOWN, "known_order": True})],
+                heads_at_end=[{"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}])
+    res = run(tmp_path, RESPOND_JS + SETTLE_ROW_JS, {"pending": [rec], "spools": SPOOLS})
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "s#shortfall", "settle_held": True,
+                              "charges": [], "rev": 1}], res

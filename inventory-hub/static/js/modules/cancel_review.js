@@ -1968,8 +1968,14 @@
                     const shortLines = Array.from(card.querySelectorAll('.fcc-cr-shortline'));
                     const pickedPos = new Set(charges.filter((c) => c.position != null).map((c) => String(c.position)));
                     const leftLines = shortLines.filter((ln) => !pickedPos.has(String(ln.dataset.pos)));
-                    const settleLeft = card.dataset.kind === 'shortfall' && leftLines.length > 0
-                        && !card.querySelector('.fcc-cr-grams')
+                    // Group 64 full review (FX6): a pick an earlier Apply held stays on the
+                    // card as a row marked weighed; left at 0 g it settles as such a line
+                    // does (any other row, a failed write's retry, still needs its Apply).
+                    const cardRows = Array.from(card.querySelectorAll('.fcc-cr-row'));
+                    const rowsAt0 = cardRows.every((r) => r.dataset.weighed === '1'
+                        && !(parseFloat((r.querySelector('.fcc-cr-grams') || {}).value) > 0));
+                    const settleLeft = card.dataset.kind === 'shortfall' && (leftLines.length > 0 || cardRows.length > 0)
+                        && rowsAt0
                         && leftLines.every((ln) => ln.dataset.weighed === '1'
                             && !(parseFloat((ln.querySelector('.fcc-cr-pgrams') || {}).value) > 0));
                     const settleHeld = settleLeft && !redirected && !Object.keys(updates).length;

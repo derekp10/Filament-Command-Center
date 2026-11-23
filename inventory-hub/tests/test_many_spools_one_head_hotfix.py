@@ -142,8 +142,10 @@ def _ledger():
     return print_deduct_ledger._load()[print_deduct_ledger._key(INDX, str(JOB))]
 
 
-def _seg(frm, to, runout):
-    return {"from": frm, "to": to, "runout": runout}
+def _seg(frm, to, runout, grams):
+    """A row's stretch; `grams` its own grams (Group 64 full review, FX5): a spool with
+    one stretch has all its row's grams in it."""
+    return {"from": frm, "to": to, "runout": runout, "grams": grams}
 
 
 # --------------------------------------------------------------------------- #
@@ -166,9 +168,9 @@ def test_two_run_outs_on_one_head_then_a_cancel_split_three_ways_from_one_downlo
             (300, "RCOI-5", round(part[4] - at25[4], 2)),
             (243, "RCOI-7", round(part[6], 2)), (231, "RCOI-8", round(part[7], 2))]
         by = {r["sid"]: r for r in rec["spools"]}
-        assert by[42]["segments"] == [_seg(None, 0.1, True)]
-        assert by[229]["segments"] == [_seg(0.1, 0.25, True)]
-        assert by[300]["segments"] == [_seg(0.25, 0.42, False)]
+        assert by[42]["segments"] == [_seg(None, 0.1, True, by[42]["grams"])]
+        assert by[229]["segments"] == [_seg(0.1, 0.25, True, by[229]["grams"])]
+        assert by[300]["segments"] == [_seg(0.25, 0.42, False, by[300]["grams"])]
         assert all(by[s]["auto_split"] for s in (42, 229, 300))
         # The stretches add up to the head's partial; each run-out spool also took the
         # path remnant.
@@ -199,7 +201,7 @@ def test_two_run_outs_on_one_head_then_a_completion_split_three_ways_from_one_do
         assert by[42]["grams"] == pytest.approx(round(at10[4] + PATH_G, 2))
         assert by[229]["grams"] == pytest.approx(round(at25[4] - at10[4] + PATH_G, 2))
         assert by[300]["grams"] == pytest.approx(round(84.28 - at25[4], 2))
-        assert by[300]["segments"] == [_seg(0.25, None, False)]
+        assert by[300]["segments"] == [_seg(0.25, None, False, by[300]["grams"])]
         assert by[243]["grams"] == pytest.approx(75.32) and by[231]["grams"] == pytest.approx(21.9)
         assert p.sm.patches == []                 # reviewed, never auto-applied
         body = _confirm({"updates": {str(r["sid"]): r["grams"] for r in rec["spools"]}})
@@ -224,7 +226,8 @@ def test_three_recorded_swaps_split_four_ways(logs):
     by = {r["sid"]: r for r in rec["spools"] if r["position"] == 4}
     assert sorted(by) == [42, 229, 300, 301]
     assert [by[s]["segments"] for s in (42, 229, 300, 301)] == [
-        [_seg(None, 0.1, True)], [_seg(0.1, 0.2, True)], [_seg(0.2, 0.3, True)], [_seg(0.3, 0.42, False)]]
+        [_seg(None, 0.1, True, by[42]["grams"])], [_seg(0.1, 0.2, True, by[229]["grams"])],
+        [_seg(0.2, 0.3, True, by[300]["grams"])], [_seg(0.3, 0.42, False, by[301]["grams"])]]
     assert by[300]["grams"] == pytest.approx(round(cut[2][4] - cut[1][4] + PATH_G, 2))
     assert by[301]["grams"] == pytest.approx(round(part[4] - cut[2][4], 2))
     assert sum(r["grams"] for r in by.values()) == pytest.approx(part[4] + 3 * PATH_G, abs=0.02)

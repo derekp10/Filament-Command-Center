@@ -1167,13 +1167,14 @@ def test_a_comment_only_edit_spool_save_writes_no_used_weight_and_stamps_nothing
 
 
 def test_an_edit_spool_used_weight_past_the_boxs_rounding_is_still_written(stamps, monkeypatch):
-    """A real change in Total Used is written and stamped, as before."""
+    """A real change in Total Used is written; a scale reading's is stamped (PI2)."""
     monkeypatch.setattr(routes_inventory, "_log_manual_weight_change", lambda *a, **k: None)
     rig = TwoHeadsOverHTTP()
     rig.sm.records["spool"][200]["used_weight"] = 100.37
     with rig:
         app_module.app.test_client().post("/api/edit_spool_wizard", json={
-            "spool_id": 200, "spool_data": {"used_weight": 100.5, "extra": {}}})
+            "spool_id": 200, "spool_data": {"used_weight": 100.5, "extra": {}},
+            "used_based_on": {"mode": "reading"}})
     assert rig.used(200) == 100.5 and stamps.last(200)["how"] == "Edit Spool"
 
 
@@ -1550,7 +1551,8 @@ def test_edit_spools_weight_save_is_stamped_while_it_holds_the_lock(stamps, monk
     monkeypatch.setattr(stamps, "note", _note)
     with rig:
         body = app_module.app.test_client().post("/api/edit_spool_wizard", json={
-            "spool_id": 200, "spool_data": {"used_weight": 130.0, "extra": {}}}).get_json()
+            "spool_id": 200, "spool_data": {"used_weight": 130.0, "extra": {}},
+            "used_based_on": {"mode": "reading"}}).get_json()
     assert body["success"] is True, body
     assert held == {"200": True}, held
 
@@ -2148,3 +2150,116 @@ def test_a_print_end_read_keeps_its_words():
     assert "changed weight after this print ended (1.00 g" in print_deduct._weighed_words(info, 3.0)
     info["source"] = "job_change"
     assert "changed weight after the next print started (1.00 g" in print_deduct._weighed_words(info, 3.0)
+
+
+def test_a_total_used_typed_or_scanned_in_edit_spool_is_no_weighing(stamps, warn_lines, monkeypatch):
+    """PI2, red on c1ee3e0 (stamped "Edit Spool", and the print held at 0 g as
+    weighed). A spool label scanned into Total Used left its digits there (ID:57
+    read 57), and Save wrote them. No scale reading set the box, so no weighing is
+    stamped: the print's card keeps its grams, loudly noted as a change FCC can't
+    place, never 0 g."""
+    monkeypatch.setattr(routes_inventory, "_log_manual_weight_change", lambda *a, **k: None)
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    with rig:
+        body = app_module.app.test_client().post("/api/edit_spool_wizard", json={
+            "spool_id": 200, "spool_data": {"used_weight": 57.0, "extra": {}}}).get_json()
+    assert body["success"] is True and rig.used(200) == 57.0, body
+    assert stamps.last(200) is None
+    _complete(rig, end)
+    card = cancel_review_store.get_pending(XL, f"{JOB}#shortfall")
+    cause = card["shortfall_causes"]["0"]
+    assert cause["why"] == "weighed" and cause["known_order"] is False, cause
+    assert card["shortfall_prefill"]["0"] == pytest.approx(12.4), card.get("shortfall_prefill")
+
+
+def test_a_cancel_with_no_print_end_read_on_mmu_slots_sharing_one_number_asks(warn_lines):
+    """SP4, red on c1ee3e0 (slot 1's #401 pre-filled with the head's whole grams, no
+    word of the shared Position). No print-end read and no start snapshot: the card
+    is built from a read of the heads now. MMU slots sharing one Position, each
+    holding a spool, give no row; the line says why and offers each slot's spool."""
+    rig = MmuPrinter(shared=True, loaded={"MMU-1": 401, "MMU-2": 402})
+    with rig, _download(_mmu_gcode({1: 5.0})):
+        print_deduct._create_pending_cancel_review(MMU, "m.gcode", JOB, 0.5, fb_url="http://fb")
+    rec = cancel_review_store.get_pending(MMU, str(JOB))
+    assert rec["kind"] == "no_spool" and rec["spools"] == [], rec
+    note = rec["unresolved_notes"]["0"]
+    assert note.startswith("MMU slots MMU-1 and MMU-2 share one Position and each holds a spool (#401 and #402)"), note
+    offered = {s for h in rec["heads_at_end"] for s in (h.get("sids") or [h.get("sid")])}
+    assert {401, 402} <= offered, rec["heads_at_end"]
+    assert rig.used(401) == 10.0 and rig.used(402) == 10.0
+
+
+def test_a_cancel_with_no_print_end_read_keeps_the_other_heads_rows_beside_the_mmu_line(warn_lines):
+    """SP4 on a card with rows: MMU-1 and MMU-2 share Position 0 (each holding a spool),
+    MMU-3 has Position 1 to itself. Position 1 keeps its row; position 0 is a line
+    with the note, and the log line says why it has no spool."""
+    rig = MmuPrinter(shared=True, loaded={"MMU-1": 401, "MMU-2": 402, "MMU-3": 403})
+    rig.pos["MMU-3"] = 1
+    with rig, _download(_mmu_gcode({0: 3.0, 1: 2.0})):
+        print_deduct._create_pending_cancel_review(MMU, "m.gcode", JOB, 0.5, fb_url="http://fb")
+    rec = cancel_review_store.get_pending(MMU, str(JOB))
+    assert [r["sid"] for r in rec["spools"]] == [403], rec["spools"]
+    assert list(rec["unresolved_usage"]) == ["0"], rec.get("unresolved_usage")
+    assert rec["unresolved_notes"]["0"].startswith("MMU slots MMU-1 and MMU-2 share one Position"), rec
+    shared = [h for h in rec["heads_at_end"] if h.get("mmu_shared")]
+    assert shared and shared[0]["sids"] == [401, 402], rec["heads_at_end"]
+    said = [m for m, lvl in warn_lines if "review partial deduct" in m]
+    assert len(said) == 1 and "whose MMU slots MMU-1 and MMU-2 share one Position" in said[0], warn_lines
+    assert "had no spool loaded" not in said[0], said
+
+
+def test_a_held_pick_on_an_uncharged_grams_card_settles_at_0g_and_names_its_own_head(stamps, quiet_saves):
+    """FX6, red on c1ee3e0. A completion left 12.40 g on an uncharged-grams card; the
+    person picks XL-2's #300, which was weighed after the card was made. The Apply
+    holds #300 (its words named the line's head, "#300 on XL-1"), and the card it
+    keeps has #300 as a row at 0 g, which the page wouldn't apply ("Pick the spool")
+    and the server wouldn't settle. Its words name #300's own head, and left at 0 g
+    it settles with nothing charged."""
+    import time as _t
+    rig = TwoHeadsOverHTTP()
+    key = f"{JOB}#shortfall"
+    cancel_review_store.add_pending({
+        "printer_name": XL, "job_id": key, "shortfall_of": str(JOB), "filename": "x.gcode", "progress": 1.0,
+        "total_grams": 12.4, "spools": [], "ambiguous": False, "kind": "shortfall", "rev": 0,
+        "unresolved_usage": {"0": 12.4}, "end_at_s": _t.time() - 300,
+        "shortfall_causes": {"0": {"why": "no_spool", "toolhead": "XL-1"}},
+        "heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": None, "sids": []},
+                         {"toolhead": "XL-2", "position": 1, "sid": 300, "sids": [300], "used": {"300": 50.0}}],
+        "created": "2026-11-22 00:00:00"})
+    _quick_weigh(rig, 300, 80.0)
+    with rig:
+        body = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": key, "rev": 0,
+            "charges": [{"position": 0, "sid": 300, "grams": 12.4}]}).get_json()
+    assert [h["sid"] for h in body["held"]] == [300], body
+    assert body["held"][0]["words"].startswith("#300 on XL-2 was weighed on the Quick-Weigh"), body["held"]
+    kept = cancel_review_store.get_pending(XL, key)
+    assert [r["sid"] for r in kept["spools"]] == [300] and kept["spools"][0]["prefill"] == 0.0, kept
+    with rig:
+        done = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": key, "rev": kept["rev"], "settle_held": True, "charges": []}).get_json()
+    assert done["status"] == "confirmed" and done.get("settled_held") is True, done
+    assert done["left_weighed"] == [{"line": "0", "sid": 300, "grams": 12.4, "known_order": True}], done
+    assert cancel_review_store.get_pending(XL, key) is None
+    assert rig.used(300) == 80.0
+
+
+def test_a_failed_writes_retry_row_never_settles_as_held(stamps, quiet_saves):
+    """FX6's guard: a retry row from a write that reported failure (43.6) is no held
+    pick: settle_held beside it is refused, the card kept (passes on c1ee3e0 by design)."""
+    key = f"{JOB}#shortfall"
+    cancel_review_store.add_pending({
+        "printer_name": XL, "job_id": key, "shortfall_of": str(JOB), "filename": "x.gcode", "progress": 1.0,
+        "total_grams": 12.4, "ambiguous": False, "kind": "shortfall", "rev": 0, "unresolved_usage": {},
+        "spools": [{"sid": 300, "toolhead": "XL-2", "position": 1, "grams": 12.4, "display": "#300",
+                    "color": "ff0000", "ambiguous": False, "attempt_used_before": 50.0,
+                    "attempt_used_after": 62.4}],
+        "heads_at_end": [], "created": "2026-11-22 00:00:00"})
+    rig = TwoHeadsOverHTTP()
+    with rig:
+        body = app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": key, "rev": 0, "settle_held": True, "charges": []}).get_json()
+    assert body["status"] == "error" and not body.get("settled_held"), body
+    assert cancel_review_store.get_pending(XL, key) is not None

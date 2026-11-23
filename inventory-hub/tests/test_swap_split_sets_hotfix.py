@@ -152,8 +152,8 @@ def test_job_1141_with_a_run_out_recorded_at_19_percent_is_split_at_the_swap(log
     by = {r["sid"]: r for r in rec["spools"]}
     # #42 printed up to the swap (30 g) and lost the path remnant to the run-out;
     # #229 printed from the swap to the cancel.
-    assert by[42]["segments"] == [{"from": None, "to": 0.19, "runout": True}]
-    assert by[229]["segments"] == [{"from": 0.19, "to": 0.42, "runout": False}]
+    assert by[42]["segments"] == [{"from": None, "to": 0.19, "runout": True, "grams": by[42]["grams"]}]
+    assert by[229]["segments"] == [{"from": 0.19, "to": 0.42, "runout": False, "grams": by[229]["grams"]}]
     assert by[42]["runout"] is True and by[229]["runout"] is False
     assert by[42]["auto_split"] is True and by[229]["auto_split"] is True
     assert not rec.get("unresolved_usage") and not rec.get("unresolved_sets"), rec
@@ -211,7 +211,7 @@ def test_a_completion_split_downloads_the_print_once(logs):
     by = {r["sid"]: r for r in rec["spools"]}
     assert by[42]["grams"] == pytest.approx(round(cum, 2))
     assert by[229]["grams"] == pytest.approx(round(84.28 - cum, 2))
-    assert by[229]["segments"] == [{"from": 0.19, "to": None, "runout": False}]
+    assert by[229]["segments"] == [{"from": 0.19, "to": None, "runout": False, "grams": by[229]["grams"]}]
     assert by[243]["grams"] == pytest.approx(75.32) and by[231]["grams"] == pytest.approx(21.9)
     assert p.sm.patches == []
 
@@ -515,3 +515,71 @@ def test_a_swap_chain_that_follows_on_still_splits():
     log[1]["from_sid"] = 500
     assert print_deduct._chain_break(42, log) == (1, 229)
     assert print_deduct._split_start_check(42, log) == "start_differs"
+
+
+
+def test_a_spool_weighed_while_off_its_head_then_put_back_is_filled_in_only_after(logs):
+    """Group 64 full review (FX5), red on c1ee3e0 (#42 filled in with both its stretches,
+    64.28 g, no mark: 40 g of them charged on top of the scale). #42 runs RCOI-5 to 50%;
+    at a pause it comes off and is weighed on the Quick-Weigh (the scale counts its
+    40 g); #229 runs to 70%; at a second pause #42 goes back on, and the print is
+    cancelled at 90%. Only #42's stretch after it went back on is filled in, and its
+    row says why."""
+    import time as _t
+    import weigh_stamps
+    with Indx() as p, _measured(USAGE, {0.5: {4: 40.0, 6: 30.0, 7: 9.0}, 0.7: {4: 60.0, 6: 45.0, 7: 13.0}}):
+        _tick("PRINTING", _job(0.10))
+        _tick("ATTENTION", _job(0.50))
+        p.load_229()
+        p.sm.spools[42]["used_weight"] = 740.0            # weighed off the head: the scale counts its 40 g
+        _tick("PRINTING", _job(0.50))
+        _tick("ATTENTION", _job(0.70))
+        p.at["RCOI-5"] = [42]
+        p.sm.spools[42]["location"] = "RCOI-5"
+        p.sm.spools[229]["location"] = "SHELF-1"
+        _tick("PRINTING", _job(0.70))
+        log = print_monitor._PRINT_TRACKER[INDX]["swap_log"]
+        assert [(e["from_sid"], e["to_sid"]) for e in log] == [(42, 229), (229, 42)], log
+        now = _t.time()
+        log[0]["at"], log[1]["at"] = now - 200, now - 100   # when the printer stopped for each
+        weigh_stamps.note(42, "the Quick-Weigh", at=now - 150)
+        _tick("PRINTING", _job(0.90))
+        _tick("STOPPED")
+    rec = _rec()
+    row = next(r for r in rec["spools"] if r["sid"] == 42)
+    assert [(s["from"], s["to"], s["grams"]) for s in row["segments"]] == [(None, 0.5, 40.0), (0.7, 0.9, 24.28)], row
+    assert row["grams"] == pytest.approx(64.28) and row["prefill"] == pytest.approx(24.28), row
+    words = row["weighed"]["words"]
+    assert words.startswith("#42 left RCOI-5 at a swap"), words
+    assert "before it went back on" in words and "already counted its 40.00 g before that swap" in words, words
+    assert "only the 24.28 g it printed after going back on is filled in" in words, words
+    assert row["weighed"]["known_order"] is True
+    assert "weighed" not in next(r for r in rec["spools"] if r["sid"] == 229)
+
+
+@pytest.mark.parametrize("weighed_at", [-250, -50], ids=["before_it_left", "after_it_went_back"])
+def test_a_spool_weighed_outside_its_time_off_the_head_is_no_weighing_while_off(logs, weighed_at):
+    """FX5's other side (passes on c1ee3e0 by design): a weighing before the swap that
+    took #42 off is no reading of what it printed before that swap, and one after it
+    went back on (its used weight unchanged at the print's end) isn't one made while
+    it was off: the row is filled in whole, as a spool weighed at no such moment is."""
+    import time as _t
+    import weigh_stamps
+    with Indx() as p, _measured(USAGE, {0.5: {4: 40.0, 6: 30.0, 7: 9.0}, 0.7: {4: 60.0, 6: 45.0, 7: 13.0}}):
+        _tick("PRINTING", _job(0.10))
+        _tick("ATTENTION", _job(0.50))
+        p.load_229()
+        _tick("PRINTING", _job(0.50))
+        _tick("ATTENTION", _job(0.70))
+        p.at["RCOI-5"] = [42]
+        p.sm.spools[42]["location"] = "RCOI-5"
+        p.sm.spools[229]["location"] = "SHELF-1"
+        _tick("PRINTING", _job(0.70))
+        log = print_monitor._PRINT_TRACKER[INDX]["swap_log"]
+        now = _t.time()
+        log[0]["at"], log[1]["at"] = now - 200, now - 100
+        weigh_stamps.note(42, "the Quick-Weigh", at=now + weighed_at)
+        _tick("PRINTING", _job(0.90))
+        _tick("STOPPED")
+    row = next(r for r in _rec()["spools"] if r["sid"] == 42)
+    assert "weighed" not in row and row["grams"] == pytest.approx(64.28), row
