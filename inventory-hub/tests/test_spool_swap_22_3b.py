@@ -68,9 +68,15 @@ def test_is_sid_swap_predicate():
 
 
 def test_record_clean_change_appends_event():
+    import time as _t
     entry = {"start_spools": {"0": 100}}
+    before = _t.time()
     n = app_module._record_swap_events(entry, {0: 200}, 0.5)
     assert n == 1
+    # Group 64 fix review 2 (CS1): each event keeps when the print resumed (it is
+    # recorded at the resume), which ends the time the spool it took off was off a head.
+    back_at = entry["swap_log"][0].pop("back_at")
+    assert before <= back_at <= _t.time(), back_at
     # runout defaults False (feature/runout-auto-split 2026-07-03: a manual/PAUSED swap,
     # not an ATTENTION runout, so no sensor→nozzle path remnant is charged).
     assert entry["swap_log"] == [
