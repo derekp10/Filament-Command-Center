@@ -244,7 +244,7 @@ else:
 # directory, which from inventory-hub/ (the canonical run) is the dev
 # container's own bind-mounted log. Before Group 45.9 it opened the file at
 # import, so pytest held it open for the whole run: Windows can't rename a file
-# another process holds, so the container's 1 MB rollover failed and Python's
+# another process holds, so the container's rollover (then at 1 MB) failed and Python's
 # handler DROPPED the container's records until the host happened to rotate
 # (dev's hub.log.1 and .5 with no .2-.4 between them are what those failed
 # rollovers leave). Since 45.9 it opens nothing until its first log line

@@ -96,7 +96,7 @@ def test_only_timeouts_after_the_offset_and_to_dev_spoolman_count(tmp_path):
 
 
 def test_a_log_that_rotated_during_the_test_is_read_across_both_files(tmp_path):
-    """FCC's handler rotates hub.log at ~1 MB. After a rotation the file is
+    """FCC's handler rotates hub.log at 5 MB (1 MB before Group 65.4). After a rotation the file is
     smaller than where the test started; the rest of the old file is hub.log.1."""
     log = tmp_path / "hub.log"
     before = (TIMEOUT * 7 + OTHER * 50).encode("utf-8")     # logged before the test began
@@ -217,7 +217,7 @@ def test_the_host_test_process_holds_no_handle_on_hub_log():
     """Review test-infra-1: state.py's RotatingFileHandler logs to 'hub.log'
     relative to the working directory, which from inventory-hub/ is the dev
     container's own log. It used to open that file at import, and held by the
-    host, the container's 1 MB rollover failed on Windows and the container's
+    host, the container's rollover (then at 1 MB) failed on Windows and the container's
     log records were dropped. Since Group 45.9 it opens nothing before its
     first log line (delay=True, pinned in test_host_data_dir_45_9.py), and
     conftest still detaches it, so no host line ever reaches that log."""
