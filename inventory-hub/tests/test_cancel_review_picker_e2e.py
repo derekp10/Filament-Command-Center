@@ -549,12 +549,28 @@ def test_a_double_click_on_confirm_never_applies_the_next_card(page: Page, base_
     Four cards of one shape fill the panel, so its body scrolls and keeps its height:
     the first press of a double click applies J-1, its card goes, J-2 slides up
     under the pointer, and the second press applied J-2, unread. The removal now
-    shields that press, and Confirm refuses a click with detail 2 besides."""
-    cards = [_dbl_card(f"J-{i}", 90 + i) for i in range(1, 5)]
+    shields that press, and Confirm refuses a click with detail 2 besides.
+
+    Since the full review's PI1 (c1ee3e0e) a Confirm that leaves cards up says its outcome
+    on the panel's own line, above the cards, and the line's first showing grows the panel
+    (centred), so the cards move down about 20 px and J-2's Confirm ends below the pointer.
+    So J-0 is confirmed first, with one press, and its outcome puts the line up: the double
+    click's first press clears it and its answer puts it back at the same height, so J-2
+    lands exactly where J-1 was, as it does for a person confirming one card after another
+    (the full sweep of 2026-11-23 found this test stopped at its precondition)."""
+    cards = [_dbl_card(f"J-{i}", 90 + i) for i in range(5)]
     be = _open(page, base_url, reset_dom_state_js, cards, pending_after_confirm=cards[1:],
                confirm_answer={"status": "confirmed", "errors": [],
                                "applied": [{"sid": 91, "grams": 2.5, "remaining": 897.5}]})
     page.wait_for_timeout(400)
+    page.locator('.fcc-cr-card[data-job="J-0"] .fcc-cr-confirm').click()
+    _until(page, lambda: len(be.confirms) == 1, 5_000, "J-0's Apply never posted")
+    page.wait_for_function("""() => !document.querySelector('.fcc-cr-card[data-job="J-0"]')
+        && (document.getElementById('fcc-cr-panel-notice').textContent || '').trim() !== ''""", timeout=5_000)
+    be.pending_after_confirm = cards[2:]
+    # J-0's removal shields the next press at its spot for 700 ms: this double click is
+    # a new one.
+    page.wait_for_timeout(900)
     btn = page.locator('.fcc-cr-card[data-job="J-1"] .fcc-cr-confirm')
     btn.scroll_into_view_if_needed()
     box = btn.bounding_box()
@@ -571,4 +587,4 @@ def test_a_double_click_on_confirm_never_applies_the_next_card(page: Page, base_
     page.mouse.down(click_count=2)
     page.mouse.up(click_count=2)
     page.wait_for_timeout(800)
-    assert [c.get("job_id") for c in be.confirms] == ["J-1"], be.confirms
+    assert [c.get("job_id") for c in be.confirms] == ["J-0", "J-1"], be.confirms

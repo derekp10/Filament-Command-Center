@@ -8,6 +8,8 @@ Reads from existing extras:
 """
 from __future__ import annotations
 
+import time
+
 import pytest
 import requests
 from playwright.sync_api import Page, expect
@@ -76,24 +78,39 @@ def _get_sample(api_base_url: str, fid):
     return _norm_sample((data.get("extra") or {}).get("sample_printed"))
 
 
-def _set_sample(api_base_url: str, fid, value):
+def _set_sample(api_base_url: str, fid, value) -> bool:
     """Set (True/False) or clear (None) sample_printed via the same endpoint the
     UI uses, merging against the live extra so siblings survive. A clear sends
     the delete sentinel, as the UI does: a key left out is KEPT (the server's
     read-merge, and Spoolman 0.26+ itself), so popping it left the test's value
-    on the dev filament (2026-10-21)."""
-    r = requests.get(f"{api_base_url}/api/filaments/{fid}", timeout=10)
-    data = (r.json() or {}).get("data") or {}
-    extra = dict(data.get("extra") or {})
-    if value is None:
-        extra["sample_printed"] = "__FCC_DELETE_EXTRA__"
-    else:
-        extra["sample_printed"] = bool(value)
-    requests.post(
-        f"{api_base_url}/api/update_filament",
-        json={"id": fid, "data": {"extra": extra}},
-        timeout=10,
-    )
+    on the dev filament (2026-10-21).
+
+    True once a read shows the value there. It tries for about 30 s: on the full
+    sweep of 2026-11-23 dev Spoolman refused a connection 300 ms after the test's own
+    write, the one try's answer went unread, and dev's filament #1 (a copy of one
+    of Derek's) kept the test's "true"."""
+    want = {True: "true", False: "false"}.get(value) if value is not None else None
+    for attempt in range(6):
+        if attempt:
+            time.sleep(5)
+        try:
+            r = requests.get(f"{api_base_url}/api/filaments/{fid}", timeout=10)
+            data = (r.json() or {}).get("data") or {}
+            extra = dict(data.get("extra") or {})
+            if value is None:
+                extra["sample_printed"] = "__FCC_DELETE_EXTRA__"
+            else:
+                extra["sample_printed"] = bool(value)
+            requests.post(
+                f"{api_base_url}/api/update_filament",
+                json={"id": fid, "data": {"extra": extra}},
+                timeout=10,
+            )
+            if _get_sample(api_base_url, fid) == want:
+                return True
+        except (requests.RequestException, ValueError):
+            pass
+    return False
 
 
 @pytest.mark.usefixtures("require_server")
@@ -154,4 +171,9 @@ def test_filament_sample_status_inline_toggle_round_trip(page: Page, base_url: s
         # And the write actually persisted to Spoolman.
         assert _get_sample(api_base_url, fid) == target, "sample_printed did not persist via the API"
     finally:
-        _set_sample(api_base_url, fid, {"true": True, "false": False}.get(original))
+        restored = _set_sample(api_base_url, fid, {"true": True, "false": False}.get(original))
+    # Reached only when the test's body passed (a red from it goes on past the finally),
+    # so it never hides one.
+    assert restored, (f"dev's filament #{fid} was left with sample_printed {target!r} (it was "
+                      f"{original or 'not set'}): FCC or Spoolman didn't take the restore for 30 s. "
+                      "Put it back in the filament window's Swatch Printed.")
