@@ -552,3 +552,97 @@ def test_every_cards_apply_sends_its_revision(tmp_path):
     res = run(tmp_path, RESPOND_JS + REV_JS, {"pending": [held, plain], "spools": SPOOLS})
     revs = {str(b.get("job_id")): b.get("rev") for b in res["posted"]}
     assert revs == {"p": 1, "n": 0}, res["posted"]
+
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 full review, chunk 2: the held card's head words (WD1), a weighed   #
+# row's preview (WD6), an outcome said on the panel (PI1)                      #
+# --------------------------------------------------------------------------- #
+
+HEAD_JS = r"""
+const out = {};
+for (const j of ['k', 'u', 'x#shortfall']) {
+  const c = cardOf(j);
+  out[j] = { title: c.querySelector('.fcc-cr-short-title').textContent.replace(/\s+/g, ' ').trim(),
+             banner: c.querySelector('.fcc-cr-short-banner').textContent.replace(/\s+/g, ' ').trim() };
+}
+return out;
+"""
+
+
+def test_a_card_of_held_lines_says_why_they_are_held_not_that_they_went_nowhere(tmp_path):
+    """WD1, red on 1c5a85f ("12.4g went to no spool", and a banner sending the person
+    to look for a joined spool). A card whose only line FCC held on purpose says the
+    grams are held and why; a card with other lines too counts them apart."""
+    res = run(tmp_path, RESPOND_JS + HEAD_JS,
+              {"pending": [_held("k", True), _held("u", False), _mixed("x#shortfall")], "spools": SPOOLS})
+    assert res["k"]["title"] == "⚖️ TESTER — 12.4g held: #200 was weighed after this print", res["k"]
+    assert res["k"]["banner"].startswith("FCC held these grams instead of charging them: #200 was weighed"), res["k"]
+    assert "went to no spool" not in res["k"]["banner"] and "joined spool" not in res["k"]["banner"], res["k"]
+    assert res["u"]["title"] == "⚖️ TESTER — 12.4g held: #200 changed weight after this print", res["u"]
+    assert "can't tell whether the scale counted this print" in res["u"]["banner"], res["u"]
+    assert res["x#shortfall"]["title"] == "⚖️ TESTER — 3g went to no spool; 12.4g held", res["x#shortfall"]
+    assert "but 3g went to no spool" in res["x#shortfall"]["banner"], res["x#shortfall"]
+    assert "The 12.4g on #200 is held, not charged: it was weighed after this print ended" \
+        in res["x#shortfall"]["banner"], res["x#shortfall"]
+
+
+PREVIEW_JS = r"""
+const c = cardOf('w');
+return { preview: c.querySelector('.fcc-cr-preview[data-sid="200"]').textContent.replace(/\s+/g, ' ').trim(),
+         plain: c.querySelector('.fcc-cr-preview[data-sid="300"]').textContent.replace(/\s+/g, ' ').trim(),
+         box: c.querySelector('.fcc-cr-grams[data-sid="200"]').value };
+"""
+
+
+def test_a_weighed_rows_preview_follows_the_0g_filled_in(tmp_path):
+    """WD6, red on 1c5a85f ("0 → 887.6g": the spool losing the print the note says it
+    won't be charged). A plain row keeps the server's figure."""
+    rec = _base("w", "partial", total_grams=16.0,
+                spools=[_row(200, 12.4, prefill=0.0, weighed={"words": WORDS_KNOWN, "known_order": True}),
+                        _row(300, 3.6, toolhead="HEAD-2", position=1)],
+                heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                              {"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}])
+    res = run(tmp_path, RESPOND_JS + PREVIEW_JS, {"pending": [rec], "spools": SPOOLS})
+    assert res["box"] == "0" and res["preview"] == "→ 900g", res
+    assert res["plain"] == "→ 896.4g", res
+
+
+PANEL_JS = r"""
+const notice = () => {
+  const n = document.getElementById('fcc-cr-panel-notice');
+  return { shown: n.style.display !== 'none', text: n.textContent };
+};
+cardOf('a').querySelector('.fcc-cr-confirm').click();
+await settle(120);
+const afterConfirm = notice();
+const __base3 = window.__respond;
+window.__respond = (url, method, body) => (url.startsWith('/api/cancel_deduct/dismiss')
+    ? { body: { status: 'dismissed' } } : __base3(url, method, body));
+const btn = cardOf('b').querySelector('.fcc-cr-discard');
+btn.click();                              // arms it: a press clears the last outcome
+const afterArm = notice();
+await settle(750);
+btn.click();
+await settle(60);
+return { afterConfirm, afterArm, afterDiscard: notice(), gone: !cardOf('a') && !cardOf('b') };
+"""
+
+
+def test_an_outcome_is_said_on_the_panel_while_another_card_keeps_it_up(tmp_path):
+    """PI1, red on 1c5a85f (the words were only a toast, drawn under the panel, and the
+    card that could carry them was gone): Confirm's words go on the panel's own line
+    while the next card keeps it up, a press clears them, and a Discard says its own."""
+    cards = [_base(j, "partial", total_grams=12.4,
+                   spools=[_row(200, 12.4, prefill=0.0, weighed={"words": WORDS_KNOWN, "known_order": True})],
+                   heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}])
+             for j in ("a", "b", "c")]
+    confirm = {"status": "confirmed", "applied": [], "errors": [], "shortfall_g": 0.0, "settled_unsure": False,
+               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}]}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + PANEL_JS,
+              {"pending": cards, "spools": SPOOLS, "confirm": confirm})
+    assert res["afterConfirm"] == {"shown": True, "text": "Left 12.4g uncharged on #200: it was weighed after the print."}, res
+    assert res["afterArm"]["shown"] is False, res
+    assert res["afterDiscard"] == {"shown": True, "text": "Review discarded (no deduct)."}, res
+    assert res["gone"] is True, res

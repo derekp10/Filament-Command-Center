@@ -1121,8 +1121,8 @@ def test_a_save_between_the_check_and_the_charge_is_held_not_charged_on_top(stam
     end["at_s"] -= 60
     real = print_deduct._weighed_since_end
 
-    def _check_then_weigh(heads, end_at):
-        out = real(heads, end_at)
+    def _check_then_weigh(heads, end_at, *rest):
+        out = real(heads, end_at, *rest)
         app_module.app.test_client().post("/api/spool/update", json={
             "id": 200, "updates": {"used_weight": 130.0},
             "based_on": {"mode": "set_used", "screen": "quick"}})
@@ -1478,8 +1478,8 @@ def test_a_weigh_save_is_stamped_before_a_waiting_charge_reads_it(stamps, warn_l
     real_check, real_update = print_deduct._weighed_since_end, _sm.update_spool
     real_changed = print_deduct._changed_since_check
 
-    def _check(heads, end_at):
-        out = real_check(heads, end_at)      # nothing changed yet: passes
+    def _check(heads, end_at, *rest):
+        out = real_check(heads, end_at, *rest)      # nothing changed yet: passes
         checked.set()
         save_has_lock.wait(5)                # the save now holds #200's lock
         return out
@@ -2078,3 +2078,73 @@ def test_a_mark_from_before_the_full_review_still_holds_a_later_change(stamps, q
     body = _apply_card(rig, {"200": 12.4})
     assert [h["sid"] for h in body["held"]] == [200], body
     assert rig.used(200) == 130.0
+
+
+def test_the_uncharged_line_beside_a_held_head_counts_only_its_own_grams(stamps, warn_lines):
+    """WD5, red on 1c5a85f ("16.00g ... wasn't deducted (no spool on XL-2)"). XL-1's
+    #200 is weighed after the print ended (held, 12.40 g) and XL-2 had no spool
+    (3.60 g): the held line says not to charge its grams, so the next line asks a
+    spool only for XL-2's 3.60 g."""
+    rig = TwoHeadsOverHTTP()
+    rig.sm.records["spool"][300]["location"] = "SHELF-1"
+    end = _end_read(rig)
+    rig.sm.records["spool"][200]["used_weight"] = 130.0
+    stamps.note(200, "the Quick-Weigh", at=end["at_s"] + 60)
+    _complete(rig, end)
+    assert rig.used(200) == 130.0
+    other = [m for m, lvl in warn_lines if lvl == "WARNING" and "wasn't deducted" in m]
+    assert len(other) == 1, warn_lines
+    assert other[0].startswith("⚠️ XL: 3.60g of 'x.gcode' wasn't deducted (no spool on XL-2)"), other
+
+
+def test_a_completion_on_mmu_slots_sharing_one_number_says_so_in_its_log_line(warn_lines):
+    """WD3, red on 1c5a85f ("toolhead MMU-1 has 5 spools assigned ... can't tell which
+    is loaded"): the print-end read names every sharing slot's spool on MMU-1's head,
+    and the apply's line blamed MMU-1 for all five. It names the slots and the card."""
+    rig = MmuPrinter(shared=True)
+    _mmu_complete(rig, {2: 5.0})
+    assert not [m for m, _l in warn_lines if "spools assigned" in m], warn_lines
+    said = [m for m, lvl in warn_lines if lvl == "WARNING" and "share Position 0 (T0)" in m]
+    assert len(said) == 1, warn_lines
+    assert said[0].startswith("⚠️ MMU TEST: MMU slots MMU-1, MMU-2, MMU-3, MMU-4 and MMU-5 share Position 0"), said
+    assert "5.00g not deducted: pick the spool it used on the 🛑 Review card" in said[0], said
+
+
+def test_a_weighing_after_a_park_read_says_after_the_printer_paused(stamps):
+    """WD2, red on 1c5a85f ("after this print ended (at 15:00)"): a cancel from the
+    printer's prompt takes the park read, so the moment is when the printer paused,
+    and a weighing during the pause was said to be after the print ended."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["source"] = "park"
+    end["at_s"] -= 60
+    rig.sm.records["spool"][200]["used_weight"] = 130.0
+    stamps.note(200, "the Quick-Weigh", at=end["at_s"] + 30)
+    rec, rows = _cancel_card(rig, end)
+    words = rows[200]["weighed"]["words"]
+    assert "after the printer paused (at " in words and "after this print ended" not in words, words
+    assert rec["heads_source"] == "park", rec.get("heads_source")
+
+
+def test_a_change_after_a_restart_read_says_after_fcc_restarted(stamps, warn_lines):
+    """WD2: a completion read at FCC's restart names the restart, never the print's end."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["source"] = "restart"
+    rig.sm.records["spool"][200]["used_weight"] = 104.0           # Spoolman's own page: no stamp
+    _complete(rig, end)
+    held = [m for m, lvl in warn_lines if lvl == "WARNING" and "#200 on XL-1 changed weight" in m]
+    assert len(held) == 1, warn_lines
+    assert "changed weight after FCC restarted after the print (at " in held[0], held
+    assert "after this print ended" not in held[0], held
+
+
+def test_a_print_end_read_keeps_its_words():
+    """A print-end read (or none) keeps its words, as on 1c5a85f; a job-change read
+    names the next print's start (WD2, red on 1c5a85f at that line)."""
+    info = {"sid": 5, "toolhead": "H-1", "then": 1.0, "now": 2.0, "ours": 0.0, "stamp": None, "ended": None}
+    assert "changed weight after this print ended (1.00 g" in print_deduct._weighed_words(info, 3.0)
+    info["source"] = "print_end"
+    assert "changed weight after this print ended (1.00 g" in print_deduct._weighed_words(info, 3.0)
+    info["source"] = "job_change"
+    assert "changed weight after the next print started (1.00 g" in print_deduct._weighed_words(info, 3.0)

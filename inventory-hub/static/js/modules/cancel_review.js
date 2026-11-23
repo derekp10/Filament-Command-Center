@@ -814,6 +814,11 @@
         // Decision 1: a spool weighed (or changed) after the print ended.
         const weighed = s.weighed && s.weighed.words ? s.weighed : null;
         const boxValue = weighed && s.prefill != null ? s.prefill : s.grams;
+        // Group 64 full review (WD6): a weighed row's box holds what FCC filled in (0 g
+        // when the scale counted the print), so its preview is drawn from that, never
+        // from the charge's `remaining_after`, which showed the spool losing the print.
+        const after = !known ? null
+            : (weighed ? Math.max(0, Number(s.remaining_before) - (Number(boxValue) || 0)) : s.remaining_after);
         return `
             <div class="fcc-cr-row" data-sid="${s.sid}"${weighed ? ' data-weighed="1"' : ''}
                  style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;
@@ -837,7 +842,7 @@
                 </div>
                 <div class="fcc-cr-preview" data-sid="${s.sid}"
                      style="width:104px;flex:none;text-align:right;color:#9fe0b0;font-size:0.95rem;">
-                    → ${known ? `${fmt(s.remaining_after)}g` : '?'}
+                    → ${known ? `${fmt(after)}g` : '?'}
                 </div>
                 <div class="fcc-cr-redirect" style="flex-basis:100%;display:flex;align-items:center;gap:6px;
                             padding-left:24px;color:#9aa;font-size:0.88rem;">
@@ -1014,8 +1019,63 @@
         }).join('') + CARD_NOTICE;
     }
 
+    // Group 64 full review (WD1): what an uncharged-grams card says at its head. A
+    // line FCC held on purpose (Decision 1: its spool weighed, or changed weight,
+    // after the print ended) is no grams that "went to no spool": a card of only such
+    // lines says why they are held, and a card with other lines too counts them apart.
+    function shortfallHead(rec) {
+        const un = rec.unresolved_usage || {};
+        const causes = rec.shortfall_causes || {};
+        const held = Object.keys(un).filter((p) => (causes[p] || {}).why === 'weighed');
+        const heldG = held.reduce((a, p) => a + (Number(un[p]) || 0), 0);
+        const total = Number(rec.total_grams) || 0;
+        const sids = held.map((p) => causes[p].sid).filter((s) => s != null);
+        return {
+            held, heldG, otherG: Math.max(0, total - heldG), sids,
+            who: spoolListWords(sids), many: sids.length > 1,
+            known: held.every((p) => !!causes[p].known_order),
+            onlyHeld: held.length > 0 && held.length === Object.keys(un).length && !(rec.spools || []).length,
+        };
+    }
+    function shortfallTitle(rec, h) {
+        const total = fmtG(rec.total_grams);
+        if (h.onlyHeld) {
+            return `${fmtG(h.heldG)}g held: ${h.who} ${h.known ? (h.many ? 'were weighed' : 'was weighed')
+                : 'changed weight'} after this print`;
+        }
+        return h.held.length ? `${fmtG(h.otherG)}g went to no spool; ${fmtG(h.heldG)}g held` : `${total}g went to no spool`;
+    }
+    function shortfallBanner(rec, h) {
+        const it = h.many ? 'them' : 'it';
+        if (h.onlyHeld && h.known) {
+            return `FCC held these grams instead of charging them: ${esc(h.who)} ${h.many ? 'were' : 'was'} weighed
+                    on FCC after this print ended, so the scale already counted ${it}. <b>Apply</b> with the
+                    0 g filled in to leave ${it} uncharged, or type the grams if that weighing came before the
+                    print. Or <b>Discard</b>.`;
+        }
+        if (h.onlyHeld) {
+            return `FCC held these grams instead of charging them: ${esc(h.who)} changed weight after this
+                    print ended, and FCC can't tell whether the scale counted this print. Check each line, then
+                    <b>Apply</b>: the grams filled in if the change came before the print, or 0 g if the scale
+                    already counted it. Or <b>Discard</b>.`;
+        }
+        const g = h.held.length ? fmtG(h.otherG) : fmtG(rec.total_grams);
+        const heldWords = h.held.length
+            ? ` The <b>${fmtG(h.heldG)}g</b> on ${esc(h.who)} ${h.many ? 'are' : 'is'} held, not charged:
+               ${h.many ? 'they' : 'it'} ${h.known ? (h.many ? 'were weighed' : 'was weighed') : 'changed weight'}
+               after this print ended, as ${h.many ? 'their lines say' : 'its line says'}.`
+            : '';
+        return `FCC charged what it could for this print, but <b>${g}g</b> went to no spool. If the
+                    printer carried on from another spool (a <b>joined spool</b>), or you know where the
+                    filament came from, <b>pick that spool</b> and <b>Apply</b>. A spool whose record is at
+                    0 g takes nothing, and whatever a spool can't take stays on this card. If a record was
+                    off (the spool still has filament), weigh that spool. Or <b>Discard</b> if you've already
+                    weighed them.${heldWords}`;
+    }
+
     function shortfallCardHtml(rec) {
         const total = fmtG(rec.total_grams);
+        const head = shortfallHead(rec);
         // A failed write's retry keeps its row (the picked spool) on the card.
         const rows = (rec.spools || []).map((s) => spoolRowHtml(s, rec)).join('');
         return `
@@ -1025,18 +1085,13 @@
                  data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-                    <div style="font-weight:bold;color:#ffd27a;">⚖️ ${esc(rec.printer_name)} — ${total}g went to no spool</div>
+                    <div class="fcc-cr-short-title" style="font-weight:bold;color:#ffd27a;">⚖️ ${esc(rec.printer_name)} — ${esc(shortfallTitle(rec, head))}</div>
                     <div style="color:#9aa;font-size:0.92rem;">${total}g uncharged</div>
                 </div>
                 <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
-                <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
+                <div class="fcc-cr-short-banner" style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
-                    FCC charged what it could for this print, but <b>${total}g</b> went to no spool. If the
-                    printer carried on from another spool (a <b>joined spool</b>), or you know where the
-                    filament came from, <b>pick that spool</b> and <b>Apply</b>. A spool whose record is at
-                    0 g takes nothing, and whatever a spool can't take stays on this card. If a record was
-                    off (the spool still has filament), weigh that spool. Or <b>Discard</b> if you've already
-                    weighed them.
+                    ${shortfallBanner(rec, head)}
                 </div>
                 ${rows}
                 ${shortfallLinesHtml(rec)}
@@ -1290,6 +1345,9 @@
                 <div style="padding:8px 18px 4px;color:#bbb;font-size:0.95rem;">
                     Nudge the grams or pick the spools on each card, then press its green button. <b>Closing keeps everything for later</b> — only <b>Discard</b> drops a review.
                 </div>
+                <div id="fcc-cr-panel-notice" role="status" aria-live="polite"
+                     style="display:none;margin:4px 18px 0;color:#e6c074;font-size:var(--fcc-fs-small);line-height:1.4;
+                            background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:7px 10px;"></div>
                 <div id="fcc-cr-body" style="padding:8px 18px 14px;max-height:60vh;overflow:auto;">
                     ${cards}
                 </div>
@@ -1565,6 +1623,20 @@
         function closeIfEmpty() {
             if (!body.querySelector('.fcc-cr-card')) cleanup();
         }
+        // Group 64 full review (PI1): a Confirm or a Discard takes its card away; when
+        // another card keeps the panel up, its outcome is said here too, since the
+        // toast layer is drawn under the panel. Cleared at the next press.
+        function sayOnPanel(msg) {
+            const n = overlay.querySelector('#fcc-cr-panel-notice');
+            if (!n) return;
+            n.textContent = msg || '';
+            n.style.display = msg ? '' : 'none';
+        }
+        // A toast, and the same words kept for the panel's line.
+        function toastAndKeep(said, msg, type, dur) {
+            toast(msg, type, dur);
+            said.push(msg);
+        }
 
         // Scope B: a held set's count of the grams still to place follows its boxes.
         function updateSetLeft(input) {
@@ -1792,6 +1864,7 @@
             const job = card.dataset.job;
 
             if (e.target.classList.contains('fcc-cr-confirm')) {
+                if (e.detail <= 1) sayOnPanel('');
                 // Group 64 review (R1): a double click's second press is no Apply. Its
                 // first applied this card and took it away, the next card slid up
                 // under the pointer, and the second press applied that one, unread
@@ -1988,31 +2061,34 @@
                                   + `${left.length > 1 ? 'their weights' : 'its weight'} changed after the print`
                                 : `left ${fmtG(leftG)}g uncharged on ${leftWho}: `
                                   + `${left.length > 1 ? 'they were' : 'it was'} weighed after the print`);
+                        const said = [];
                         if (took > 0) {
-                            toast(`Deducted from ${(d.applied || []).length} spool(s)${leftWords ? `; ${leftWords}` : ''}.`, 'success');
+                            toastAndKeep(said, `Deducted from ${(d.applied || []).length} spool(s)${leftWords ? `; ${leftWords}` : ''}.`, 'success');
                         } else if (leftWords) {
-                            toast(`${leftWords.charAt(0).toUpperCase()}${leftWords.slice(1)}.`, 'success');
+                            toastAndKeep(said, `${leftWords.charAt(0).toUpperCase()}${leftWords.slice(1)}.`, 'success');
                         } else if (d.settled_held) {
-                            toast(`Left ${fmtG(d.shortfall_g)}g uncharged: the spool was weighed after the print.`, 'success');
+                            toastAndKeep(said, `Left ${fmtG(d.shortfall_g)}g uncharged: the spool was weighed after the print.`, 'success');
                         } else {
-                            toast('Nothing was charged: the spool picked has 0 g left on record.', 'warning', 7000);
+                            toastAndKeep(said, 'Nothing was charged: the spool picked has 0 g left on record.', 'warning', 7000);
                         }
                         if (d.shortfall_card) {
                             // 43.2: what the picked spools couldn't take is on a new card.
-                            toast(`${fmtG(d.shortfall_g)}g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard.`, 'warning', 7000);
+                            toastAndKeep(said, `${fmtG(d.shortfall_g)}g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard.`, 'warning', 7000);
                         } else if (!d.settled_held && Number(d.shortfall_g) > 0.05) {
                             // A settle's grams were left on purpose (Group 64 review, Y2).
                             // Partial-bind / clamp shortfall (no_spool re-resolve path): part of the
                             // computed usage couldn't be applied — surface it AT THE OVERLAY, not only
                             // in the Activity Log, so the user knows to weigh the still-short spool.
-                            toast(`${fmtG(d.shortfall_g)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
+                            toastAndKeep(said, `${fmtG(d.shortfall_g)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
                         }
-                        if ((d.errors || []).length) toast(`${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
+                        if ((d.errors || []).length) toastAndKeep(said, `${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
                         // R1: the card under the pointer goes, so the second press of a
                         // double click reaches nothing behind it.
                         if (window.fccShieldNextPress) window.fccShieldNextPress();
                         card.remove(); updateCount(); refreshBadge();
                         if (d.shortfall_card) await showNewCard(printer, d.shortfall_card);
+                        // PI1: another card keeps the panel up: its words are said on it too.
+                        if (body.querySelector('.fcc-cr-card')) sayOnPanel(said.join(' '));
                         closeIfEmpty();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.stale) {
@@ -2046,6 +2122,8 @@
                 }
             } else if (e.target.classList.contains('fcc-cr-discard')) {
                 const btn = e.target;
+                // PI1: a press clears the panel's last outcome (not a double press's second).
+                if (!(btn.dataset.armed === '1' && Date.now() - Number(btn.dataset.armedAt || 0) < 700)) sayOnPanel('');
                 // First click ARMS (no backend call); second click within 4s
                 // discards. Guards an accidental click from a permanent drop.
                 // A second press under 700 ms is a double press, not a decision
@@ -2070,11 +2148,14 @@
                     });
                     const d = await r.json();
                     if (d.status === 'dismissed' || d.status === 'already_handled') {
-                        toast(d.status === 'dismissed' ? 'Review discarded (no deduct).' : 'Already handled elsewhere.', 'info');
+                        const words = d.status === 'dismissed' ? 'Review discarded (no deduct).' : 'Already handled elsewhere.';
+                        toast(words, 'info');
                         // Group 64 fix review: the next card slides up under the pointer
                         // here too, as after Confirm (R1).
                         if (window.fccShieldNextPress) window.fccShieldNextPress();
-                        card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
+                        card.remove(); updateCount(); refreshBadge();
+                        if (body.querySelector('.fcc-cr-card')) sayOnPanel(words);     // PI1
+                        closeIfEmpty();
                     } else {
                         btn.disabled = false; disarmDiscard(btn);
                         tell(card, d.msg || 'Discard failed — check the log.', 'error');

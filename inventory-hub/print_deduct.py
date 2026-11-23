@@ -433,6 +433,7 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
     weighing.
     """
     captured = None
+    mmu_shared_at = {}
     if heads is not None:
         captured = {}
         active_locs = []
@@ -441,6 +442,8 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
             if pos not in captured:
                 captured[pos] = _head_sids(head)
                 active_locs.append((str(head.get('toolhead') or '').upper(), {'position': pos}))
+                if head.get('mmu_shared'):
+                    mmu_shared_at[pos] = list(head['mmu_shared'])     # Group 64 full review (WD3)
     elif active_locs is None:
         printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2
         active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
@@ -488,6 +491,17 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                 ambiguous = True
             else:
                 loc_spools, ambiguous = spoolman_api.select_deduct_targets(loc_id)
+            if ambiguous and mmu_shared_at.get(toolhead_idx):
+                # Group 64 full review (WD3): the print-end read names every sharing
+                # slot's spool on the first slot's head; the generic line blamed that
+                # slot for holding them all, beside a card saying the slots share one.
+                state.add_log_entry(
+                    f"⚠️ {printer_name}: MMU slots {_and_list(mmu_shared_at[toolhead_idx])} share Position "
+                    f"{toolhead_idx} (T{toolhead_idx}) and each held a spool when the print ended, so FCC can't "
+                    f"tell which slot printed; {weight_used:.2f}g not deducted: pick the spool it used on the "
+                    f"🛑 Review card, or weigh it to true up. Give each MMU slot its own Position in Settings "
+                    f"(slot 1 = Position 0) so FCC can tell next time.", "WARNING", "ffaa00")
+                continue
             if ambiguous:
                 state.add_log_entry(
                     f"⚠️ {printer_name}: toolhead {str(loc_id).upper()} has "
@@ -711,8 +725,12 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                 meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
                       "job_id": card["job_id"]})
         if any(line not in held_lines for line in lines_now) or card.get("spools"):
+            # Group 64 full review (WD5): the grams of the lines this line names; a held
+            # head's grams are said by its own line above, which says not to charge them.
+            held_g = sum(float(lines_now.get(line) or 0) for line in held_lines)
+            other_g = round(max(0.0, shortfall - held_g), 2)
             state.add_log_entry(
-                f"⚠️ {printer_name}: {shortfall:.2f}g of '{_esc(filename)}' wasn't deducted "
+                f"⚠️ {printer_name}: {other_g:.2f}g of '{_esc(filename)}' wasn't deducted "
                 f"({_shortfall_reasons(card, skip=held_lines)}) — pick the spool that took it in "
                 f"🛑 Review, or Discard.", "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
@@ -1883,19 +1901,20 @@ def _clock(t):
     return time.strftime("%H:%M" if same_day else "%b %d %H:%M", at)
 
 
-def _weighed_info(sid, then, now, end_at):
+def _weighed_info(sid, then, now, end_at, source=None):
     """Decision 1's verdict on one head spool: None when its used weight `now` is
     the print-end read's `then` plus FCC's own charges since (Group 64 review, S1:
     another print's charge, landed after this print's end read, is no weighing;
-    weigh_stamps.charged_after), else {sid, then, now, ours, stamp, ended}, `ours`
-    being those charges' grams."""
+    weigh_stamps.charged_after), else {sid, then, now, ours, stamp, ended, source},
+    `ours` being those charges' grams and `source` where the heads were read
+    (print_end, park, restart, …), which the words name (Group 64 full review, WD2)."""
     if abs(now - then) <= _WRITE_EPS:
         return None
     ours = weigh_stamps.charged_after(sid, end_at)
     if abs(now - then - ours) <= _WRITE_EPS:
         return None
     return {"sid": sid, "then": round(then, 2), "now": round(now, 2), "ours": round(ours, 2),
-            "stamp": weigh_stamps.weighed_after(sid, end_at), "ended": end_at}
+            "stamp": weigh_stamps.weighed_after(sid, end_at), "ended": end_at, "source": source}
 
 
 def _swap_left_at(swap_log):
@@ -1976,7 +1995,7 @@ def _held_at_apply(rec, row, sid, used_now, shown=None):
     then = _card_end_used(rec, sid)
     mark = _seen_mark(rec, row) or (shown if isinstance(shown, dict) else None)
     if then is not None and end_at is not None:
-        info = _weighed_info(sid, then, used_now, end_at)
+        info = _weighed_info(sid, then, used_now, end_at, rec.get("heads_source"))
         if info is None:
             return None
         if mark is not None and mark.get("then") is not None:
@@ -2031,7 +2050,7 @@ def _end_watch(heads, end_heads):
         if isinstance(h, dict) and isinstance(h.get('used'), dict):
             for k, v in h['used'].items():
                 used[str(k)] = v
-    return {"used": used, "end_at": end_at} if used else None
+    return {"used": used, "end_at": end_at, "source": (end_heads or {}).get('source')} if used else None
 
 
 def _changed_since_check(watch, sid, used):
@@ -2044,12 +2063,12 @@ def _changed_since_check(watch, sid, used):
     if then is None or watch.get("end_at") is None:
         return None
     try:
-        return _weighed_info(sid, float(then), float(used), watch["end_at"])
+        return _weighed_info(sid, float(then), float(used), watch["end_at"], watch.get("source"))
     except (TypeError, ValueError):
         return None
 
 
-def _weighed_since_end(heads, end_at):
+def _weighed_since_end(heads, end_at, source=None):
     """Decision 1 (Group 64; Derek, 2026-11-20): {position: info} for each head
     spool whose used weight changed between the print-end read (which kept it,
     `used`, 64.3 (1)) and now: FCC charges a print on top of the used weight as
@@ -2088,7 +2107,7 @@ def _weighed_since_end(heads, end_at):
                     now = float(rec['used_weight'])
                 except (TypeError, ValueError):
                     continue
-                info = _weighed_info(sid, then, now, end_at)
+                info = _weighed_info(sid, then, now, end_at, source)
                 if info is not None:
                     out[_norm_pos(h.get('position'))] = dict(info, toolhead=h.get('toolhead'))
     except Exception as e:
@@ -2097,32 +2116,45 @@ def _weighed_since_end(heads, end_at):
     return out
 
 
+def _after_words(source):
+    """Decision 1's "after ..." for the moment the heads were read (Group 64 full
+    review, WD2): "after this print ended" for a print-end read, else the card's own
+    words for where they were read ("after the printer paused" for a park read, which
+    a cancel from the printer's prompt takes: the print ended later, and a weighing
+    during the pause was said to be after it)."""
+    if source in (None, "print_end"):
+        return "after this print ended"
+    when = _HEADS_WORDS.get(source) or _HEADS_WORDS["late"]
+    return "after " + when[len("when "):] if when.startswith("when ") else f"after FCC read the heads {when}"
+
+
 def _weighed_words(info, grams):
     """What a held spool's line and log line say (Decision 1), the person's words."""
     sid, head = info.get('sid'), info.get('toolhead') or "its head"
     ended = f" (at {_clock(info['ended'])})" if info.get('ended') else ""
+    after = _after_words(info.get('source'))
     stamp = info.get('stamp')
     if stamp:
         return (f"#{sid} on {head} was weighed on {stamp.get('how')} at {_clock(stamp.get('at'))}, "
-                f"after this print ended{ended}, so the scale already counted its {grams:.2f} g")
+                f"{after}{ended}, so the scale already counted its {grams:.2f} g")
     try:
         ours = float(info.get('ours') or 0)
     except (TypeError, ValueError):
         ours = 0.0
     by_fcc = f", {ours:.2f} g of it charged by FCC since" if ours > _WRITE_EPS else ""
-    return (f"#{sid} on {head} changed weight after this print ended{ended} ({info.get('then'):.2f} g "
+    return (f"#{sid} on {head} changed weight {after}{ended} ({info.get('then'):.2f} g "
             f"used then, {info.get('now'):.2f} g now{by_fcc}), and FCC can't tell whether the scale "
             f"counted this print's {grams:.2f} g")
 
 
-def _mark_weighed_rows(rows, heads, end_at, left_at=None):
+def _mark_weighed_rows(rows, heads, end_at, left_at=None, source=None):
     """Decision 1 on a review card (Group 64): each row whose spool changed weight
     since the print-end read (_weighed_since_end) carries `weighed` (the words, and
     whether FCC knows the weighing came after the print) and `prefill`, what its
     grams box is filled in with: 0 g when FCC weighed it after the end (the scale
     counted the print), else the row's grams. The row's own `grams` stay the print's,
     so the card's total and its shortfall still count them. Returns the rows."""
-    weighed = _weighed_since_end(heads, end_at) if rows else {}
+    weighed = _weighed_since_end(heads, end_at, source) if rows else {}
     for r in rows or []:
         info = weighed.get(_norm_pos(r.get('position')))
         if not info or str(info.get('sid')) != str(r.get('sid')):
@@ -2928,7 +2960,7 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     # this print already): its grams wait on the uncharged-grams card, filled in
     # with 0 g when FCC weighed it after the end, else with the print's grams, and
     # loudly noted. The print's other heads charge as usual.
-    weighed = _weighed_since_end(heads, _end_epoch(end_heads)) if heads is not None else {}
+    weighed = _weighed_since_end(heads, _end_epoch(end_heads), source) if heads is not None else {}
     charge_now = ({p: g for p, g in usage_map.items() if _norm_pos(p) not in weighed}
                   if weighed else usage_map)
     if before_charge is not None:
@@ -3507,7 +3539,7 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
     left_at = _swap_left_at(swap_log)
     if heads is not None:
         # Decision 1 (Group 64): as a cancel's card.
-        _mark_weighed_rows(rows, heads, end_at, left_at)
+        _mark_weighed_rows(rows, heads, end_at, left_at, heads_source)
     total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
         "printer_name": printer_name,
@@ -3938,8 +3970,14 @@ def _fetch_schedule_words(hours=72, who="It"):
     sentence."""
     more = _FETCH_FAST_TRIES - 1
     times = "once more" if more == 1 else ("twice more" if more == 2 else f"{more} more times")
+    # Group 64 full review (WD4): the bound the back-off keeps is the longest wait
+    # between tries; "at most once an hour" said the other bound, while the first
+    # waits are 5, 10, 20 and 40 minutes.
+    first = f"{_FETCH_SLOW_FIRST_S // 60} minutes"
+    most = "an hour" if _FETCH_SLOW_MAX_S == 3600 else f"{_FETCH_SLOW_MAX_S // 60} minutes"
     return (f"{who} tries again when the printer is idle, {times} right away, "
-            f"then less often (at most once an hour) for up to {int(hours)} hours.")
+            f"then less often, waiting longer each time ({first} at first, up to {most} between tries), "
+            f"for up to {int(hours)} hours.")
 
 
 def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
@@ -4376,7 +4414,7 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
     # Decision 1 (Group 64): a row whose spool changed weight after the print ended
     # says so loudly, its grams filled in with 0 g when FCC weighed it after the end.
     left_at = _swap_left_at(swap_log)
-    _mark_weighed_rows(rows, heads, end_at, left_at)
+    _mark_weighed_rows(rows, heads, end_at, left_at, source)
     total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
         "printer_name": printer_name,

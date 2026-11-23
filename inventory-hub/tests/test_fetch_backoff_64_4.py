@@ -238,7 +238,8 @@ def test_a_completion_whose_file_never_decodes_keeps_trying_for_72_hours_then_as
     assert print_deduct_ledger.was_deducted(INDX, "1141") is False
     warned = _lines(logs, "couldn't read it", "WARNING")
     assert len(warned) == 1, logs
-    assert "less often (at most once an hour) for up to 72 hours" in warned[0], warned
+    assert ("less often, waiting longer each time (5 minutes at first, up to an hour between tries), "
+            "for up to 72 hours" in warned[0]), warned
     assert 'class="btn btn-sm btn-outline-warning ms-2 py-0 px-1 fcc-fetch-retry-btn"' in warned[0]
     assert 'data-fetch-printer="INDX" data-fetch-job="1141"' in warned[0], warned
     assert not _lines(logs, NUDGE), "the file wasn't locked: no 'clear the screen' nudge"
@@ -354,8 +355,9 @@ def test_a_live_edges_raise_counts_as_the_first_try_and_is_said_only_once(clock,
         print_monitor._on_cancel_edge(XL, "x.gcode", 7, 0.4, "http://fb")
         failed = _lines(logs, "review failed", "ERROR")
         assert len(failed) == 1, logs
-        assert ("FCC tries again when the printer is idle, twice more right away, then less often "
-                "(at most once an hour) for up to 72 hours." in failed[0]), failed
+        assert ("FCC tries again when the printer is idle, twice more right away, then less often, "
+                "waiting longer each time (5 minutes at first, up to an hour between tries), for up to 72 "
+                "hours." in failed[0]), failed
         assert failed[0].endswith("↻ Try again now</button>"), failed
         assert cancel_fetch_store.get_pending(XL, "7")["raises"] == 1
         clock.now += 60
@@ -458,3 +460,16 @@ def test_the_buttons_attributes_are_escaped():
     btn = print_deduct._fetch_retry_button('My "Big" <Printer>', "12&3")
     assert 'data-fetch-printer="My &quot;Big&quot; &lt;Printer&gt;"' in btn, btn
     assert 'data-fetch-job="12&amp;3"' in btn, btn
+
+
+def test_the_schedule_words_say_the_waits_the_queue_keeps():
+    """Group 64 full review (WD4), red on 1c5a85f ("at most once an hour" said the
+    other bound): the words name the first wait and the longest one between tries,
+    and the queue's schedule keeps both."""
+    words = print_deduct._fetch_schedule_words(72, "FCC")
+    assert "twice more right away" in words, words
+    assert "(5 minutes at first, up to an hour between tries)" in words, words
+    assert "at most once an hour" not in words, words
+    waits = [print_deduct._fetch_next_try_at(n, 0.0) for n in range(1, 10)]
+    assert waits[:2] == [None, None], waits                      # the two quick tries
+    assert waits[2:] == [300.0, 600.0, 1200.0, 2400.0, 3600.0, 3600.0, 3600.0], waits
