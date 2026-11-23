@@ -1,6 +1,10 @@
 import requests
+import os
 import re
+import socket
+import struct
 import threading
+import time
 from typing import Dict, List, Optional
 import bgcode_decode  # binary-gcode (.bgcode) decoder for the cancel prefix-parse
 
@@ -769,6 +773,69 @@ def last_probe_failure(printer_name):
     """Why `printer_name`'s last state probe failed (see _LAST_PROBE_FAILURE), or None
     when it answered (or was never probed)."""
     return _LAST_PROBE_FAILURE.get(printer_name)
+
+
+def _icmp_checksum(data):
+    if len(data) % 2:
+        data += b"\0"
+    total = sum(struct.unpack("!%dH" % (len(data) // 2), data))
+    total = (total >> 16) + (total & 0xFFFF)
+    total += total >> 16
+    return (~total) & 0xFFFF
+
+
+def _icmp_socket(kind):
+    """An ICMP socket of `kind` (the tests' seam)."""
+    return socket.socket(socket.AF_INET, kind, socket.IPPROTO_ICMP)
+
+
+def icmp_echo(host, timeout=1.0):
+    """Group 65.1 (3): one ICMP echo to `host` (an IP, a port after ':' ignored), the
+    standard library only (the image has no `ping` program). True when it answers
+    within `timeout`, False when it doesn't (or the network can't reach it), None when
+    FCC can't send one: neither the unprivileged datagram socket (which works when the
+    container's net.ipv4.ping_group_range covers its group, Docker's default since
+    20.10) nor a raw one (which needs NET_RAW) opens. Never raises."""
+    ip = str(host or "").strip().split(":")[0]
+    if not ip:
+        return None
+    ident = os.getpid() & 0xFFFF
+    payload = b"fcc-reach"
+    for kind in (socket.SOCK_DGRAM, socket.SOCK_RAW):
+        try:
+            sock = _icmp_socket(kind)
+        except OSError:
+            continue
+        try:
+            packet = struct.pack("!BBHHH", 8, 0, 0, ident, 1) + payload
+            packet = struct.pack("!BBHHH", 8, 0, _icmp_checksum(packet), ident, 1) + payload
+            deadline = time.monotonic() + float(timeout)
+            sock.settimeout(float(timeout))
+            try:
+                sock.sendto(packet, (ip, 0))
+            except OSError:
+                return False          # no route to it: it doesn't answer
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return False
+                sock.settimeout(left)
+                try:
+                    data, addr = sock.recvfrom(1024)
+                except (socket.timeout, OSError):
+                    return False
+                if kind == socket.SOCK_RAW and data:
+                    data = data[(data[0] & 0x0F) * 4:]      # a raw socket hands back the IP header
+                if addr and addr[0] == ip and len(data) >= 8 and data[0] == 0:   # an echo reply
+                    return True
+        except Exception:
+            return None
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    return None
 
 
 def _parse_v1_job(body: Dict) -> Optional[Dict]:

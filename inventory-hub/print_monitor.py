@@ -1390,6 +1390,47 @@ def _cancel_monitor_tick():
 _CONTACT = {}
 _CONTACT_LOCK = threading.Lock()
 _LOST_AFTER_MISSES = 3
+# Group 65.1 (3): while contact stays lost, how often FCC asks again whether the
+# printer is on the network (a refused connection, or a ping).
+_REACH_EVERY_S = 300
+
+
+def _reach_verdict(name):
+    """Group 65.1 (3): why FCC can't reach a printer. "prusalink" (it is on the network,
+    and PrusaLink isn't answering: on 2026-11-09 the printers answered ping while every
+    TCP port timed out, and only a reset brought PrusaLink back), "none" (it doesn't
+    answer at all: off, or off the network), or None when FCC can't tell (no IP saved,
+    or the container may not ping). A refused connection proves the printer is there
+    with no ping; otherwise one ICMP echo with a 1 s limit (prusalink_api.icmp_echo).
+    Never raises."""
+    try:
+        if prusalink_api.last_probe_failure(name) == "refused":
+            return "prusalink"
+        creds = prusalink_api.fetch_printer_credentials(None, name) or {}
+        echo = prusalink_api.icmp_echo(creds.get("ip_address"), timeout=1.0)
+        return None if echo is None else ("prusalink" if echo else "none")
+    except Exception:
+        return None
+
+
+def _reach_words(name, verdict, printing):
+    """The verdict in words ('' when FCC can't tell): it never says a printer is off
+    unless the printer didn't answer a ping."""
+    shown = print_deduct._esc(name)
+    if verdict == "prusalink":
+        return (f"{shown} is on the network, but PrusaLink isn't answering. Restarting the printer brings "
+                f"it back" + (", but a restart ends a print: wait until its print is done." if printing else "."))
+    if verdict == "none":
+        return f"{shown} doesn't answer at all (off, or off the network)."
+    return ""
+
+
+def reach_of(name):
+    """Group 65.1 (3), for the heartbeat: the verdict while FCC has lost contact with
+    the printer ("prusalink" or "none"), else None (no contact lost, or FCC can't tell)."""
+    with _CONTACT_LOCK:
+        rec = _CONTACT.get(name)
+        return rec.get("verdict") if rec and rec.get("said") else None
 
 
 def _how_long(seconds):
@@ -1456,25 +1497,46 @@ def _note_contact(name, state_info):
             rec["misses"] += 1
             if rec["since"] is None:
                 rec["since"] = now
-            if rec["misses"] < _LOST_AFTER_MISSES or rec["said"]:
+            if rec["said"]:
+                # Group 65.1 (3): still lost; every 5 minutes FCC asks again why.
+                if now - float(rec.get("asked_at") or 0) < _REACH_EVERY_S:
+                    return None
+                rec["asked_at"] = now
+                recheck, was = True, rec.get("verdict")
+            elif rec["misses"] < _LOST_AFTER_MISSES:
                 return None
-            rec["said"] = True
+            else:
+                rec["said"] = True
+                rec["asked_at"] = now
+                recheck, was = False, None
             last = rec["last"]
         else:
             cur = str(state_info.get('state') or '').upper()
             was_said, since = rec["said"], rec["since"]
-            rec.update(misses=0, since=None, said=False, answered=True, last=cur)
+            rec.update(misses=0, since=None, said=False, answered=True, last=cur, verdict=None, asked_at=None)
             if not was_said:
                 return None
     shown = print_deduct._esc(name)
     if state_info is None:
         latch = _latched(name)
+        verdict = _reach_verdict(name)             # off the lock: a ping waits up to 1 s
+        with _CONTACT_LOCK:
+            if name in _CONTACT:
+                _CONTACT[name]["verdict"] = verdict
+        words = _reach_words(name, verdict, bool(latch))
+        if recheck:
+            # Said only when it changed, and only for a verdict FCC could reach.
+            if verdict and verdict != was:
+                state.add_log_entry(f"📡 {words}", "WARNING" if latch else "INFO",
+                                    "ffaa00" if latch else "6cb2eb")
+            return None
         if latch:
             state.add_log_entry(f"📡 Lost contact with {shown}: {_doing_words(latch)} when FCC last "
-                                f"saw it.", "WARNING", "ffaa00")
+                                f"saw it.{' ' + words if words else ''}", "WARNING", "ffaa00")
         else:
             state.add_log_entry(f"📡 Lost contact with {shown} (it was "
-                                f"{_STATE_WORDS.get(last, str(last or 'idle').lower())}).", "INFO", "6cb2eb")
+                                f"{_STATE_WORDS.get(last, str(last or 'idle').lower())})."
+                                f"{' ' + words if words else ''}", "INFO", "6cb2eb")
         return None
     gap = _how_long(now - since) if since else None
     if cur in _INPROGRESS_PRINT_STATES or cur == 'ATTENTION':

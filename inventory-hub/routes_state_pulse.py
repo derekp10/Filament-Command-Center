@@ -530,7 +530,21 @@ def _pulse_section_printer_status(spools=None):
         # first head decides, so two rows sharing a Name still give one id;
         # '' when no row lists it (the strip then shows the name).
         printer_id = locations_db.printer_owning_toolhead(loc_rows, entries[0]['location_id']) if entries else None
-        return name, {'toolheads': toolheads, 'state': state_info, 'id': printer_id or ''}
+        payload = {'toolheads': toolheads, 'state': state_info, 'id': printer_id or ''}
+        if state_info is None:
+            # Group 65.1 (3): why the monitor can't reach it, while it has lost contact
+            # ("prusalink": on the network, PrusaLink not answering; "none": no answer
+            # at all), inside this printer's own payload, never a key of printer_status
+            # (the widget reads each of those as a printer). Imported here: app.py
+            # imports print_monitor after this module.
+            try:
+                import print_monitor  # type: ignore
+                reach = print_monitor.reach_of(name)
+            except Exception:
+                reach = None
+            if reach:
+                payload['reach'] = reach
+        return name, payload
 
     out = {}
     max_workers = max(1, min(8, len(grouped)))
