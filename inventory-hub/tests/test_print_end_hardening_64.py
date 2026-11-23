@@ -2574,3 +2574,29 @@ def test_the_new_cards_own_grams_ride_the_answer(stamps, warn_lines, quiet_saves
     assert [(l["sid"], l["grams"]) for l in body["left_weighed"]] == [(200, 12.4)], body
     assert body.get("shortfall_card") and body["shortfall_card_g"] == pytest.approx(2.6), body
     assert body["shortfall_g"] > body["shortfall_card_g"], body
+
+
+
+def test_an_unsure_row_left_at_0g_beside_a_failed_write_stays_at_0g(stamps, warn_lines, quiet_saves):
+    """Group 64 fix review 3 (TS5's variant), red on 8f59893c: #200 changed in Spoolman's own
+    page after the print ended (FCC can't place it: the print's grams filled in); the
+    person types 0 for it and #300's write fails. The retry card keeps #200 at the 0 g
+    the person chose, never its 12.40 g again, which an Apply as drawn would charge."""
+    import requests as _requests
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    rig.sm.records["spool"][200]["used_weight"] = 104.0
+    rec, rows = _cancel_card(rig, end)
+    assert rows[200]["weighed"]["known_order"] is False and rows[200]["prefill"] == rows[200]["grams"], rows[200]
+    real_patch = rig.sm.patch
+
+    def _refuse(url, json=None, **kw):
+        if url.rstrip("/").endswith("/spool/300") and (json or {}).get("used_weight") is not None:
+            raise _requests.exceptions.ConnectionError("Max retries exceeded (test)")
+        return real_patch(url, json=json, **kw)
+    rig.sm.patch = _refuse
+    _apply_card(rig, {"300": rows[300]["grams"]}, rev=0)
+    rig.sm.patch = real_patch
+    kept = next(r for r in cancel_review_store.get_pending(XL, str(JOB))["spools"] if r["sid"] == 200)
+    assert kept["prefill"] == 0.0 and kept["weighed"]["known_order"] is False, kept
+    assert rig.used(200) == 104.0

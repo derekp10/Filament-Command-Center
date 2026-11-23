@@ -5769,7 +5769,9 @@ def api_cancel_deduct_confirm():
                          else [r for r in weighed_rows if str(r.get("sid")) in at_0 and r.get("sid") not in held_rows])
             for r in left_at_0:
                 if str(r.get("sid")) not in on_card and r.get("sid") not in failed_sids:
-                    retry_rows.append(dict(r))
+                    # At the 0 g the person left it at: a mark FCC can't place fills in the
+                    # print's grams, and redrawn so, an Apply as drawn charged them on top.
+                    retry_rows.append(dict(r, prefill=0.0))
                     on_card.add(str(r.get("sid")))
             retry_rec = dict(rec)
             retry_rec["spools"] = retry_rows
