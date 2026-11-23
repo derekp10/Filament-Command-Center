@@ -1261,6 +1261,44 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
     page.keyboard.press("Escape")
 
 
+def test_lost_contact_review_lines_are_readable(page: Page, base_url: str):
+    """Group 65.1 (1): a review whose end FCC saw only after it lost sight of the print
+    says so in a 📡 line under its file name (a ❓ card, a 🛑 card, and a "couldn't
+    measure" card restart recovery opened). Each line readable on its card. Made-up
+    reviews in this page only; nothing is written."""
+    import json as _json
+    import time as _time
+    import conftest
+    now = _time.time()
+    lost = {"progress": 0.3, "seen_at": now - 9600, "lost_at": now - 9480, "back_at": now, "back_state": "IDLE",
+            "why": "lost"}
+    row = {"sid": 9001, "toolhead": "ZZ-1", "position": 0, "grams": 12.4, "current_used": 100.0,
+           "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 887.6,
+           "display": "#9001 Contrast PLA", "color": "c0392b", "ambiguous": False}
+    base = {"printer_name": "ZZ Contrast XL", "filename": "/usb/LOST~1.BGC", "progress": 0.3,
+            "total_grams": 12.4, "kind": "partial"}
+    pending = [dict(base, job_id="l1", ambiguous=True, spools=[row], lost_contact=lost),
+               dict(base, job_id="l2", ambiguous=False, spools=[dict(row, sid=9002)],
+                    lost_contact=dict(lost, back_state="STOPPED")),
+               dict(base, job_id="l3", ambiguous=True, spools=[], total_grams=0.0, kind="progress_unknown",
+                    unmeasured_reason="unsampled", usage_map=None, lost_contact=dict(lost, why="restart"))]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="l3"] .fcc-cr-lost', timeout=15000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    offenders = [o for o in conftest.contrast_offenders(overlay)
+                 if "lost contact" in (o.get("text") or "") or "last saw this print" in (o.get("text") or "")]
+    assert offenders == [], offenders
+    # Proved scored (the guard keeps each text's start, so the lines are found by theirs).
+    scored = [o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100)]
+    assert sum("FCC lost contact with ZZ Contrast XL" in (t or "") for t in scored) == 2, scored
+    assert any("FCC last saw this print" in (t or "") for t in scored), scored
+    page.keyboard.press("Escape")
+
+
 @pytest.mark.usefixtures("require_server")
 def test_scan_holding_pickers_notice_lines_are_readable(page: Page, base_url: str, assert_contrast):
     """Group 61 review: the notice line of each picker that holds scans (the

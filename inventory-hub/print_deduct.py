@@ -1156,6 +1156,9 @@ _HEADS_WORDS = {
     # printer's prompt) names the spools read when it first parked.
     "park": "when the printer paused",
     "start": "when the print started",
+    # Group 65.1 (1): an end FCC saw only after it lost contact with the printer names
+    # the spools read when it saw the printer again, never "when the print ended".
+    "back": "when FCC saw the printer again",
     "during": "during the print",
 }
 
@@ -1171,6 +1174,49 @@ def _given(**kwargs):
     """The keyword arguments that carry something. A new one is passed only then,
     so a caller (or a test's strict stand-in) that predates it sees no change."""
     return {k: v for k, v in kwargs.items() if v is not None}
+
+
+def _how_long(seconds):
+    """'40 s', '12 min', '2 h 38 min', '3 days 4 h': a gap in words (Group 65.1)."""
+    s = max(0, int(round(seconds)))
+    if s < 60:
+        return f"{s} s"
+    m = s // 60
+    if m < 60:
+        return f"{m} min"
+    h, m = divmod(m, 60)
+    if h < 48:
+        return f"{h} h {m} min" if m else f"{h} h"
+    d, h = divmod(h, 24)
+    return f"{d} days {h} h" if h else f"{d} days"
+
+
+def _lost_contact_words(lost_contact):
+    """Group 65.1 (1): what a review's Activity Log line adds for an end FCC saw only
+    after it lost sight of the print (`lost_contact`, which the print monitor builds:
+    {progress, seen_at, lost_at, back_at, back_state, why}): " — FCC lost contact at
+    ~30% and saw it again 2 h 38 min later", or, for one restart recovery opened, " —
+    FCC last saw it at ~30%, before FCC restarted". '' for none. A duration, never a
+    clock time: dev's container runs on UTC, prod's on Pacific time."""
+    if not isinstance(lost_contact, dict):
+        return ""
+    try:
+        pct = max(0.0, min(1.0, float(lost_contact.get('progress') or 0.0))) * 100
+    except (TypeError, ValueError):
+        return ""
+    if lost_contact.get('why') == 'restart':
+        return f" — FCC last saw it at ~{pct:.0f}%, before FCC restarted"
+    lost, back = lost_contact.get('lost_at'), lost_contact.get('back_at')
+    gap = (f" {_how_long(back - lost)} later"
+           if isinstance(lost, (int, float)) and isinstance(back, (int, float)) and back >= lost else "")
+    return f" — FCC lost contact at ~{pct:.0f}% and saw it again{gap}"
+
+
+def _lost_contact_sentence(lost_contact):
+    """The same, as a sentence of its own: "FCC lost contact at ~30% and saw it again
+    2 h 38 min later." ('' for none)."""
+    words = _lost_contact_words(lost_contact)
+    return (words[3:4].upper() + words[4:] + ".") if words else ""
 
 
 def _say_where_heads_were_read(record, source, read_at):
@@ -4003,7 +4049,7 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                              progress_unknown=False, ambiguous=False, reason=None,
                              heads=None, heads_source=None, heads_read_at=None,
                              notes=None, phrases=None, sets=None, swap_left_at=None, end_at_s=None,
-                             mmu_shared=None):
+                             mmu_shared=None, lost_contact=None):
     """Stash a persistent, RECOVERABLE review for a print whose usage couldn't be
     finalized — INSTEAD of writing a destructive terminal grams=0 ledger entry that
     would permanently block recovery (the 2026-06-13 silent-loss bug). Two kinds:
@@ -4131,6 +4177,10 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
         kept = {k: v for k, v in (notes or {}).items() if k in (record["usage_map"] or {})}
         if kept:
             record["unresolved_notes"] = kept
+    if lost_contact:
+        # Group 65.1 (1): FCC lost sight of the print before it ended; the card says so.
+        record["lost_contact"] = lost_contact
+        msg = f"{msg} {_lost_contact_sentence(lost_contact)}".rstrip()
     cancel_review_store.add_pending(record)
     state.add_log_entry(msg, "WARNING", "ffaa00",
                         meta={"type": "cancel_deduct_pending",
@@ -4148,7 +4198,8 @@ FETCH_IN_FLIGHT = "in_flight"
 
 
 def _hold_fetch_in_flight(printer_name, filename, job_id, reached_fraction, kind="cancel",
-                          ambiguous=False, start_spools=None, swap_log=None, end_heads=None):
+                          ambiguous=False, start_spools=None, swap_log=None, end_heads=None,
+                          lost_contact=None):
     """Scope C (hotfix 2026-11-11): write the print's fetch record before the
     live edge's download, so the print outlives FCC. PrusaLink serves a file at
     ~15 KB/s (job 1141's took 20 minutes); the latch was reset at the edge, and
@@ -4175,7 +4226,7 @@ def _hold_fetch_in_flight(printer_name, filename, job_id, reached_fraction, kind
             kept = dict(rec)
             changed = False
             for key, value in (("end_heads", end_heads), ("start_spools", start_spools),
-                               ("swap_log", swap_log)):
+                               ("swap_log", swap_log), ("lost_contact", lost_contact)):
                 have = kept.get(key)
                 if key == "end_heads" and _usable_heads(have) is None and _usable_heads(value) is not None:
                     # Review fix: a stored read FCC can't use (no spool on any
@@ -4194,6 +4245,8 @@ def _hold_fetch_in_flight(printer_name, filename, job_id, reached_fraction, kind
         }
         if end_heads:
             fresh["end_heads"] = end_heads
+        if lost_contact:
+            fresh["lost_contact"] = lost_contact     # Group 65.1 (1)
         held.append(fresh)
         return fresh
 
@@ -4259,7 +4312,7 @@ def _fetch_schedule_words(hours=72, who="It"):
 
 def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
                           ambiguous=False, start_spools=None, swap_log=None, end_heads=None,
-                          decode_error=None):
+                          decode_error=None, lost_contact=None):
     """Queue a print whose gcode couldn't be fetched yet (the selected-file
     download LOCK, §9.10) for the monitor to retry. `kind` is 'cancel' (default)
     or 'complete' — a COMPLETED Connect-started print locks behind the FINISH
@@ -4312,6 +4365,8 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
             }
             if end_heads:
                 fresh["end_heads"] = end_heads
+            if lost_contact:
+                fresh["lost_contact"] = lost_contact     # Group 65.1 (1)
             if decode_error:
                 fresh["decode_failures"] = 1
                 fresh["last_error"] = str(decode_error)
@@ -4333,6 +4388,8 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
             first_read = end_heads      # a stored read FCC can't use is no first read
         if first_read:
             rec["end_heads"] = first_read
+        if lost_contact and not rec.get("lost_contact"):
+            rec["lost_contact"] = lost_contact     # Group 65.1 (1): the first one kept
         if decode_error:
             try:
                 count = int(rec.get("decode_failures", 0) or 0) + 1
@@ -4452,7 +4509,7 @@ def api_cancel_deduct_retry_fetch():
 def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
                                   fb_url=None, ambiguous=False, progress_unknown=False,
                                   unmeasured_reason=None, end_heads=None, start_spools=None,
-                                  swap_log=None):
+                                  swap_log=None, lost_contact=None):
     """Compute the cancelled-print partial and STASH it for review instead of
     auto-writing (FilaBridge absorption design §9.7). Idempotent against the
     ledger (already confirmed/dismissed) and the pending store (already queued).
@@ -4493,7 +4550,11 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     pre-filled (_stash_cancel_review_from_heads)."""
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
-    fetch_kw = _given(end_heads=end_heads, start_spools=start_spools, swap_log=swap_log)
+    fetch_kw = _given(end_heads=end_heads, start_spools=start_spools, swap_log=swap_log,
+                      lost_contact=lost_contact)
+    # Group 65.1 (1): an end FCC saw only after it lost sight of the print; every
+    # review this opens keeps it, and its card and log line say so.
+    seen = _given(lost_contact=lost_contact or None)
 
     if print_deduct_ledger.was_deducted(printer_name, job_id):
         # Already confirmed/dismissed. Clear any stale pending so the invariant
@@ -4512,7 +4573,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         return _stash_unresolved_review(printer_name, filename, job_id,
                                         reached_fraction, usage_map=None,
                                         progress_unknown=True, ambiguous=ambiguous,
-                                        reason=unmeasured_reason)
+                                        reason=unmeasured_reason, **seen)
 
     # Group 64.2 (10): the print reached its last recorded swap, so the partial is
     # computed at least that far (a fetch record queued before the live edge did
@@ -4553,7 +4614,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
                     return terminal
                 return _stash_unresolved_review(
                     printer_name, filename, job_id, reached_fraction, usage_map=None,
-                    progress_unknown=True, ambiguous=True, reason=reason)
+                    progress_unknown=True, ambiguous=True, reason=reason, **seen)
             print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                               scale=reached_fraction, grams=0)
         elif terminal["status"] == "error":
@@ -4586,7 +4647,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
             printer_name, filename, job_id, reached_fraction, fb_url, ambiguous, usage_map,
             mapping, start_spools, swap_log, swap_cums=swap_cums,
             # Decision 1: only a print-end read says how much each spool had used then.
-            end_at=_end_epoch(end_heads) if mapping[1] != "late" else None)
+            end_at=_end_epoch(end_heads) if mapping[1] != "late" else None, **seen)
 
     charged = set()
     mmu = {}
@@ -4608,7 +4669,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         return _stash_unresolved_review(printer_name, filename, job_id,
                                         reached_fraction, usage_map=usage_map,
                                         no_spool=True, ambiguous=ambiguous,
-                                        **_given(notes=mmu_notes or None, mmu_shared=mmu or None))
+                                        **_given(notes=mmu_notes or None, mmu_shared=mmu or None,
+                                                 lost_contact=lost_contact or None))
 
     # Re-check after the (slow) gcode download+parse — if the job was processed
     # in the meantime, don't stash a stale pending.
@@ -4634,6 +4696,9 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     }
     uncharged = _note_mmu_lines(record, mmu,
                                 _carry_uncharged(record, unresolved, printer_name, fb_url))
+    if lost_contact:
+        record["lost_contact"] = lost_contact     # Group 65.1 (1)
+        lead += _lost_contact_words(lost_contact)
     cancel_review_store.add_pending(record)
     state.add_log_entry(
         f"{lead} — review {'computed' if ambiguous else 'partial'} "
@@ -4647,7 +4712,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
 
 def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_fraction, fb_url,
                                     ambiguous, usage_map, mapping, start_spools, swap_log,
-                                    swap_cums=None, end_at=None):
+                                    swap_cums=None, end_at=None, lost_contact=None):
     """The cancel (or ambiguous) review from a read of the heads: the print-end
     read, or after a failed one the `late` read the start snapshot is checked
     against. Rows are the spools it names; each head FCC can't vouch for is a held
@@ -4722,11 +4787,14 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
     uncharged = _carry_uncharged(record, unresolved, printer_name, fb_url, heads=card_heads,
                                  source=source, read_at=read_at, notes=notes, phrases=phrases,
                                  sets=sets)
+    if lost_contact:
+        record["lost_contact"] = lost_contact     # Group 65.1 (1)
     cancel_review_store.add_pending(record)
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
     lead = ("❓ Print on {p} reached idle (~{pct:.0f}%, couldn't confirm cancel vs "
             "complete)").format(p=printer_name, pct=pct) if ambiguous else \
            "🛑 Cancelled print on {p} (~{pct:.0f}%)".format(p=printer_name, pct=pct)
+    lead += _lost_contact_words(lost_contact)
     state.add_log_entry(
         f"{lead} — review {'computed' if ambiguous else 'partial'} "
         f"deduct: {total:.2f}g across {len(rows)} spool(s) ('{_esc(filename)}'){uncharged}.",

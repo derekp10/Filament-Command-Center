@@ -1174,6 +1174,47 @@
     // Why a progress_unknown review couldn't measure its print (the record's
     // `unmeasured_reason`, print_deduct._UNMEASURED_WHY's keys; Group 56.3). A
     // record from before 56.3 has none and was always "replaced".
+    // Group 65.1 (1) (Derek, 2026-11-09: "the 30% last seen is the real issue"): an end
+    // FCC saw only after it lost sight of the print (a network drop, a power cut, FCC
+    // restarting) says where FCC last saw the print and when it saw the printer again,
+    // in the browser's clock, from the seconds the server stores (dev's container runs
+    // on UTC, prod's on Pacific time). A card from before the release has no
+    // `lost_contact` and keeps its look.
+    const LOST_STATE_WORDS = {
+        IDLE: 'idle', READY: 'idle', OPERATIONAL: 'idle', STOPPED: 'stopped', ERROR: 'showing an error',
+        FINISHED: 'finished', PRINTING: 'printing another job', PAUSED: 'paused in another job',
+        PAUSING: 'paused in another job', RESUMING: 'printing another job', ATTENTION: 'waiting at a prompt',
+        BUSY: 'busy',
+    };
+    function clockAt(s) {
+        const n = Number(s);
+        if (s === null || s === undefined || s === '' || !Number.isFinite(n) || n <= 0) return '';
+        const d = new Date(n * 1000);
+        const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return d.toDateString() === new Date().toDateString()
+            ? hm : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${hm}`;
+    }
+    function lostContactHtml(rec, mayHaveGoneFurther) {
+        const lc = rec && rec.lost_contact;
+        if (!lc || typeof lc !== 'object') return '';
+        const pct = Math.round(Math.max(0, Math.min(1, Number(lc.progress) || 0)) * 100);
+        const at = (s) => { const t = clockAt(s); return t ? ` (${t})` : ''; };
+        const back = clockAt(lc.back_at);
+        let words;
+        if (lc.why === 'restart') {
+            words = `FCC last saw this print at ~${pct}%${at(lc.seen_at)}, before FCC restarted${back ? ` at ${back}` : ''}.`;
+        } else {
+            const state = LOST_STATE_WORDS[String(lc.back_state || '').toUpperCase()] || 'again';
+            const lost = `FCC lost contact with ${esc(rec.printer_name)} at ~${pct}%`
+                + at(lc.lost_at != null ? lc.lost_at : lc.seen_at);
+            words = mayHaveGoneFurther
+                ? `${lost} and next saw it ${state}${back ? ` at ${back}` : ''}, so the print may have gone further.`
+                : `${lost} and next saw it ${state}${back ? ` at ${back}` : ''}: it may have printed further before it was cancelled.`;
+        }
+        return `<div class="fcc-cr-lost" role="note"
+                     style="color:#9fd3ff;font-size:0.95rem;margin-bottom:8px;line-height:1.45;">📡 ${words}</div>`;
+    }
+
     function unmeasuredBanner(rec) {
         const weigh = `<b>Weigh the spool</b> and adjust it directly, or <b>Discard</b> this review.`;
         switch (rec.unmeasured_reason) {
@@ -1264,6 +1305,7 @@
                     <div style="color:#9aa;font-size:0.92rem;">${isNoSpool ? total + 'g' : 'unmeasured'}</div>
                 </div>
                 <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
+                ${lostContactHtml(rec, !isNoSpool || !!rec.ambiguous)}
                 <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
                     ${banner}
@@ -1377,6 +1419,7 @@
                     <div style="color:#9aa;font-size:0.92rem;">${fmtG(total)}g total</div>
                 </div>
                 <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
+                ${lostContactHtml(rec, ambiguous)}
                 <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
                     ${banner}

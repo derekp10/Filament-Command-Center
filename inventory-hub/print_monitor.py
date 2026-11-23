@@ -220,7 +220,7 @@ def _claim_edge(printer_name, job_id):
 
 
 def _hold_edge_fetch(printer_name, filename, job_id, progress, kind, ambiguous=False,
-                     start_spools=None, swap_log=None, end_heads=None):
+                     start_spools=None, swap_log=None, end_heads=None, lost_contact=None):
     """Write the print's fetch record before the edge's heads read and its
     download (print_deduct._hold_fetch_in_flight); the edge calls it again with the
     heads read (_hold_end_heads). Returns the record as stored, or None for a print
@@ -232,7 +232,8 @@ def _hold_edge_fetch(printer_name, filename, job_id, progress, kind, ambiguous=F
     try:
         return print_deduct._hold_fetch_in_flight(
             printer_name, filename, job_id, progress, kind=kind, ambiguous=ambiguous,
-            start_spools=start_spools, swap_log=swap_log, end_heads=end_heads)
+            start_spools=start_spools, swap_log=swap_log, end_heads=end_heads,
+            **({"lost_contact": lost_contact} if lost_contact else {}))
     except Exception as e:
         try:
             state.logger.warning(f"🔁 {printer_name}: couldn't queue job {job_id} before its "
@@ -457,7 +458,8 @@ def _edge_kwargs(start_spools=None, swap_log=None, heads_when=None, **more):
 
 
 def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
-                    start_spools=None, swap_log=None, heads_when=None, park_heads=None):
+                    start_spools=None, swap_log=None, heads_when=None, park_heads=None,
+                    lost_contact=None):
     """Action taken when a cancel edge is detected. SLICE 5: compute the partial
     and stash it for preview-and-confirm (§9.7) — Derek reviews/nudges before it
     writes (automating the manual Connect-reading he does today). The detector
@@ -482,7 +484,8 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
     try:
         pct = max(0.0, min(1.0, float(progress or 0.0))) * 100
         state.add_log_entry(
-            f"🛑 Cancel detected on {printer_name} (~{pct:.0f}%) — computing the partial…",
+            f"🛑 Cancel detected on {printer_name} (~{pct:.0f}%)"
+            f"{print_deduct._lost_contact_words(lost_contact)} — computing the partial…",
             "INFO")
     except Exception:
         pass
@@ -492,7 +495,8 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
     try:
         try:
             rec = _hold_edge_fetch(printer_name, filename, job_id, progress, "cancel",
-                                   start_spools=start_spools, swap_log=swap_log)
+                                   start_spools=start_spools, swap_log=swap_log,
+                                   lost_contact=lost_contact)
             if _charged_before(rec, printer_name, job_id, filename):
                 return
             try:
@@ -505,7 +509,8 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
                 start_spools, swap_log, end_heads)
             result = print_deduct._create_pending_cancel_review(
                 printer_name, filename, job_id, progress, fb_url=fb_url,
-                **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
+                **_edge_kwargs(start_spools, swap_log, end_heads=end_heads,
+                               lost_contact=lost_contact))
             _settle_fetch(printer_name, job_id, result)
         except Exception as e:
             # Its record stays queued: the raise counts as its first try (64.2 (3)).
@@ -522,11 +527,13 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
 
 
 def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url,
-                          start_spools=None, swap_log=None, heads_when=None, park_heads=None):
+                          start_spools=None, swap_log=None, heads_when=None, park_heads=None,
+                          lost_contact=None):
     """Run the cancel-edge action OFF the heartbeat thread, so a slow gcode
     download never stalls the pulse. Synchronous when _CANCEL_DEDUCT_RUN_ASYNC
     is False (tests)."""
-    extra = _edge_kwargs(start_spools, swap_log, heads_when, park_heads=park_heads)
+    extra = _edge_kwargs(start_spools, swap_log, heads_when, park_heads=park_heads,
+                         lost_contact=lost_contact)
     if _CANCEL_DEDUCT_RUN_ASYNC:
         threading.Thread(
             target=_on_cancel_edge,
@@ -622,7 +629,8 @@ def _dispatch_completion_edge(printer_name, filename, job_id, fb_url, start_spoo
 
 def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                        progress_unknown=False, unmeasured_reason="replaced",
-                       start_spools=None, swap_log=None, heads_when=None, park_heads=None):
+                       start_spools=None, swap_log=None, heads_when=None, park_heads=None,
+                       lost_contact=None):
     """Action when a latched in-progress job reaches IDLE/READY WITHOUT our ever
     sampling the terminal STOPPED or FINISHED (2026-06-13): a fast cancel→restart
     that slipped the poll, or a PRINTING→offline→IDLE printer power-cycle. We
@@ -653,14 +661,14 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
             how = "ended" if unmeasured_reason == "unsampled" else "was replaced"
             state.add_log_entry(
                 f"❓ Print on {printer_name} ('{print_deduct._esc(filename)}') {how} before its "
-                f"progress could be measured — surfacing a review (couldn't measure "
-                f"usage)…", "INFO")
+                f"progress could be measured{print_deduct._lost_contact_words(lost_contact)} — "
+                f"surfacing a review (couldn't measure usage)…", "INFO")
         else:
             pct = max(0.0, min(1.0, float(progress or 0.0))) * 100
             state.add_log_entry(
                 f"❓ Print on {printer_name} reached idle without a clear cancel/finish "
-                f"signal (~{pct:.0f}% reached) — computing a review (couldn't confirm "
-                f"completed vs cancelled)…", "INFO")
+                f"signal (~{pct:.0f}% reached){print_deduct._lost_contact_words(lost_contact)} — "
+                f"computing a review (couldn't confirm completed vs cancelled)…", "INFO")
     except Exception:
         pass
     proceed, key = (True, None) if progress_unknown else _claim_edge(printer_name, job_id)
@@ -672,7 +680,7 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
             if not progress_unknown:
                 rec = _hold_edge_fetch(printer_name, filename, job_id, progress, "cancel",
                                        ambiguous=True, start_spools=start_spools,
-                                       swap_log=swap_log)
+                                       swap_log=swap_log, lost_contact=lost_contact)
                 if _charged_before(rec, printer_name, job_id, filename):
                     return
                 try:
@@ -686,7 +694,8 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
             result = print_deduct._create_pending_cancel_review(
                 printer_name, filename, job_id, progress, fb_url=fb_url, ambiguous=True,
                 progress_unknown=progress_unknown, unmeasured_reason=unmeasured_reason,
-                **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
+                **_edge_kwargs(start_spools, swap_log, end_heads=end_heads,
+                               lost_contact=lost_contact))
             if not progress_unknown:
                 _settle_fetch(printer_name, job_id, result)
         except Exception as e:
@@ -707,12 +716,14 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
 
 def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                              progress_unknown=False, unmeasured_reason="replaced",
-                             start_spools=None, swap_log=None, heads_when=None, park_heads=None):
+                             start_spools=None, swap_log=None, heads_when=None, park_heads=None,
+                             lost_contact=None):
     """Run the ambiguous-edge action OFF the heartbeat thread (mirrors
     _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
     (tests)."""
     kwargs = {"progress_unknown": progress_unknown, "unmeasured_reason": unmeasured_reason}
-    kwargs.update(_edge_kwargs(start_spools, swap_log, heads_when, park_heads=park_heads))
+    kwargs.update(_edge_kwargs(start_spools, swap_log, heads_when, park_heads=park_heads,
+                               lost_contact=lost_contact))
     if _CANCEL_DEDUCT_RUN_ASYNC:
         threading.Thread(
             target=_on_ambiguous_edge,
@@ -735,6 +746,14 @@ def _track_print_edge(printer_name, state_info, fb_url):
     offline blip still deducts with the pre-blip latch.
     """
     if state_info is None:
+        # Group 65.1 (1): a latched print's failed probe is stamped on the latch (the
+        # first one's time, and a count). The stamps ride the latch file, so an end FCC
+        # sees only after it lost sight of the print can say so, across a restart too.
+        with _PRINT_TRACKER_LOCK:
+            entry = _PRINT_TRACKER.get(printer_name)
+            if entry is not None and entry.get('filename'):
+                entry['misses'] = int(entry.get('misses') or 0) + 1
+                entry.setdefault('lost_at', time.time())
         return
     cur = str(state_info.get('state', '')).upper()
     if not cur:
@@ -824,6 +843,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
                             # so its review checks the heads against them.
                             'start_spools': print_deduct._validated_start_spools(entry, old_jid),
                             'swap_log': print_deduct._validated_swap_log(entry, old_jid),
+                            # Group 65.1 (1): FCC lost sight of it before the next job.
+                            'lost_contact': _lost_contact_from(entry, cur),
                         }
                     entry.pop('progress', None)
                     entry.pop('filename', None)
@@ -884,6 +905,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     swap_progress = max(float(entry.get('progress', 0.0)),
                                         float(entry.get('pause_progress', 0.0)))
                     swap_runout = bool(entry.get('saw_attention'))
+            # Group 65.1 (1): FCC sees the print: any lost contact is over (a job change
+            # took the outgoing job's facts above, before they went).
+            entry.pop('misses', None)
+            entry.pop('lost_at', None)
+            if entry.get('filename'):
+                entry['seen_at'] = time.time()
         # 22.3 (off-lock, like get_printer_job): capture the start-spool snapshot for
         # mid-print swap detection. Taken whatever `fcc_owns_completion_deduct` says
         # (Group 64.3 (2)): since the hotfix of 2026-11-11 the cancel and ambiguous
@@ -992,7 +1019,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                      prev_job['job_id'], prev_job['progress'], fb_url,
                                      progress_unknown=progress_unknown,
                                      **_edge_kwargs(prev_job.get('start_spools'),
-                                                    prev_job.get('swap_log'), "job_change"))
+                                                    prev_job.get('swap_log'), "job_change",
+                                                    lost_contact=prev_job.get('lost_contact')))
         elif job_changed:
             # job_changed but nothing was latched to review (the previous job_id had
             # no PRINTING sample → no filename). Preserve the original INFO log.
@@ -1109,6 +1137,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                if isinstance(entry.get('park_heads'), dict)
                                and str(entry['park_heads'].get('job_id')) == str(entry.get('job_id', ''))
                                else None),
+                # Group 65.1 (1): an end FCC saw only after it lost sight of the print.
+                'lost_contact': _lost_contact_from(entry, cur),
             }
             # Reset the latch to the terminal state so the edge can't re-fire.
             _PRINT_TRACKER[printer_name] = {'state': cur}
@@ -1117,6 +1147,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 cancel_without_latch = True
             if entry is not None:
                 entry['state'] = cur
+                # Group 65.1 (1): FCC sees the printer: its print is seen, any lost
+                # contact is over (an end after it would have fired above).
+                entry.pop('misses', None)
+                entry.pop('lost_at', None)
+                if entry.get('filename'):
+                    entry['seen_at'] = time.time()
                 # 22.3(b): during an ATTENTION runout park of a latched job, record the
                 # frozen pause progress + that an ATTENTION was seen (so a swap on the
                 # resume is treated as a RUNOUT). Keep the MAX across re-polls.
@@ -1183,6 +1219,10 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                     print_deduct._validated_swap_log(fire, fire['job_id']))
             if fire.get('park_heads'):
                 snapshot["park_heads"] = fire['park_heads']
+            if fire.get('lost_contact'):
+                # Group 65.1 (1): the heads are read when FCC saw the printer again.
+                snapshot["lost_contact"] = fire['lost_contact']
+                snapshot["heads_when"] = "back"
             if fire['kind'] == 'ambiguous':
                 _dispatch_ambiguous_edge(
                     printer_name, fire['filename'], fire['job_id'], fire['progress'],
@@ -1353,18 +1393,31 @@ _LOST_AFTER_MISSES = 3
 
 
 def _how_long(seconds):
-    """'40 s', '12 min', '2 h 38 min', '3 days 4 h': a gap in words."""
-    s = max(0, int(round(seconds)))
-    if s < 60:
-        return f"{s} s"
-    m = s // 60
-    if m < 60:
-        return f"{m} min"
-    h, m = divmod(m, 60)
-    if h < 48:
-        return f"{h} h {m} min" if m else f"{h} h"
-    d, h = divmod(h, 24)
-    return f"{d} days {h} h" if h else f"{d} days"
+    """'40 s', '12 min', '2 h 38 min', '3 days 4 h': a gap in words (print_deduct's,
+    which the review's lines use too)."""
+    return print_deduct._how_long(seconds)
+
+
+def _lost_contact_from(entry, cur):
+    """Group 65.1 (1): the facts of an end (or a job change) FCC saw only after it lost
+    sight of the print, from the latch's stamps (3 failed probes or more since it last
+    saw it, 65.1 (2)'s rule), else None: {progress (the latch's, as the edge reaches
+    it), seen_at (FCC's last good probe of it), lost_at (the first failed one),
+    back_at (now), back_state (what the printer says now), why: "lost"}."""
+    if not entry or int(entry.get('misses') or 0) < _LOST_AFTER_MISSES:
+        return None
+    return {"progress": print_deduct._reached_at_least(entry.get('progress', 0.0) or 0.0,
+                                                      entry.get('swap_log'), entry.get('pause_progress')),
+            "seen_at": entry.get('seen_at'), "lost_at": entry.get('lost_at'),
+            "back_at": time.time(), "back_state": cur, "why": "lost"}
+
+
+def _restart_contact(entry, progress, cur):
+    """Group 65.1 (1): restart recovery's reviews: FCC last saw the print before it
+    restarted (the NAS power cut Derek named), whatever the printer did meanwhile."""
+    return {"progress": float(progress or 0.0), "seen_at": entry.get('seen_at'),
+            "lost_at": entry.get('lost_at'), "back_at": time.time(), "back_state": cur,
+            "why": "restart"}
 
 
 def _latched(name):
@@ -1769,7 +1822,8 @@ def _compute_fetch(rec, fb_url):
         printer, filename, job_id, float(rec.get("progress", 0.0) or 0.0), fb_url=fb_url,
         ambiguous=bool(rec.get("ambiguous", False)),
         **{k: v for k, v in (("end_heads", end_heads), ("start_spools", start_spools),
-                             ("swap_log", swap_log)) if v})
+                             ("swap_log", swap_log),
+                             ("lost_contact", rec.get("lost_contact"))) if v})
 
 
 def _not_in_flight(rec):
@@ -1976,7 +2030,8 @@ def _recover_one_print_latch(name, entry, fb_url):
                                      progress_unknown=not progress_sampled,
                                      **_edge_kwargs(print_deduct._validated_start_spools(entry, job_id),
                                                     print_deduct._validated_swap_log(entry, job_id),
-                                                    "restart"))
+                                                    "restart",
+                                                    lost_contact=_restart_contact(entry, progress, cur)))
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {
                 'state': cur, 'job_id': cur_jid, 'filename': job.get('filename'),
@@ -1996,7 +2051,8 @@ def _recover_one_print_latch(name, entry, fb_url):
         _dispatch_cancel_edge(name, filename, job_id, progress, fb_url,
                               **_edge_kwargs(print_deduct._validated_start_spools(entry, job_id),
                                              print_deduct._validated_swap_log(entry, job_id),
-                                             "restart"))
+                                             "restart",
+                                             lost_contact=_restart_contact(entry, progress, cur)))
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {'state': cur}
         return True
@@ -2042,7 +2098,8 @@ def _recover_one_print_latch(name, entry, fb_url):
                                  unmeasured_reason="unsampled",
                                  **_edge_kwargs(print_deduct._validated_start_spools(entry, job_id),
                                                 print_deduct._validated_swap_log(entry, job_id),
-                                                "restart"))
+                                                "restart",
+                                                lost_contact=_restart_contact(entry, progress, cur)))
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {'state': cur}
         return True
