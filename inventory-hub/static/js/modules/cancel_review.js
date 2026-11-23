@@ -70,10 +70,17 @@
     // The server writes the words (`words`: which spool, when, on which screen).
     function weighedHtml(w) {
         if (!w || !w.words) return '';
-        const head = w.known_order
+        // Group 64 fix review 2 (CX4): a spool weighed while off its head between two
+        // swaps (FX5's mark, `back`) has only its stretch after going back on filled
+        // in, the part the scale didn't count: never "0 g", and charging it is right.
+        const head = w.back
+            ? '⚠️ Weighed while off its head: only its stretch after going back on is filled in'
+            : w.known_order
             ? '⚠️ Weighed after this print ended: 0 g filled in'
             : '⚠️ Changed weight after this print ended: check before you Apply';
-        const tail = w.known_order
+        const tail = w.back
+            ? "The grams filled in are the stretch the scale didn't count: type 0 only if it was weighed again after this print."
+            : w.known_order
             ? 'Charging these grams would count the print twice: type them only if that weighing came before the print.'
             : 'Charging the grams filled in may count this print twice.';
         return `<div class="fcc-cr-weighed" role="note"
@@ -812,7 +819,10 @@
                             border:1px solid #ffae42;border-radius:4px;padding:0 4px;white-space:nowrap;">⚠️ unconfirmed write</span>`
             : '';
         // Decision 1: a spool weighed (or changed) after the print ended.
-        const weighed = s.weighed && s.weighed.words ? s.weighed : null;
+        // Group 64 fix review 2 (CP4): a 43.6 retry row is a charge the person chose (its
+        // write failed): drawn from its own grams, never as a hold, even on a record
+        // that still carries the hold's mark.
+        const weighed = s.weighed && s.weighed.words && s.attempt_used_before == null ? s.weighed : null;
         const boxValue = weighed && s.prefill != null ? s.prefill : s.grams;
         // Group 64 full review (WD6): a weighed row's box holds what FCC filled in (0 g
         // when the scale counted the print), so its preview is drawn from that, never
@@ -1026,15 +1036,22 @@
     function shortfallHead(rec) {
         const un = rec.unresolved_usage || {};
         const causes = rec.shortfall_causes || {};
-        const held = Object.keys(un).filter((p) => (causes[p] || {}).why === 'weighed');
-        const heldG = held.reduce((a, p) => a + (Number(un[p]) || 0), 0);
+        const lines = Object.keys(un).filter((p) => (causes[p] || {}).why === 'weighed');
+        // Group 64 fix review 2 (CP2 / CX3): a pick an Apply held stays on the card as a
+        // row marked weighed (never a failed write's retry row): held grams on a known
+        // spool, as a weighed line's are.
+        const allRows = rec.spools || [];
+        const rows = allRows.filter((s) => s && s.weighed && s.weighed.words && s.attempt_used_before == null);
+        const heldG = lines.reduce((a, p) => a + (Number(un[p]) || 0), 0)
+            + rows.reduce((a, s) => a + (Number(s.grams) || 0), 0);
         const total = Number(rec.total_grams) || 0;
-        const sids = held.map((p) => causes[p].sid).filter((s) => s != null);
+        const sids = lines.map((p) => causes[p].sid).concat(rows.map((s) => s.sid)).filter((s) => s != null);
+        const held = lines.concat(rows.map((s) => `row:${s.sid}`));
         return {
             held, heldG, otherG: Math.max(0, total - heldG), sids,
             who: spoolListWords(sids), many: sids.length > 1,
-            known: held.every((p) => !!causes[p].known_order),
-            onlyHeld: held.length > 0 && held.length === Object.keys(un).length && !(rec.spools || []).length,
+            known: lines.every((p) => !!causes[p].known_order) && rows.every((s) => !!s.weighed.known_order),
+            onlyHeld: held.length > 0 && lines.length === Object.keys(un).length && rows.length === allRows.length,
         };
     }
     function shortfallTitle(rec, h) {
@@ -2047,11 +2064,14 @@
                         const heldSids = new Set(d.held.map((h) => String(h.sid)));
                         const failed = (d.errors || []).filter((x) => !heldSids.has(String(x.sid)));
                         const failWords = failed.length ? ` ${failed.length} other spool(s) failed — check the log.` : '';
-                        if (took > 0) toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
-                        toast(`${why} Nothing was charged to it: check its line and Apply again.${failWords}`,
+                        // Group 64 fix review 2 (CP5): the spools this Apply charged leave
+                        // the redrawn card; the card's own line says so, as a kept card's does.
+                        const chargedWords = took > 0
+                            ? `Charged ${fmtG(took)}g to ${spoolListWords((d.applied || []).map((a) => a.sid))}. ` : '';
+                        toast(`${chargedWords}${why} Nothing was charged to it: check its line and Apply again.${failWords}`,
                             failed.length ? 'error' : 'warning', 7000);
                         const fresh = await rerenderCard(card, true);
-                        sayOnCard(fresh, headPieces(fresh, `${why} Nothing was charged to it: check its line and Apply again.${failWords}`));
+                        sayOnCard(fresh, headPieces(fresh, `${chargedWords}${why} Nothing was charged to it: check its line and Apply again.${failWords}`));
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'confirmed') {
@@ -2080,23 +2100,38 @@
                         if (d.shortfall_card) {
                             // 43.2: what the picked spools couldn't take is on a new card.
                             toastAndKeep(said, `${fmtG(d.shortfall_g)}g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard.`, 'warning', 7000);
-                        } else if (!d.settled_held && Number(d.shortfall_g) > 0.05) {
-                            // A settle's grams were left on purpose (Group 64 review, Y2).
+                        } else if (!d.settled_held && Number(d.shortfall_g) - leftG > 0.05) {
+                            // A settle's grams were left on purpose (Group 64 review, Y2), and so
+                            // were the weighed spools' named above (Group 64 fix review 2, CS4:
+                            // said twice, once as left uncharged and once as "couldn't be applied").
                             // Partial-bind / clamp shortfall (no_spool re-resolve path): part of the
                             // computed usage couldn't be applied — surface it AT THE OVERLAY, not only
                             // in the Activity Log, so the user knows to weigh the still-short spool.
-                            toastAndKeep(said, `${fmtG(d.shortfall_g)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
+                            toastAndKeep(said, `${fmtG(Number(d.shortfall_g) - leftG)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
                         }
-                        if ((d.errors || []).length) toastAndKeep(said, `${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
-                        // R1: the card under the pointer goes, so the second press of a
-                        // double click reaches nothing behind it.
-                        if (window.fccShieldNextPress) window.fccShieldNextPress();
-                        card.remove(); updateCount(); refreshBadge();
-                        if (d.shortfall_card) await showNewCard(printer, d.shortfall_card);
-                        // PI1: another card keeps the panel up: its words are said on it too.
-                        if (body.querySelector('.fcc-cr-card')) sayOnPanel(said.join(' '));
-                        closeIfEmpty();
-                        document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                        // Group 64 fix review 2 (CP7): a write that failed on a spool of this
+                        // card was re-queued by the server (a 43.6 retry row), so the card
+                        // stays: drawn again with both outcomes on it. Only a stale card's
+                        // "not in this review" leaves nothing to retry.
+                        const retrying = (d.errors || []).filter((x) => x && x.error !== 'not in this review');
+                        if (retrying.length) {
+                            toastAndKeep(said, `${retrying.length} spool(s) failed: the card stays, Apply again to retry (FCC checks whether the write landed first).`, 'error', 7000);
+                            const fresh = await rerenderCard(card);
+                            if (fresh) sayOnCard(fresh, headPieces(fresh, said.join(' ')));
+                            refreshBadge();
+                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                        } else {
+                            if ((d.errors || []).length) toastAndKeep(said, `${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
+                            // R1: the card under the pointer goes, so the second press of a
+                            // double click reaches nothing behind it.
+                            if (window.fccShieldNextPress) window.fccShieldNextPress();
+                            card.remove(); updateCount(); refreshBadge();
+                            if (d.shortfall_card) await showNewCard(printer, d.shortfall_card);
+                            // PI1: another card keeps the panel up: its words are said on it too.
+                            if (body.querySelector('.fcc-cr-card')) sayOnPanel(said.join(' '));
+                            closeIfEmpty();
+                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                        }
                     } else if (d.stale) {
                         // 43.2: another Apply changed this card since it was shown.
                         const msg = d.msg || 'This card changed — check it and Apply again.';
@@ -2106,7 +2141,10 @@
                     } else if (d.status === 'already_handled') {
                         toast('Already handled elsewhere.', 'info');
                         if (window.fccShieldNextPress) window.fccShieldNextPress();
-                        card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
+                        card.remove(); updateCount(); refreshBadge();
+                        // Group 64 fix review 2 (CP3): said on the panel too, as a Discard's is.
+                        if (body.querySelector('.fcc-cr-card')) sayOnPanel('Already handled elsewhere.');
+                        closeIfEmpty();
                     } else if (d.status === 'still_no_spool' || d.status === 'manual_only') {
                         // Not applied, but the review is kept server-side — LEAVE the
                         // card so the user can bind a spool / weigh, then retry Apply.

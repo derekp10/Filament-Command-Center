@@ -540,8 +540,10 @@ def test_a_spool_weighed_while_off_its_head_then_put_back_is_filled_in_only_afte
         _tick("PRINTING", _job(0.70))
         log = print_monitor._PRINT_TRACKER[INDX]["swap_log"]
         assert [(e["from_sid"], e["to_sid"]) for e in log] == [(42, 229), (229, 42)], log
+        assert all(e.get("back_at") is not None for e in log), log      # CS1: each keeps its resume
         now = _t.time()
         log[0]["at"], log[1]["at"] = now - 200, now - 100   # when the printer stopped for each
+        log[1]["back_at"] = now - 60                         # and when it resumed with #42 back on
         weigh_stamps.note(42, "the Quick-Weigh", at=now - 150)
         _tick("PRINTING", _job(0.90))
         _tick("STOPPED")
@@ -553,7 +555,7 @@ def test_a_spool_weighed_while_off_its_head_then_put_back_is_filled_in_only_afte
     assert words.startswith("#42 left RCOI-5 at a swap"), words
     assert "before it went back on" in words and "already counted its 40.00 g before that swap" in words, words
     assert "only the 24.28 g it printed after going back on is filled in" in words, words
-    assert row["weighed"]["known_order"] is True
+    assert row["weighed"]["known_order"] is True and row["weighed"]["back"] is True, row["weighed"]
     assert "weighed" not in next(r for r in rec["spools"] if r["sid"] == 229)
 
 
@@ -578,8 +580,65 @@ def test_a_spool_weighed_outside_its_time_off_the_head_is_no_weighing_while_off(
         log = print_monitor._PRINT_TRACKER[INDX]["swap_log"]
         now = _t.time()
         log[0]["at"], log[1]["at"] = now - 200, now - 100
+        log[1]["back_at"] = now - 60                         # the resume: #42 back on, printing
         weigh_stamps.note(42, "the Quick-Weigh", at=now + weighed_at)
         _tick("PRINTING", _job(0.90))
         _tick("STOPPED")
     row = next(r for r in _rec()["spools"] if r["sid"] == 42)
     assert "weighed" not in row and row["grams"] == pytest.approx(64.28), row
+
+
+def _moved_off_and_back(p, weigh_when):
+    """#42 runs RCOI-5 to 50% and comes off at a park; #229 runs to 70%; at a second
+    park #42 goes back on. Real ticks and the clock's own moments (nothing set by
+    hand). `weigh_when`: where #42 is weighed on the Quick-Weigh (the scale counts its
+    40 g): at the first park's prompt, between the parks, or at the second park's
+    prompt, right before it is loaded again."""
+    import time as _t
+    import weigh_stamps
+
+    def weigh():
+        p.sm.spools[42]["used_weight"] = 740.0
+        weigh_stamps.note(42, "the Quick-Weigh")
+        _t.sleep(0.02)
+    _tick("PRINTING", _job(0.10))
+    _tick("ATTENTION", _job(0.50))
+    _t.sleep(0.02)
+    p.load_229()
+    if weigh_when == "first_park":
+        weigh()
+    _t.sleep(0.02)
+    _tick("PRINTING", _job(0.50))
+    _t.sleep(0.02)
+    if weigh_when == "between":
+        weigh()
+    _tick("ATTENTION", _job(0.70))
+    _t.sleep(0.02)
+    if weigh_when == "second_park":
+        weigh()
+    p.at["RCOI-5"] = [42]
+    p.sm.spools[42]["location"] = "RCOI-5"
+    p.sm.spools[229]["location"] = "SHELF-1"
+    _t.sleep(0.02)
+    _tick("PRINTING", _job(0.70))
+    _tick("PRINTING", _job(0.90))
+    _tick("STOPPED")
+
+
+@pytest.mark.parametrize("weigh_when", ["first_park", "between", "second_park"])
+def test_a_spool_weighed_at_any_moment_it_was_off_is_filled_in_only_after_it_went_back(logs, weigh_when):
+    """Group 64 fix review 2 (CS1), red on d0d51d7 for "second_park" (#42 filled in with
+    64.28 g and no mark, applied to 804.28 g): a swap's `at` is when the printer paused
+    for it, so a weighing at that pause's prompt, before #42 went back on, fell after the
+    span FX5 checked. The span ends when the print resumed (`back_at`). Applied as filled
+    in, #42 ends at 740 + 24.28 g."""
+    with Indx() as p, _measured(USAGE, {0.5: {4: 40.0, 6: 30.0, 7: 9.0}, 0.7: {4: 60.0, 6: 45.0, 7: 13.0}}):
+        _moved_off_and_back(p, weigh_when)
+        rec = _rec()
+        row = next(r for r in rec["spools"] if r["sid"] == 42)
+        assert row.get("weighed") and row["weighed"].get("back") is True, row
+        assert row["prefill"] == pytest.approx(24.28), row
+        updates = {str(r["sid"]): (r["prefill"] if r.get("prefill") is not None else r["grams"]) for r in rec["spools"]}
+        body = _confirm({"updates": updates, "rev": 0})
+        assert body["status"] == "confirmed" and not body.get("held"), body
+        assert p.sm.spools[42]["used_weight"] == pytest.approx(764.28)

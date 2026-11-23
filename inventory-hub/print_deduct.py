@@ -1232,6 +1232,26 @@ def _mmu_shared_note(holders):
             f"Position in Settings (slot 1 = Position 0, slot 2 = Position 1, …) lets FCC tell next time.")
 
 
+def _note_mmu_lines(record, mmu, uncharged):
+    """Group 64 full review (SP4) / fix review 2 (CS2 / CX5): on a card built with no
+    print-end read, each MMU position of `mmu` ({position: holders}) left without a row
+    is a line saying the slots share one Position, its picker offering each slot's
+    spool, and the log line's tail says so. Returns the tail (`uncharged` unchanged
+    when there is nothing to say)."""
+    if not mmu or not record.get("unresolved_usage"):
+        return uncharged
+    record["heads_at_end"] = _with_mmu_heads(record.get("heads_at_end") or [], mmu)
+    notes = {str(p): _mmu_shared_note(h) for p, h in mmu.items() if str(p) in record["unresolved_usage"]}
+    if not notes:
+        return uncharged
+    record["unresolved_notes"] = dict(record.get("unresolved_notes") or {}, **notes)
+    return _uncharged_tail(
+        record["unresolved_usage"],
+        {str(p): f"whose MMU slots {_and_list(s for s, _ss in h)} share one Position"
+         for p, h in mmu.items() if str(p) in notes},
+        record["heads_at_end"])
+
+
 def _with_mmu_heads(heads, mmu):
     """A card's heads with each MMU position of `mmu` ({position: holders}) as one
     entry naming every spool its slots hold (_shared_mmu_head), so the picker offers
@@ -1960,17 +1980,21 @@ def _swap_left_at(swap_log):
 def _swap_back_spans(swap_log):
     """Group 64 full review (FX5): {str(sid): [(left_at, back_at, back_cut)]} for each
     time a spool left its head at a recorded swap and went back on at a later one:
-    when the printer stopped for the swap that took it off, for the one that put it
-    back, and where in the print the swap that put it back cuts (_swap_point). A swap
-    with no moment (recorded before swaps had one) gives none."""
+    when the printer stopped for the swap that took it off, when the print resumed
+    with it back on (the event's `back_at`, else, for an event recorded before it had
+    one, when the printer stopped for that swap: Group 64 fix review 2, CS1, a weighing
+    at that pause's prompt was missed), and where in the print the swap that put it
+    back cuts (_swap_point). A swap with no moment (recorded before swaps had one)
+    gives none."""
     out = {}
     try:
         events = sorted((e for e in swap_log or [] if isinstance(e, dict)), key=lambda e: int(e.get('seq') or 0))
         off = {}
         for ev in events:
             back = str(ev.get('to_sid'))
-            if back in off and ev.get('at') is not None and _swap_point(ev) is not None:
-                out.setdefault(back, []).append((off.pop(back), float(ev['at']), _swap_point(ev)))
+            on_again = ev.get('back_at') if ev.get('back_at') is not None else ev.get('at')
+            if back in off and on_again is not None and _swap_point(ev) is not None:
+                out.setdefault(back, []).append((off.pop(back), float(on_again), _swap_point(ev)))
             else:
                 off.pop(back, None)
             if ev.get('at') is not None and ev.get('from_sid') is not None:
@@ -2282,8 +2306,10 @@ def _mark_weighed_rows(rows, heads, end_at, left_at=None, source=None, back_span
             grams = round(float(r.get('grams') or 0), 2)
             info = {"sid": r.get('sid'), "toolhead": r.get('toolhead'), "stamp": stamp, "left": left_t,
                     "back": back_t}
+            # `back` (Group 64 fix review 2, CX4): the page words this mark as its own
+            # kind; what it fills in is the stretch the scale didn't count, never 0 g.
             r["weighed"] = {"words": _back_weighed_words(info, grams, after), "known_order": True, "left": True,
-                            "stamp_at": stamp.get("at")}
+                            "back": True, "stamp_at": stamp.get("at")}
             r["prefill"] = after
             break
     return rows
@@ -2408,7 +2434,9 @@ def _record_swap_events(entry, end_snap, progress, runout=False, before=None, at
     `at` (Group 64 full review, OR2 / SP2): when the printer stopped printing for this
     pause (print_monitor's `paused_at`), kept on each event as `at`: the end of the
     share of the spool the swap took off, so a weighing of it after that moment is one
-    the scale counted its share in (Decision 1, _swap_left_at)."""
+    the scale counted its share in (Decision 1, _swap_left_at). `back_at` (Group 64 fix
+    review 2, CS1): when the print resumed, the event's own recording moment, which
+    ends the time the spool it put on was off a head (_swap_back_spans)."""
     start = entry.get('start_spools') or {}
     log = list(entry.get('swap_log') or [])
     # Reconstruct what the just-printed segment was feeding from: the start mapping,
@@ -2437,6 +2465,10 @@ def _record_swap_events(entry, end_snap, progress, runout=False, before=None, at
         })
         if at is not None:
             log[-1]["at"] = float(at)
+        # Group 64 fix review 2 (CS1): when the print resumed (this runs at the resume),
+        # the end of the time the spool this swap put on was off a head: a weighing at
+        # the pause's prompt, before it went back on, is a weighing made while it was off.
+        log[-1]["back_at"] = time.time()
         added += 1
     if added:
         entry['swap_log'] = log
@@ -3523,6 +3555,9 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
     # Every position a row charges (the split's own, and whatever the resolver
     # finds), so a used head with no spool rides along as unresolved (43.4).
     charged = set()
+    # Group 64 fix review 2 (CS2 / CX5): with no print-end read, MMU slots sharing one
+    # Position give no row (SP4); their line says so here too, as on a cancel's card.
+    mmu = {}
     held = {}
     unread = set()
     row_notes = {}
@@ -3598,7 +3633,7 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                           if _norm_pos(p) not in covered and (g or 0) > 0}
             rest_rows = _resolve_usage_to_spools(
                 printer_name, rest_usage, fb_url, active_locs=active_locs,
-                charged_out=charged) if rest_usage else []
+                charged_out=charged, mmu_out=mmu) if rest_usage else []
             # Review fix: a split head one of whose spools also has a plain row gets
             # the plain rows instead (the review's rows from before the split), so
             # every spool has one row; its grams are then split by hand.
@@ -3615,12 +3650,13 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 # gets the plain rows, as when the split can't be built at all.
                 covered, split = set(), None
                 rest_rows = _resolve_usage_to_spools(
-                    printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged)
+                    printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged,
+                    mmu_out=mmu)
         charged.update(covered)
         rows = list(split_rows or []) + list(rest_rows or [])
     else:
         rows = _resolve_usage_to_spools(
-            printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged)
+            printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged, mmu_out=mmu)
     # 22.3(b): True when the rows charge each swapped head's spools their own
     # segments (taken after the review fix above, which can refuse a split).
     auto_split = bool(split_rows)
@@ -3645,7 +3681,9 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 **_given(heads_read_at=heads_read_at, sets=card["sets"] or None,
                          swap_left_at=_swap_left_at(swap_log) or None, end_at_s=end_at))
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
-                                        usage_map=usage_map, no_spool=True)
+                                        usage_map=usage_map, no_spool=True,
+                                        **_given(notes={str(p): _mmu_shared_note(h) for p, h in mmu.items()} or None,
+                                                 mmu_shared=mmu or None))
     left_at = _swap_left_at(swap_log)
     if heads is not None:
         # Decision 1 (Group 64): as a cancel's card.
@@ -3685,7 +3723,8 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                                      source=heads_source, read_at=heads_read_at,
                                      notes=card["notes"], phrases=card["phrases"], sets=card["sets"])
     else:
-        uncharged = _carry_uncharged(record, unresolved, printer_name, fb_url, active_locs=active_locs)
+        uncharged = _note_mmu_lines(record, mmu, _carry_uncharged(record, unresolved, printer_name, fb_url,
+                                                                  active_locs=active_locs))
     cancel_review_store.add_pending(record)
     # Then claim the deferred-fetch slot too, so a queued kind='complete' retry (a
     # prior finish-screen lock) can't later auto-apply the full footer behind this
@@ -3934,6 +3973,12 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
         lines = {str(k): round(float(v), 2) for k, v in usage_map.items() if (v or 0) > 0}
         msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{_esc(filename)}') but no spool "
                f"was charged{_uncharged_tail(lines, phrases, heads)}.")
+    elif no_spool and mmu_shared:
+        # Group 64 fix review 2 (CS2 / CX5): a spool is bound; the slots share a Position.
+        slots = _and_list(_and_list(s for s, _ss in h) for h in mmu_shared.values())
+        msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{_esc(filename)}') but no spool was "
+               f"charged: MMU slots {slots} share one Position and each holds a spool, so FCC can't tell "
+               f"which slot printed — pick the spool it used in 🛑 Review, or Discard.")
     elif no_spool:
         msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{_esc(filename)}') but it "
                f"couldn't be deducted (no spool bound to the toolhead, or the write was "
@@ -4488,17 +4533,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         "ambiguous": bool(ambiguous),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    uncharged = _carry_uncharged(record, unresolved, printer_name, fb_url)
-    if mmu and record.get("unresolved_usage"):
-        record["heads_at_end"] = _with_mmu_heads(record.get("heads_at_end") or [], mmu)
-        kept = {k: v for k, v in mmu_notes.items() if k in record["unresolved_usage"]}
-        if kept:
-            record["unresolved_notes"] = kept
-            uncharged = _uncharged_tail(
-                record["unresolved_usage"],
-                {str(p): f"whose MMU slots {_and_list(s for s, _ss in h)} share one Position"
-                 for p, h in mmu.items() if str(p) in kept},
-                record["heads_at_end"])
+    uncharged = _note_mmu_lines(record, mmu,
+                                _carry_uncharged(record, unresolved, printer_name, fb_url))
     cancel_review_store.add_pending(record)
     state.add_log_entry(
         f"{lead} — review {'computed' if ambiguous else 'partial'} "
@@ -5313,6 +5349,7 @@ def api_cancel_deduct_confirm():
     # no_spool re-check against whatever is on the head now).
     charges = data.get('charges')
     set_left = 0.0
+    held_beside = []
     if kind == "no_spool" and charges is None:
         # A no_spool Apply names the spool each head used (`charges`): today's page
         # always sends its picks on such a card. The old Apply without them re-read
@@ -5413,6 +5450,16 @@ def api_cancel_deduct_confirm():
         # failed write's retry (_say_uncharged). Round 2's review: as the ledger
         # counts it, with what was typed beyond a line and the spools picked.
         left_lines, over_lines, picked_for = _lines_left_unplaced(rec, kind, charges)
+        if kind == "shortfall":
+            # Group 64 fix review 2 (CS3 / CX1): a pick an earlier Apply held stays on the
+            # card as a row marked weighed. One no pick of this Apply names (left at its
+            # 0 g) is settled with the card's other weighed lines when the page sent
+            # settle_held, and kept on the card otherwise; the picks replacing the rows
+            # used to drop it, and its grams were said as no spool's.
+            named = {str(c.get("row")) for c in charges if isinstance(c, dict) and c.get("row") is not None}
+            held_beside = [r for r in rec.get("spools") or []
+                           if isinstance(r, dict) and isinstance(r.get("weighed"), dict)
+                           and r.get("attempt_used_before") is None and str(r.get("sid")) not in named]
         rec = dict(rec)
         if left_lines:
             rec["unplaced"] = _add_grams(rec.get("unplaced"), left_lines)
@@ -5677,6 +5724,12 @@ def api_cancel_deduct_confirm():
                         row['attempt_was_archived'] = was_
                         row['attempt_sent_at'] = at_
                         row['grams'] = round(after_ - before_, 2)
+                        # Group 64 fix review 2 (CP4): the person chose to charge this
+                        # row (its write was sent), so it is no hold any more: its mark
+                        # and its 0 g would redraw it as one, and an Apply as drawn
+                        # would leave the grams the person decided to charge.
+                        row.pop('weighed', None)
+                        row.pop('prefill', None)
                 if sid_ in held_rows:
                     row.update(held_rows[sid_])
                 retry_rows.append(row)
@@ -5754,9 +5807,19 @@ def api_cancel_deduct_confirm():
             # them would, instead of a kept card telling the person to pick a spool
             # for grams the scale already counted.
             left = {}
-        if left and sum(left.values()) >= max(0.05, _shortfall_review_min_g()):
+        held_kept = []
+        if held_beside:
+            if data.get("settle_held") is True and not left and not drained:
+                # CS3 / CX1: settled with the lines, named as left uncharged.
+                settled = list(settled or []) + _weighed_rows_left(held_beside, {}, {})
+            else:
+                held_kept = held_beside
+        if held_kept or (left and sum(left.values()) >= max(0.05, _shortfall_review_min_g())):
+            # CX1: a held row no pick named stays a row of the kept card, whatever the
+            # threshold says (a held head is a question, never a rounding).
             kept = dict(rec)
-            kept.update(spools=[], unresolved_usage=left, total_grams=round(sum(left.values()), 2),
+            kept.update(spools=held_kept, unresolved_usage=left,
+                        total_grams=round(sum(left.values()) + sum(float(r.get('grams') or 0) for r in held_kept), 2),
                         rev=int(rec.get("rev") or 0) + 1, applied_g=applied_total)
             if requested_total is not None:
                 kept["requested_total"] = requested_total
@@ -5765,7 +5828,7 @@ def api_cancel_deduct_confirm():
             # Group 64 fix review (FS2): the card's weighed lines are no grams with no
             # spool: they wait at what the card filled in, and saying "pick another"
             # for them sent the person to charge grams the scale had counted.
-            kept_weighed = _weighed_lines_left(kept, left)
+            kept_weighed = _weighed_lines_left(kept, left) + _weighed_rows_left(held_kept, {}, {})
             state.add_log_entry(
                 f"⚠️ {printer}: charged {charged_now:.2f}g of the uncharged grams from "
                 f"'{_esc(rec.get('filename'))}'; {_kept_card_words(kept['total_grams'], kept_weighed)}.",
@@ -5835,7 +5898,11 @@ def api_cancel_deduct_confirm():
             gone = {str(l["line"]) for l in settled}
             say_rec = dict(rec, unresolved_usage={k: v for k, v in (rec.get("unresolved_usage") or {}).items()
                                                   if str(k) not in gone})
-            say_short = round(shortfall - sum(float(l["grams"]) for l in settled), 2)
+        if left_weighed:
+            # Group 64 fix review 2 (CS4): every weighed line and row this Apply left is
+            # said by _say_left_weighed's line, above, as uncharged on purpose; counted
+            # here too, they were said a second time as grams no spool took.
+            say_short = round(max(0.0, shortfall - sum(float(l["grams"]) for l in left_weighed)), 2)
         _say_uncharged(printer, say_rec, say_short, residue_card,
                        clamped=round(float(rec.get("clamped_g") or 0) + clamp_g, 2))
     return jsonify(resp)

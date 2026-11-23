@@ -1549,7 +1549,11 @@ window.wizardCalcUsedWeight = () => {
     // reconciled (used + remaining == netWt).
     document.getElementById('wiz-spool-used').value = window.fmtGramsPrecise(used);
     document.getElementById('wiz-spool-remaining').value = window.fmtGramsPrecise(netWt - used);
-    wizardState.usedRead = { shown: document.getElementById('wiz-spool-used').value };      // PI2
+    // Group 64 fix review 2 (CP1 / CX2): the Scale box is a number box with no scan
+    // capture, so a spool label scanned into it leaves its digits there (ID:57 reads
+    // 57) and they are worked out as a gross reading: no reading FCC can vouch for, so
+    // never stamped as its weighing. Weigh from Scale's boxes take the weight capture.
+    wizardState.usedRead = null;
     wizardState.usedAdd = null;
 };
 
@@ -4747,6 +4751,14 @@ window.wizardSubmit = async () => {
                     if (box) box.checked = !!data.archived_now;
                 }
                 wizardAfterOwnWrite(data, editSid, wizModal);
+                // Group 64 fix review 2 (CP6): the spool's own write landed, its Total Used
+                // with it, so the box shows what is saved (S3's rule, which only a Save that
+                // succeeded kept): the retry sends the used weight only if it changes again,
+                // never this one over a print's charge that landed in between, nor a second
+                // weighing's stamp.
+                wizardState.usedShown = document.getElementById('wiz-spool-used').value;
+                wizardState.usedAdd = null;
+                wizardState.usedRead = null;
             }
         }
     } catch (e) {

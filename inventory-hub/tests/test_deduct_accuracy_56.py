@@ -1207,7 +1207,7 @@ def test_a_swap_review_that_cant_be_written_charges_nothing_and_waits(logs, no_a
         "swap_log": [{"seq": 0, "position": 0, "progress": 0.5, "from_sid": 4, "to_sid": 5}],
         "start_spools": {"0": 4}})
 
-    def _rows(printer, usage_map, fb_url, active_locs=None, charged_out=None):
+    def _rows(printer, usage_map, fb_url, active_locs=None, charged_out=None, **_kw):
         if charged_out is not None:
             charged_out.add(0)
         return [{"sid": 5, "grams": 10.0, "color": "ff0000", "position": 0, "toolhead": "XL-1"}]

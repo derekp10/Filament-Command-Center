@@ -622,14 +622,17 @@ def test_a_scale_reading_says_it_is_one(wiz):
     assert body.get("used_based_on") == {"mode": "reading"} and body["spool_data"]["used_weight"] == 130, body
 
 
-def test_the_scale_boxs_gross_reading_says_it_is_one(wiz):
-    """PI2, red on c1ee3e0: the Scale box works Total Used out from a gross reading
-    (1066 g on the scale, 1000 g net, a 196 g spool: 130 g used)."""
+def test_the_scale_boxs_figure_is_no_reading_fcc_can_vouch_for(wiz):
+    """Group 64 fix review 2 (CP1 / CX2), red on d0d51d7 ({mode: "reading"}): the Scale
+    box works Total Used out from a gross figure (1066 g, 1000 g net, a 196 g spool: 130
+    g used), but it is a number box with no scan capture, so a spool label scanned into
+    it leaves its digits there and they are worked out the same way. Its figure is sent
+    as the person's own, never stamped as FCC's weighing (Weigh from Scale's is)."""
     _open_edit_used(wiz, 100.37)
     wiz.locator("#wiz-spool-scale").press_sequentially("1066")
     assert _value(wiz, "#wiz-spool-used") == "130"
     body = _save(wiz, EDIT)
-    assert body.get("used_based_on") == {"mode": "reading"} and body["spool_data"]["used_weight"] == 130, body
+    assert "used_based_on" not in body and body["spool_data"]["used_weight"] == 130, body
 
 
 def test_a_total_used_typed_by_hand_or_over_a_reading_says_nothing(wiz):
@@ -665,3 +668,23 @@ def test_a_failed_save_keeps_total_useds_baseline(wiz):
     wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
     second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
     assert second["spool_data"]["used_weight"] == 130, second["spool_data"]
+
+
+
+def test_a_save_after_spool_saved_but_filament_refused_sends_total_used_only_if_it_changes(wiz):
+    """Group 64 fix review 2 (CP6), red on d0d51d7 (the second Save sent 130 again, over
+    a print's charge that landed in between, and a reading's second stamp). The spool's
+    own write landed and the filament's was refused; the next Save sends Total Used only
+    if it changed since."""
+    _open_edit_used(wiz, 100.37)
+    wiz.evaluate("""() => { window.__answers['/api/edit_spool_wizard'] = {
+        success: false, spool_saved: true, msg: 'Filament update failed (test)' }; }""")
+    wiz.locator("#wiz-spool-used").fill("130")
+    assert _save(wiz, EDIT)["spool_data"]["used_weight"] == 130
+    wiz.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57 }; }")
+    wiz.locator("#wiz-spool-comment").fill("filament fixed")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert "used_weight" not in second["spool_data"] and "used_based_on" not in second, second
