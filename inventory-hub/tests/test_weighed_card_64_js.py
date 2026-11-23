@@ -915,7 +915,9 @@ def test_the_card_head_names_one_spool_once_and_a_retry_row_apart(tmp_path):
     assert res["d#shortfall"]["title"] == "⚖️ TESTER — 16g held: #200 was weighed after this print", res
     assert res["r#shortfall"]["title"] == "⚖️ TESTER — 12.4g held; 5g to retry on #200", res
     assert "joined spool" not in res["r#shortfall"]["banner"], res
-    assert "The 5g picked for #200 weren't written" in res["r#shortfall"]["banner"], res
+    # Fix review 4 (UP6): a write FCC couldn't confirm, worded for one spool.
+    assert ("The 5g picked for #200 couldn't be confirmed as written (Spoolman didn't take the write, or "
+            "didn't answer): Apply tries again, and FCC first checks whether it landed.") in res["r#shortfall"]["banner"], res
 
 
 NULLREAD_JS = r"""
@@ -977,3 +979,208 @@ def test_a_spool_that_took_0g_is_never_named_as_charged(tmp_path):
     res = run(tmp_path, RESPOND_JS + ZERO_JS, {"pending": [z], "spools": SPOOLS, "words": WORDS_KNOWN})
     assert res["toasts"][0].startswith(
         "Charged 3.6g to #300. #301's record was at 0 g, so nothing was charged to it. #200 on HEAD-1"), res
+
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 fix review 4 (2026-11-23): UP1, UP2, UP3, UP6, UP7, US1 (page)       #
+# --------------------------------------------------------------------------- #
+
+STALE_WORDS = ("FCC couldn't read the review list just now, so this card may be out of date: Apply reads "
+               "it again first, or close 🛑 Review and open it again.")
+REFUSED = {"sid": 200, "error": 'HTTP 500: {"message": "database is locked"}',
+           "words": "Spoolman refused it: database is locked"}
+
+
+def _two_rows(job):
+    return _base(job, "partial", total_grams=16.0,
+                 spools=[_row(200, 12.4), _row(300, 3.6, toolhead="HEAD-2", position=1)],
+                 heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                               {"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}])
+
+
+ANSWER_JS = r"""
+let rec = JSON.parse(JSON.stringify(D.pending[0]));
+let confirmed = false;
+window.__readFails = !!D.readFails;
+const __b9 = window.__respond;
+window.__respond = (url, method, body) => {
+  if (url.startsWith('/api/cancel_deduct/pending')) {
+    if (confirmed && window.__readFails) return { status: 500, body: {} };
+    return { body: { pending: [rec] } };
+  }
+  if (url.startsWith('/api/cancel_deduct/confirm')) {
+    confirmed = true;
+    if (D.retryRow) rec = Object.assign({}, rec, { spools: [Object.assign({}, rec.spools[0], {
+      attempt_used_before: 100.0, attempt_used_after: 112.4 })] });
+    return { body: D.confirm };
+  }
+  return __b9(url, method, body);
+};
+const noticeOf = (c) => c ? ((c.querySelector('.fcc-cr-card-notice') || {}).textContent || '').replace(/\s+/g, ' ').trim() : null;
+const rowsOf = (c) => c ? Array.from(c.querySelectorAll('.fcc-cr-row')).map((r) => r.dataset.sid) : null;
+"""
+
+PRESS_JS = r"""
+cardOf('h').querySelector('.fcc-cr-confirm').click();
+await settle(150);
+return { notice: noticeOf(cardOf('h')), rows: rowsOf(cardOf('h')), toasts: __rec.toasts.map((t) => [t.type, t.msg]) };
+"""
+
+
+def test_a_refused_write_is_said_in_words_never_spoolmans_raw_answer(tmp_path):
+    """UP1, red on 5af23516 ('Not charged: #200 (HTTP 500: {"message": "database is
+    locked"})' on the card and in the toast, or requests' text with Spoolman's address):
+    the server's words, beside a charge and with nothing charged alike."""
+    beside = {"status": "confirmed", "applied": [{"sid": 300, "grams": 3.6, "remaining": 896.4}], "errors": [REFUSED]}
+    res = run(tmp_path, RESPOND_JS + ANSWER_JS + PRESS_JS,
+              {"pending": [_two_rows("h")], "spools": SPOOLS, "confirm": beside, "retryRow": True})
+    assert res["notice"] == ("Deducted from 1 spool(s). Not charged: #200 (Spoolman refused it: database is locked). "
+                             "The card stays: check it, then Apply again or Discard."), res
+    alone = {"status": "error", "applied": [], "errors": [REFUSED]}
+    sub = tmp_path / "alone"
+    sub.mkdir()
+    res2 = run(sub, RESPOND_JS + ANSWER_JS + PRESS_JS, {"pending": [_two_rows("h")], "spools": SPOOLS, "confirm": alone})
+    assert res2["notice"] == "Spoolman refused it: database is locked", res2
+    for r in (res, res2):
+        assert not [m for _t, m in r["toasts"] if "HTTP 500" in m or "{" in m], r["toasts"]
+
+
+STALE_PRESSES_JS = r"""
+cardOf('h').querySelector('.fcc-cr-confirm').click();
+await settle(150);
+const first = { notice: noticeOf(cardOf('h')), rows: rowsOf(cardOf('h')) };
+cardOf('h').querySelector('.fcc-cr-confirm').click();
+await settle(150);
+const second = { notice: noticeOf(cardOf('h')), posts: posts('/api/cancel_deduct/confirm').length,
+                 enabled: !cardOf('h').querySelector('.fcc-cr-confirm').disabled };
+window.__readFails = false;
+cardOf('h').querySelector('.fcc-cr-confirm').click();
+await settle(150);
+return { first, second, third: { notice: noticeOf(cardOf('h')), rows: rowsOf(cardOf('h')),
+                                 posts: posts('/api/cancel_deduct/confirm').length },
+         toasts: __rec.toasts.map((t) => [t.type, t.msg]) };
+"""
+
+
+def test_a_card_kept_as_drawn_after_a_failed_read_says_so_and_reads_again_before_posting(tmp_path):
+    """UP2, red on 5af23516 (the card kept as drawn said nothing of it, and its next Apply
+    posted #300 again, which the first Apply had charged: "1 spool(s) failed"). After a
+    partly failed Apply the list can't be read: the card says it may be out of date; its
+    next Apply reads the list again first and posts nothing, still unread or drawn again."""
+    beside = {"status": "confirmed", "applied": [{"sid": 300, "grams": 3.6, "remaining": 896.4}], "errors": [REFUSED]}
+    res = run(tmp_path, RESPOND_JS + ANSWER_JS + STALE_PRESSES_JS,
+              {"pending": [_two_rows("h")], "spools": SPOOLS, "confirm": beside, "retryRow": True, "readFails": True})
+    assert res["first"]["rows"] == ["200", "300"], res
+    assert res["first"]["notice"] == ("Deducted from 1 spool(s). Not charged: #200 (Spoolman refused it: database "
+                                      "is locked). The card stays: check it, then Apply again or Discard. "
+                                      + STALE_WORDS), res
+    assert res["second"] == {"notice": STALE_WORDS, "posts": 1, "enabled": True}, res
+    assert ["warning", STALE_WORDS] in res["toasts"], res["toasts"]
+    assert res["third"] == {"notice": "Drawn again as FCC holds this card now: check it, then Apply.",
+                            "rows": ["200"], "posts": 1}, res
+
+
+def test_a_spool_no_longer_on_the_card_is_no_failure(tmp_path):
+    """UP2's other half, red on 5af23516 ("1 spool(s) failed — check the log." for a spool
+    an earlier Apply had charged): said as no longer on the card, nothing more charged."""
+    gone = {"status": "confirmed", "applied": [{"sid": 200, "grams": 12.4, "remaining": 887.6}],
+            "errors": [{"sid": 300, "error": "not in this review"}]}
+    res = run(tmp_path, RESPOND_JS + ANSWER_JS + PRESS_JS, {"pending": [_two_rows("h")], "spools": SPOOLS, "confirm": gone})
+    assert res["toasts"] == [["success", "Deducted from 1 spool(s)."],
+                             ["info", "#300 was no longer on this card (an earlier Apply settled it): nothing more "
+                                      "was charged to it."]], res["toasts"]
+
+
+def test_an_unpicked_heads_grams_are_said_beside_a_new_card_too(tmp_path):
+    """UP3, red on 5af23516 (only the new card's 2.6 g were said; XL-3's 8.96 g, a head
+    nobody picked, appeared nowhere on the page). An older FCC's answer, with no
+    shortfall_card_g, says only the card's figure, as before."""
+    confirm = {"status": "confirmed", "errors": [], "shortfall_g": 11.56, "shortfall_card": "h#shortfall",
+               "shortfall_card_g": 2.6, "applied": [{"sid": 200, "grams": 12.4, "remaining": 887.6},
+                                                    {"sid": 300, "grams": 1.0, "remaining": 0.0}]}
+    res = run(tmp_path, RESPOND_JS + ANSWER_JS + PRESS_JS, {"pending": [_two_rows("h")], "spools": SPOOLS, "confirm": confirm})
+    assert [m for _t, m in res["toasts"]] == [
+        "Deducted from 2 spool(s).",
+        "2.6g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard.",
+        "8.96g couldn't be applied — weigh that spool to true up."], res["toasts"]
+    older = dict(confirm)
+    del older["shortfall_card_g"]
+    sub = tmp_path / "older"
+    sub.mkdir()
+    res2 = run(sub, RESPOND_JS + ANSWER_JS + PRESS_JS, {"pending": [_two_rows("h")], "spools": SPOOLS, "confirm": older})
+    assert [m for _t, m in res2["toasts"]] == [
+        "Deducted from 2 spool(s).",
+        "11.56g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard."], res2
+
+
+def test_weighed_spools_settled_beside_a_failed_write_are_named(tmp_path):
+    """US1 (page), red on 5af23516 (the server kept the row on the retry card; an Apply that
+    settles it beside a failed write now names it, and the page says so whatever else the
+    answer says)."""
+    confirm = {"status": "error", "applied": [],
+               "errors": [{"sid": 300, "error": "Max retries exceeded (test)", "words": "FCC couldn't reach Spoolman."}],
+               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": False}], "settled_unsure": True}
+    res = run(tmp_path, RESPOND_JS + ANSWER_JS + PRESS_JS, {"pending": [_two_rows("h")], "spools": SPOOLS, "confirm": confirm})
+    words = "FCC couldn't reach Spoolman. Left 12.4g uncharged on #200 as set: its weight changed after the print."
+    assert res["notice"] == words and ["error", words] in res["toasts"], res
+
+
+def test_several_retry_rows_are_worded_for_several_writes(tmp_path):
+    """UP6, red on 5af23516 ("The 9g picked for #200 and #300 weren't written (Spoolman
+    didn't take the write) ... whether it landed"): several writes, and none of them
+    known not to have landed."""
+    card = _shortfall_with_rows(
+        "r#shortfall", [_row(200, 5.0, attempt_used_before=100.0, attempt_used_after=105.0),
+                        _row(300, 4.0, toolhead="HEAD-2", position=1, attempt_used_before=50.0,
+                             attempt_used_after=54.0)], 9.0)
+    res = run(tmp_path, RESPOND_JS + TITLES_JS, {"pending": [card], "spools": SPOOLS})
+    assert ("The 9g picked for #200 and #300 couldn't be confirmed as written (Spoolman didn't take their "
+            "writes, or didn't answer): Apply tries again, and FCC first checks whether each landed.") \
+        in res["r#shortfall"]["banner"], res
+
+
+FAILED_READ_JS = r"""
+const D = __DATA__;
+let mode = 'ok';
+window.__respond = (url) => {
+  if (url.startsWith('/api/cancel_deduct/pending')) {
+    if (mode === 'ok') return { body: { pending: D.pending } };
+    if (mode === '500') return { status: 500, body: {} };
+    return { fail: true };
+  }
+  return { body: {} };
+};
+const badge = document.createElement('span');
+badge.id = 'cancel-review-badge'; badge.style.display = 'none'; badge.setAttribute('title', 'Reviews waiting');
+document.body.appendChild(badge);
+const look = () => ({ text: badge.textContent, shown: badge.style.display !== 'none',
+                      read: badge.dataset.read || null, title: badge.getAttribute('title') });
+await window.refreshCancelReviewBadge(); await settle(20);
+const good = look();
+mode = '500';
+await window.refreshCancelReviewBadge(); await settle(20);
+const failed = look();
+mode = 'net';
+await window.openCancelReview(); await settle(40);
+const opened = !!document.getElementById('fcc-cr-body');
+mode = 'ok';
+await window.refreshCancelReviewBadge(); await settle(20);
+return { good, failed, opened, back: look(), toasts: __rec.toasts.map((t) => [t.type, t.msg]) };
+"""
+
+
+def test_a_review_list_fcc_couldnt_read_is_never_no_reviews(tmp_path):
+    """UP7, red on 5af23516 (a failed read hid the 🛑 pill and every printer's count, and
+    🛑 Review said "No pending cancel reviews."): the counts stay, the pill's tooltip says
+    why, and the review says it couldn't read the list."""
+    recs = [_base(j, "partial", total_grams=3.6, spools=[_row(300, 3.6, toolhead="HEAD-2", position=1)],
+                  heads_at_end=[{"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}]) for j in ("1", "2")]
+    res = run(tmp_path, FAILED_READ_JS, {"pending": recs})
+    assert res["good"] == {"text": "🛑 2 reviews", "shown": True, "read": None, "title": "Reviews waiting"}, res
+    assert res["failed"]["text"] == "🛑 2 reviews" and res["failed"]["shown"] is True, res
+    assert res["failed"]["read"] == "failed" and "couldn't read the review list just now" in res["failed"]["title"], res
+    assert res["opened"] is False, res
+    assert res["toasts"] == [["warning", "FCC couldn't read the review list just now, so it can't be shown. "
+                                         "Try again in a moment."]], res["toasts"]
+    assert res["back"] == res["good"], res

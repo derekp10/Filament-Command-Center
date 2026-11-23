@@ -980,6 +980,10 @@ window.wizardFollowFilament = (record = null) => {
 };
 
 const wizardReset = () => {
+    // Group 64 fix review 4 (UP5): each open is a session of its own, so a Save's
+    // answer that comes after the wizard was opened again (for another spool, or the
+    // same one read afresh) leaves the new form alone.
+    wizardState.session = (wizardState.session || 0) + 1;
     wizardState.mode = 'manual';
     wizardState.touchedExtras = new Set();
     wizardState.touchedNative = new Set();
@@ -4206,16 +4210,15 @@ window.wizardSettleCreatePlacements = (data, { host = null, onDone = null, pick 
     return asked;
 };
 
-// Group 64 review (S3), fix review 2 (CP6) and 3 (TP5): once a Save's spool write
-// landed, Total Used's baseline is the figure that Save sent (a figure typed while it
-// was out still differs, so the next Save sends it; read from the box at the answer,
-// it was never sent). An addition or a reading is spent only while the box still shows
-// the figure it named (a new reading taken meanwhile keeps its own).
-function wizardSavedUsed(sent) {
+// Group 64 review (S3), fix review 2 (CP6), 3 (TP5) and 4 (UP4): once a Save's spool
+// write landed, Total Used's baseline is the figure that Save sent (a figure typed while
+// it was out still differs, so the next Save sends it; read from the box at the answer,
+// it was never sent). The addition or reading that Save sent is spent, and only that
+// one: a new one taken while it was out is another object, and keeps its own.
+function wizardSavedUsed(sent, addSent, readSent) {
     wizardState.usedShown = sent;
-    const now = (document.getElementById('wiz-spool-used') || {}).value;
-    if (wizardState.usedAdd && now === wizardState.usedAdd.shown) wizardState.usedAdd = null;
-    if (wizardState.usedRead && now === wizardState.usedRead.shown) wizardState.usedRead = null;
+    if (addSent && wizardState.usedAdd === addSent) wizardState.usedAdd = null;
+    if (readSent && wizardState.usedRead === readSent) wizardState.usedRead = null;
 }
 
 window.wizardSubmit = async () => {
@@ -4269,6 +4272,10 @@ window.wizardSubmit = async () => {
         // Group 64 fix review 3 (TP5): what Total Used showed when this Save went out,
         // the figure its baseline becomes once the spool's write lands.
         const usedBoxSent = getVal('wiz-spool-used');
+        // Fix review 4 (UP4 / UP5): what this Save sent, and the session it belongs to.
+        const usedAddSent = wizardState.usedAdd;
+        const usedReadSent = wizardState.usedRead;
+        const session = wizardState.session;
         const usedBasedOn = (usedSent && wizardState.usedAdd && getVal('wiz-spool-used') === wizardState.usedAdd.shown)
             ? { mode: 'additive', used: wizardState.usedAdd.base }
             : (usedSent && wizardState.usedRead && getVal('wiz-spool-used') === wizardState.usedRead.shown)
@@ -4556,22 +4563,36 @@ window.wizardSubmit = async () => {
         const partial = isWizardEdit && !data.success && data.spool_saved === true
             && Object.prototype.hasOwnProperty.call(data, 'location_result');
         const wizModal = document.getElementById('wizardModal');
-        const editSid = wizardState.editSpoolId;
+        // Group 64 fix review 4 (UP5): the answer's per-form updates (the Archived box,
+        // the Location field, Total Used's baseline, the dirty flag, the status line, the
+        // label chip) only in the session that sent it: one opened since for another
+        // spool took #57's figures as its own. What is about the spool itself (a move's
+        // toast, the scan buffer, a refill's question, a create's placements) still runs.
+        const sameForm = wizardState.session === session;
+        const editSid = isWizardEdit ? (payload.spool_id != null ? payload.spool_id : wizardState.editSpoolId)
+            : wizardState.editSpoolId;
         const savedLoc = _wizLocKey(sp_payload.location);
 
         if (data.success || partial) {
             // A partial save leaves the Location unsaved, so closing still warns.
-            wizardState.isDirty = partial;
+            if (sameForm) wizardState.isDirty = partial;
             // 2026-10-20 review (engine-1): the Archived box follows the server. A box
             // still ticked after the spool came back into stock (a weight fix with a
             // move) sent archived: true on the next Save and archived it ON its head.
-            if (isWizardEdit && Object.prototype.hasOwnProperty.call(data, 'archived_now')) {
+            if (isWizardEdit && sameForm && Object.prototype.hasOwnProperty.call(data, 'archived_now')) {
                 const box = document.getElementById('wiz-spool-archived');
                 if (box) box.checked = !!data.archived_now;
             }
-            msg.innerHTML = partial
-                ? `<span class="text-warning fw-bold">Saved your other changes. #${_wizEsc(editSid)} was not moved yet.</span>`
-                : `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
+            if (sameForm) {
+                msg.innerHTML = partial
+                    ? `<span class="text-warning fw-bold">Saved your other changes. #${_wizEsc(editSid)} was not moved yet.</span>`
+                    : `<span class="text-success fw-bold">Success! ${isWizardEdit ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
+            } else if (typeof showToast === 'function') {
+                showToast(partial
+                    ? `Saved your other changes to #${editSid}, but it was not moved: open it in Edit Spool and Save again to move it.`
+                    : (isWizardEdit ? `Spool #${editSid} saved.` : 'New spool(s) created.'),
+                    partial ? 'warning' : 'success', partial ? 7000 : 4000);
+            }
             // Group 42.3c: see inv_weigh_out.js (a weight fix that brought an
             // archived spool back, but its old toolhead holds another one now).
             // Group 40.7: a create's placements are reported spool by spool below
@@ -4585,7 +4606,7 @@ window.wizardSubmit = async () => {
             if (isWizardEdit) wizardAfterOwnWrite(data, editSid, wizModal);
             // Group 64 review (S3): the box shows what this Save wrote, so the next
             // Save in this session sends it only if it changes again.
-            if (isWizardEdit) wizardSavedUsed(usedBoxSent);
+            if (isWizardEdit && sameForm) wizardSavedUsed(usedBoxSent, usedAddSent, usedReadSent);
             if (isWizardEdit && data.location_moved) {
                 // Group 40.7: where the Location move put it, in short arrows.
                 const lr = data.location_result;
@@ -4600,20 +4621,22 @@ window.wizardSubmit = async () => {
                 // a second Save stored the spool back in it, unloading the head.
                 const now = Object.prototype.hasOwnProperty.call(data, 'location_now') ? data.location_now
                     : (savedLoc ? ((lr && typeof lr === 'object' && lr.auto_deployed_to) || savedLoc) : '');
-                wizardState.pendingPlacement = null;
-                window.wizardShowLocation(now);
-                wizardState.editSpoolLocation = _wizLocKey(now);
+                if (sameForm) {
+                    wizardState.pendingPlacement = null;
+                    window.wizardShowLocation(now);
+                    wizardState.editSpoolLocation = _wizLocKey(now);
+                }
                 document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
             }
             // Group 40.7 review: a create used the held choice up. The field shows
             // its place again (the box, or the printer whose head it was), so
             // the next create opens the picker instead of reusing a slot label
             // ("— LR-MDB-1 slot 2") it would no longer send.
-            if (!isWizardEdit && placement && _wizLocKey(placement.location) === savedLoc) {
+            if (!isWizardEdit && sameForm && placement && _wizLocKey(placement.location) === savedLoc) {
                 wizardState.pendingPlacement = null;
                 window.wizardShowLocation(placement.via || placement.location);
             }
-            if (!partial) wizardState.pendingPlacement = null;
+            if (!partial && sameForm) wizardState.pendingPlacement = null;
             // 17.3 follow-up: render queue-label chips into the dedicated
             // `wiz-postcreate-actions` row in the modal footer (alongside
             // Cancel + Create Inventory) so subsequent status-message
@@ -4624,15 +4647,17 @@ window.wizardSubmit = async () => {
             // 25.H — render the post-save queue-label affordances (per-spool
             // chips + "Queue All" for multi-create; a chip for the edited spool
             // in edit mode). Extracted to a helper so it's unit-testable.
-            window.wizardRenderPostSaveQueueActions(
-                wizardState.mode, data.created_spools, wizardState.editSpoolId);
+            if (sameForm) {
+                window.wizardRenderPostSaveQueueActions(
+                    wizardState.mode, data.created_spools, wizardState.editSpoolId);
+            }
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse')); // Instantly trigger UI rebinding across all open panels
 
             // 23.3 — if this edit_spool save changed a label-bearing FILAMENT
             // field (color/RGB, Name, Vendor, Material, Type), the printed swatch
             // is now stale. Reuse the Edit-Filament reprint nudge (it self-gates
             // on the prior needs_label_print === false).
-            if (wizardState.mode === 'edit_spool' && f_payload && target_fid
+            if (isWizardEdit && sameForm && f_payload && target_fid
                     && wizardState.editFilamentOriginal
                     && typeof window._maybePromptLabelReprint === 'function') {
                 const orig = wizardState.editFilamentOriginal;
@@ -4648,7 +4673,7 @@ window.wizardSubmit = async () => {
             }
 
             // Reset Weigh-Out Protocol tracking on save so subsequent saves don't double-dip
-            if (wizardState.mode === 'edit_spool') {
+            if (isWizardEdit && sameForm) {
                 const recentInput = document.getElementById('wiz-spool-recent-usage');
                 if (recentInput && recentInput.value) {
                     recentInput.value = '';
@@ -4673,19 +4698,21 @@ window.wizardSubmit = async () => {
             // success, clear the per-spool scan URLs + reset bulk quantity to 1 + leave
             // submit disabled until the user makes a change. The existing input/change
             // listener flips lockedAfterSuccess off and re-enables submit on next edit.
-            if (wizardState.mode !== 'edit_spool') {
-                wizardState.lockedAfterSuccess = true;
-                // Reset quantity FIRST so the row reset rebuilds at the new size.
-                // Reversed order rebuilt rows at the OLD count and left submit
-                // enabled because the row sync re-ran wizardValidateSubmit.
-                const qtyEl = document.getElementById('wiz-spool-qty');
-                if (qtyEl) qtyEl.value = 1;
-                if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
-                setTimeout(() => {
-                    if (wizardState.lockedAfterSuccess) {
-                        msg.innerHTML = `<span class="text-info">Make a change to add more — submit is locked until you scan, edit, or pick a new filament.</span>`;
-                    }
-                }, 3000);
+            if (!isWizardEdit) {
+                if (sameForm) {
+                    wizardState.lockedAfterSuccess = true;
+                    // Reset quantity FIRST so the row reset rebuilds at the new size.
+                    // Reversed order rebuilt rows at the OLD count and left submit
+                    // enabled because the row sync re-ran wizardValidateSubmit.
+                    const qtyEl = document.getElementById('wiz-spool-qty');
+                    if (qtyEl) qtyEl.value = 1;
+                    if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
+                    setTimeout(() => {
+                        if (wizardState.lockedAfterSuccess) {
+                            msg.innerHTML = `<span class="text-info">Make a change to add more — submit is locked until you scan, edit, or pick a new filament.</span>`;
+                        }
+                    }, 3000);
+                }
                 // Submit stays disabled. The dirty-listener below re-enables it when
                 // the user edits any field in the wizard.
                 // Group 40.7: what each new spool's placement did, questions one at
@@ -4712,6 +4739,9 @@ window.wizardSubmit = async () => {
                         },
                     });
                 }
+            } else if (partial && !sameForm) {
+                // Fix review 4 (UP5): said in the toast above; no question over the form of
+                // a spool opened since.
             } else if (partial) {
                 // Group 40.7: the other edits are saved; the Location needs an answer,
                 // or was refused (7 s error). Submit stays usable to try again.
@@ -4745,7 +4775,7 @@ window.wizardSubmit = async () => {
                         }
                     },
                 });
-            } else {
+            } else if (sameForm) {
                 setTimeout(() => {
                     msg.innerHTML = "";
                     document.getElementById('btn-wiz-submit').disabled = false;
@@ -4753,13 +4783,19 @@ window.wizardSubmit = async () => {
             }
 
         } else {
-            msg.innerHTML = `<span class="text-danger">Error: ${data.msg}</span>`;
-            document.getElementById('btn-wiz-submit').disabled = false;
+            if (sameForm) {
+                msg.innerHTML = `<span class="text-danger">Error: ${data.msg}</span>`;
+                document.getElementById('btn-wiz-submit').disabled = false;
+            } else if (typeof showToast === 'function') {
+                // Fix review 4 (UP5): the form shows another spool now.
+                showToast(`${isWizardEdit ? `Spool #${editSid} wasn't saved` : "The new spool(s) weren't created"}: `
+                    + `${data.msg || 'see the Activity Log'}`, 'error', 7000);
+            }
             // Group 63 review (C4): the spool's own write landed before the filament
             // was refused: the Archived box, the Location field and a refill's
             // question follow what it did (its note is used up: nobody asks later).
             if (isWizardEdit && data.spool_saved === true) {
-                if (Object.prototype.hasOwnProperty.call(data, 'archived_now')) {
+                if (sameForm && Object.prototype.hasOwnProperty.call(data, 'archived_now')) {
                     const box = document.getElementById('wiz-spool-archived');
                     if (box) box.checked = !!data.archived_now;
                 }
@@ -4769,7 +4805,7 @@ window.wizardSubmit = async () => {
                 // succeeded kept): the retry sends the used weight only if it changes again,
                 // never this one over a print's charge that landed in between, nor a second
                 // weighing's stamp.
-                wizardSavedUsed(usedBoxSent);
+                if (sameForm) wizardSavedUsed(usedBoxSent, usedAddSent, usedReadSent);
             }
         }
     } catch (e) {

@@ -457,6 +457,7 @@ def stamps(tmp_path, monkeypatch):
 class TwoHeadsOverHTTP:
     """The XL's two heads over Spoolman's HTTP (list and per-spool reads, PATCHes):
     #200 on XL-1 (100 g used), #300 on XL-2 (50 g used)."""
+    HEADS = (("XL-1", 0), ("XL-2", 1))
 
     def __init__(self):
         self.sm = SpoolmanHTTPFake()
@@ -468,11 +469,10 @@ class TwoHeadsOverHTTP:
         return self.sm.records["spool"][sid]["used_weight"]
 
     def __enter__(self):
-        active = [("XL-1", {"position": 0, "printer_name": XL}), ("XL-2", {"position": 1, "printer_name": XL})]
+        active = [(th, {"position": p, "printer_name": XL}) for th, p in self.HEADS]
         self._ctx = [
             patch.object(print_deduct.locations_db, "get_active_printer_map",
-                         return_value={"XL-1": {"printer_name": XL, "position": 0},
-                                       "XL-2": {"printer_name": XL, "position": 1}}),
+                         return_value={th: {"printer_name": XL, "position": p} for th, p in self.HEADS}),
             patch.object(print_deduct, "_resolve_active_locs_for_printer", return_value=active),
             patch.object(spoolman_api.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
             patch.object(spoolman_api, "format_spool_display",
@@ -2501,11 +2501,12 @@ def test_a_held_row_beside_a_pick_whose_write_fails_stays_on_the_retry_card(stam
     assert rig.used(300) == 80.0 and cancel_review_store.get_pending(XL, key) is None
 
 
-def test_a_marked_row_left_at_0g_beside_a_failed_write_is_named_at_the_retry(stamps, warn_lines, quiet_saves):
-    """TS5, red on a5857f84 (#200 never named: the retry card held only #300). A cancel's
-    card marks #200 (weighed after the print ended, 0 g filled in); #300's write fails.
-    The retry card keeps #200's row, and the retry (as the page posts it) names #200 as
-    left uncharged, never its grams as no spool's."""
+def test_a_marked_row_left_at_0g_beside_a_failed_write_is_named_at_that_apply(stamps, warn_lines, quiet_saves):
+    """TS5, red on a5857f84 (#200 never named: the retry card held only #300), and fix review
+    4 (US1 / US3, red on 5af23516: the row was kept on the retry card). A cancel's card marks
+    #200 (weighed after the print ended, 0 g filled in); #300's write fails. That Apply names
+    #200 as left uncharged, as its success would, and the retry card holds only #300; the
+    retry names nothing more, and never #200's grams as no spool's."""
     import requests as _requests
     rig = TwoHeadsOverHTTP()
     end = _end_read(rig)
@@ -2520,16 +2521,20 @@ def test_a_marked_row_left_at_0g_beside_a_failed_write_is_named_at_the_retry(sta
             raise _requests.exceptions.ConnectionError("Max retries exceeded (test)")
         return real_patch(url, json=json, **kw)
     rig.sm.patch = _refuse
-    _apply_card(rig, {"300": rows[300]["grams"]}, rev=0)
+    del warn_lines[:]
+    first = _apply_card(rig, {"300": rows[300]["grams"]}, rev=0)
     rig.sm.patch = real_patch
+    assert first["status"] == "error" and first["settled_unsure"] is False, first
+    assert [(l["sid"], l["grams"]) for l in first["left_weighed"]] == [(200, rows[200]["grams"])], first
+    assert len([m for m, _l in warn_lines if "uncharged on #200" in m]) == 1, warn_lines
     retry = cancel_review_store.get_pending(XL, str(JOB))
-    assert {r["sid"] for r in retry["spools"]} == {200, 300}, retry["spools"]
+    assert [r["sid"] for r in retry["spools"]] == [300], retry["spools"]
     del warn_lines[:]
     body = _apply_card(rig, {"300": rows[300]["grams"]}, rev=retry.get("rev"))
-    assert body["status"] == "confirmed" and body["left_in_shortfall_g"] == 0.0, body
-    assert [(l["sid"], l["grams"]) for l in body["left_weighed"]] == [(200, rows[200]["grams"])], body
+    assert body["status"] == "confirmed" and not body.get("left_weighed"), body
+    assert not body.get("left_in_shortfall_g"), body
     assert rig.used(200) == 120.0 and rig.used(300) == pytest.approx(50.0 + rows[300]["grams"])
-    assert not [m for m, _l in warn_lines if "wasn't charged to any spool" in m], warn_lines
+    assert not [m for m, _l in warn_lines if "wasn't charged to any spool" in m or "#200" in m], warn_lines
 
 
 def test_two_shared_mmu_positions_are_named_apart(warn_lines):
@@ -2576,27 +2581,279 @@ def test_the_new_cards_own_grams_ride_the_answer(stamps, warn_lines, quiet_saves
     assert body["shortfall_g"] > body["shortfall_card_g"], body
 
 
+# --------------------------------------------------------------------------- #
+# Group 64 fix review 4 (2026-11-23): US1 / US3, US2, US4, US5, US6, UP1        #
+# --------------------------------------------------------------------------- #
 
-def test_an_unsure_row_left_at_0g_beside_a_failed_write_stays_at_0g(stamps, warn_lines, quiet_saves):
-    """Group 64 fix review 3 (TS5's variant), red on 8f59893c: #200 changed in Spoolman's own
-    page after the print ended (FCC can't place it: the print's grams filled in); the
-    person types 0 for it and #300's write fails. The retry card keeps #200 at the 0 g
-    the person chose, never its 12.40 g again, which an Apply as drawn would charge."""
+class ThreeHeadsOverHTTP(TwoHeadsOverHTTP):
+    """The XL's three heads: #200 on XL-1 (100 g used), #300 on XL-2 (50 g used) and XL-3
+    empty, or the spools `loaded` names ({sid: (head, used)})."""
+    HEADS = (("XL-1", 0), ("XL-2", 1), ("XL-3", 2))
+
+    def __init__(self, loaded=None):
+        self.sm = SpoolmanHTTPFake()
+        for sid, (loc, used) in (loaded if loaded is not None
+                                 else {200: ("XL-1", 100.0), 300: ("XL-2", 50.0)}).items():
+            self.add(sid, loc, used)
+
+    def add(self, sid, loc="SHELF-1", used=10.0):
+        self.sm.add("spool", sid, location=loc, used_weight=used, initial_weight=1000.0,
+                    archived=False, filament={"weight": 1000.0})
+
+
+def _three_tool_gcode():
+    return ("M83\nT0\n" + "G1 X1 E1\n" * 10 + "T1\n" + "G1 X1 E1\n" * 10 + "T2\n" + "G1 X1 E1\n" * 10
+            + "; filament used [mm] = 10, 10, 10\n; filament used [g] = 12.4, 3.6, 2.0\n")
+
+
+def _three_head_cancel_card(rig, end):
+    """A cancel at the file's end on the three heads: rows of 12.4, 3.6 and 2.0 g."""
+    with rig, _download(_three_tool_gcode()):
+        print_deduct._create_pending_cancel_review(XL, "x.gcode", JOB, 1.0, fb_url="http://fb", end_heads=end)
+    rec = cancel_review_store.get_pending(XL, str(JOB))
+    return rec, {r["sid"]: r for r in rec["spools"]}
+
+
+def _refusing(rig, sid):
+    """Every used-weight PATCH of spool `sid` fails as no answer would; returns the real
+    PATCH, to put back."""
     import requests as _requests
-    rig = TwoHeadsOverHTTP()
-    end = _end_read(rig)
-    rig.sm.records["spool"][200]["used_weight"] = 104.0
-    rec, rows = _cancel_card(rig, end)
-    assert rows[200]["weighed"]["known_order"] is False and rows[200]["prefill"] == rows[200]["grams"], rows[200]
-    real_patch = rig.sm.patch
+    real = rig.sm.patch
 
     def _refuse(url, json=None, **kw):
-        if url.rstrip("/").endswith("/spool/300") and (json or {}).get("used_weight") is not None:
+        if url.rstrip("/").endswith(f"/spool/{sid}") and (json or {}).get("used_weight") is not None:
             raise _requests.exceptions.ConnectionError("Max retries exceeded (test)")
-        return real_patch(url, json=json, **kw)
+        return real(url, json=json, **kw)
     rig.sm.patch = _refuse
-    _apply_card(rig, {"300": rows[300]["grams"]}, rev=0)
-    rig.sm.patch = real_patch
-    kept = next(r for r in cancel_review_store.get_pending(XL, str(JOB))["spools"] if r["sid"] == 200)
-    assert kept["prefill"] == 0.0 and kept["weighed"]["known_order"] is False, kept
-    assert rig.used(200) == 104.0
+    return real
+
+
+def _post_card(rig, body):
+    with rig:
+        return app_module.app.test_client().post("/api/cancel_deduct/confirm", json=body).get_json()
+
+
+@pytest.mark.parametrize("view", ["the_same", "drawn_before"])
+def test_a_row_left_at_0g_beside_a_failed_write_is_settled_there_never_charged_later(
+        stamps, warn_lines, quiet_saves, view):
+    """US1 / US3, red on 5af23516. A cancel on the three heads: #200 changed in Spoolman's own
+    page after the print ended (FCC can't place it: its print's 12.40 g filled in), the
+    person types 0 for it, XL-3 had no spool (its 2.00 g left unpicked) and #300's write
+    fails. That Apply settles #200 there, named as left as set; the retry card holds only
+    #300. Its retry, from the same view or from one drawn before the Apply (which still
+    shows #200 at 12.40 g and posts it), charges #200 nothing and says XL-3's 2.00 g. Kept
+    on the retry card, #200 sat outside the fixed ask: charged there, it hid XL-3's grams,
+    and the view drawn before charged its 12.40 g on top (no revision guarded it)."""
+    rig = ThreeHeadsOverHTTP()
+    end = _end_read(rig)
+    rig.sm.records["spool"][200]["used_weight"] = 104.0
+    rec, rows = _three_head_cancel_card(rig, end)
+    assert rows[200]["weighed"]["known_order"] is False and rows[200]["prefill"] == 12.4, rows[200]
+    assert rec["unresolved_usage"] == {"2": 2.0}, rec
+    real = _refusing(rig, 300)
+    del warn_lines[:]
+    first = _apply_card(rig, {"300": 3.6}, rev=0)                 # #200 typed 0: not sent
+    rig.sm.patch = real
+    assert first["status"] == "error" and first["settled_unsure"] is True, first
+    assert [(l["sid"], l["grams"]) for l in first["left_weighed"]] == [(200, 12.4)], first
+    assert [m for m, _l in warn_lines if "uncharged on #200" in m and "left as set on the card" in m], warn_lines
+    retry = cancel_review_store.get_pending(XL, str(JOB))
+    assert [r["sid"] for r in retry["spools"]] == [300], retry["spools"]
+    del warn_lines[:]
+    sent = {"300": 3.6} if view == "the_same" else {"200": 12.4, "300": 3.6}
+    body = _apply_card(rig, sent, rev=0)
+    assert body["status"] == "confirmed" and rig.used(200) == 104.0, body
+    assert rig.used(300) == pytest.approx(53.6), body
+    assert body["shortfall_g"] == pytest.approx(2.0) and not body.get("left_in_shortfall_g"), body
+    said = [m for m, _l in warn_lines if "wasn't charged to any spool" in m]
+    assert len(said) == 1 and said[0].startswith("⚠️ XL: 2.00g of 'x.gcode' wasn't charged to any spool"), warn_lines
+    assert not [m for m, _l in warn_lines if "uncharged on #200" in m], warn_lines
+
+
+def test_a_held_rows_grams_settled_at_a_failed_apply_come_off_the_retrys_shortfall(stamps, warn_lines, quiet_saves):
+    """US1's carry: a row whose grams the ask counts (its spool weighed after the card was
+    made, held at the first Apply) left at its 0 g at an Apply whose write fails again is
+    settled there, named once; when the retry lands, its grams come off the shortfall the
+    uncharged line and the page say (`weighed_left_g`, carried), never said again as no
+    spool's."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    rec, rows = _cancel_card(rig, end)
+    g200, g300 = rows[200]["grams"], rows[300]["grams"]
+    _quick_weigh(rig, 200, 130.0)
+    real = _refusing(rig, 300)
+    first = _apply_card(rig, {"200": g200, "300": g300}, rev=0)        # #200 held, #300 fails
+    assert [h["sid"] for h in first["held"]] == [200], first
+    card = cancel_review_store.get_pending(XL, str(JOB))
+    assert {r["sid"] for r in card["spools"]} == {200, 300}, card["spools"]
+    del warn_lines[:]
+    second = _apply_card(rig, {"300": g300}, rev=card["rev"])          # #200 left at 0; #300 fails again
+    rig.sm.patch = real
+    assert [(l["sid"], l["grams"]) for l in second["left_weighed"]] == [(200, g200)], second
+    assert len([m for m, _l in warn_lines if "uncharged on #200" in m]) == 1, warn_lines
+    card = cancel_review_store.get_pending(XL, str(JOB))
+    assert [r["sid"] for r in card["spools"]] == [300] and card["weighed_left_g"] == pytest.approx(g200), card
+    del warn_lines[:]
+    third = _apply_card(rig, {"300": g300}, rev=card.get("rev"))
+    assert third["status"] == "confirmed" and third["left_in_shortfall_g"] == pytest.approx(g200), third
+    assert third["shortfall_g"] == pytest.approx(g200), third
+    assert not [m for m, _l in warn_lines if "wasn't charged to any spool" in m or "#200" in m], warn_lines
+    assert rig.used(200) == 130.0 and rig.used(300) == pytest.approx(50.0 + g300)
+
+
+def test_a_weighed_row_whose_spool_is_picked_for_another_line_never_hides_a_line_no_spool_took(
+        stamps, warn_lines, quiet_saves):
+    """US2, red on 5af23516 (the ask was kept by spool: #200 picked for XL-2's line made
+    #200's XL-1 row, left at its 0 g and never asked, count, and XL-3's 2.00 g were said
+    nowhere). #200 ran on XL-1 and was weighed after the print ended; XL-2 and XL-3 had no
+    spool at the end. #200 picked for XL-2's line, its own row left at 0 g, XL-3 unpicked:
+    XL-3's grams are said."""
+    rig = ThreeHeadsOverHTTP(loaded={200: ("XL-1", 100.0)})
+    end = _end_read(rig)
+    rig.sm.records["spool"][200]["used_weight"] = 130.0
+    stamps.note(200, "the Quick-Weigh", at=end["at_s"] + 60)
+    rec, rows = _three_head_cancel_card(rig, end)
+    assert rows[200]["prefill"] == 0.0 and rec["unresolved_usage"] == {"1": 3.6, "2": 2.0}, rec
+    del warn_lines[:]
+    body = _apply_card(rig, {}, rev=0, charges=[{"position": 1, "sid": 200, "grams": 3.6}])
+    assert body["status"] == "confirmed" and body["shortfall_g"] == pytest.approx(2.0), body
+    assert not body.get("left_in_shortfall_g"), body
+    said = [m for m, _l in warn_lines if "wasn't charged to any spool" in m]
+    assert len(said) == 1 and "2.00g" in said[0], warn_lines
+    assert rig.used(200) == pytest.approx(133.6)
+
+
+def _three_line_card(end_at):
+    key = f"{JOB}#shortfall"
+    cancel_review_store.add_pending({
+        "printer_name": XL, "job_id": key, "shortfall_of": str(JOB), "filename": "x.gcode", "progress": 1.0,
+        "total_grams": 18.0, "spools": [], "ambiguous": False, "kind": "shortfall", "rev": 0,
+        "unresolved_usage": {"0": 12.4, "1": 3.6, "2": 2.0}, "end_at_s": end_at,
+        "shortfall_causes": {"0": {"why": "no_spool", "toolhead": "XL-1"},
+                             "1": {"why": "no_spool", "toolhead": "XL-2"},
+                             "2": {"why": "no_spool", "toolhead": "XL-3"}},
+        "heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": None, "sids": []},
+                         {"toolhead": "XL-2", "position": 1, "sid": 300, "sids": [300], "used": {"300": 50.0}},
+                         {"toolhead": "XL-3", "position": 2, "sid": None, "sids": []}],
+        "created": "2026-11-22 00:00:00"})
+    return key
+
+
+def _spare_spools(rig, *sids):
+    for sid in sids:
+        rig.sm.add("spool", sid, location="SHELF-1", used_weight=10.0, initial_weight=1000.0,
+                   archived=False, filament={"weight": 1000.0})
+
+
+def test_a_line_picked_after_the_ask_was_fixed_and_held_is_said_once(stamps, warn_lines, quiet_saves):
+    """US5, red on 5af23516 (the ask kept only the spools the Apply that fixed it posted, so
+    #300, picked later for a line whose grams the ask held, was said as left uncharged AND
+    as no spool's: "weigh the spools"). An uncharged-grams card of three lines: #400's write
+    for XL-2 fails (the ask is fixed); #300, weighed since, is picked for XL-1 and held; its
+    0 g is accepted beside a pick for XL-3: #300 is said once."""
+    import time as _t
+    rig = TwoHeadsOverHTTP()
+    _spare_spools(rig, 400, 500)
+    key = _three_line_card(_t.time() - 300)
+    real = _refusing(rig, 400)
+    _post_card(rig, {"printer_name": XL, "job_id": key, "rev": 0,
+                     "charges": [{"position": 1, "sid": 400, "grams": 3.6}]})
+    rig.sm.patch = real
+    card = cancel_review_store.get_pending(XL, key)
+    assert card["requested_total"] == pytest.approx(18.0), card
+    _quick_weigh(rig, 300, 80.0)
+    two = _post_card(rig, {"printer_name": XL, "job_id": key, "rev": card["rev"],
+                           "charges": [{"row": 400, "sid": 400, "grams": 3.6},
+                                       {"position": 0, "sid": 300, "grams": 12.4}]})
+    assert [h["sid"] for h in two["held"]] == [300], two
+    card = cancel_review_store.get_pending(XL, key)
+    del warn_lines[:]
+    three = _post_card(rig, {"printer_name": XL, "job_id": key, "rev": card["rev"], "settle_held": True,
+                             "charges": [{"position": 2, "sid": 500, "grams": 2.0}]})
+    assert three["status"] == "confirmed" and three.get("settled_held") is True, three
+    assert [(l["sid"], l["grams"]) for l in three["left_weighed"]] == [(300, 12.4)], three
+    assert three["left_in_shortfall_g"] == pytest.approx(12.4), three
+    assert not [m for m, _l in warn_lines if "wasn't charged to any spool" in m], warn_lines
+    assert rig.used(300) == 80.0 and rig.used(400) == pytest.approx(13.6) and rig.used(500) == pytest.approx(12.0)
+
+
+@pytest.mark.parametrize("path", ["beside_a_failed_writes_retry", "beside_a_pick", "beside_a_pick_whose_write_fails"])
+def test_a_kept_cards_unsure_held_row_keeps_the_persons_0g(stamps, warn_lines, quiet_saves, path):
+    """US6, red on 5af23516 (the kept card redrew the row at the print's 12.40 g, and an
+    Apply as drawn charged them on top of the change the person had judged at 0 g). #300
+    changed in Spoolman's own page after the print ended (FCC can't place it), its pick
+    held. The person leaves it at 0 g and the card is kept: beside a failed write's retry
+    (TS3's path) or beside a pick for another line (CX1's path), whose write may fail too
+    (the retry card's path, TS5's for an uncharged-grams card: passes on 5af23516, which
+    already kept it at 0 g there). The card holds it at 0 g."""
+    import time as _t
+    rig = TwoHeadsOverHTTP()
+    _spare_spools(rig, 400, 500)
+    if path == "beside_a_failed_writes_retry":
+        key = _two_line_card(_t.time() - 300)
+        rig.sm.records["spool"][300]["used_weight"] = 80.0
+        real = _refusing(rig, 400)
+        one = _post_card(rig, {"printer_name": XL, "job_id": key, "rev": 0,
+                               "charges": [{"position": 0, "sid": 300, "grams": 12.4},
+                                           {"position": 1, "sid": 400, "grams": 3.6}]})
+        rig.sm.patch = real
+        card = cancel_review_store.get_pending(XL, key)
+        two = _post_card(rig, {"printer_name": XL, "job_id": key, "rev": card["rev"], "updates": {"400": 3.6}})
+    else:
+        key = _three_line_card(_t.time() - 300)
+        rig.sm.records["spool"][300]["used_weight"] = 80.0
+        one = _post_card(rig, {"printer_name": XL, "job_id": key, "rev": 0,
+                               "charges": [{"position": 0, "sid": 300, "grams": 12.4}]})
+        card = cancel_review_store.get_pending(XL, key)
+        real = _refusing(rig, 400) if path == "beside_a_pick_whose_write_fails" else rig.sm.patch
+        two = _post_card(rig, {"printer_name": XL, "job_id": key, "rev": card["rev"],
+                               "charges": [{"position": 1, "sid": 400, "grams": 3.6}]})
+        rig.sm.patch = real
+    assert [h["sid"] for h in one["held"]] == [300] and one["held"][0]["known_order"] is False, one
+    held = next(r for r in card["spools"] if r["sid"] == 300)
+    assert held["prefill"] == pytest.approx(12.4), held      # the hold itself fills in the print's grams
+    if path == "beside_a_pick_whose_write_fails":
+        assert two["status"] == "error" and [e["sid"] for e in two["errors"]] == [400], two
+    else:
+        assert two.get("kept") is True, two
+    kept = cancel_review_store.get_pending(XL, key)
+    row = next(r for r in kept["spools"] if r["sid"] == 300)
+    assert row["prefill"] == 0.0 and row["weighed"]["known_order"] is False, row
+    assert rig.used(300) == 80.0
+
+
+def test_mmu_words_name_a_head_with_no_spool_beside_a_shared_position(warn_lines):
+    """US4, red on 5af23516 (one pick asked for, and T1's 3.00 g on a head with no spool
+    never named). A completion with no print-end read: T0 on MMU-1 / MMU-2 (one shared
+    Position, each holding a spool), T1 on MMU-3, which held none: the words name both
+    and ask for each line's spool."""
+    rig = MmuPrinter(shared=False, loaded={})
+    rig.slots = ["MMU-1", "MMU-2", "MMU-3"]
+    rig.pos = {"MMU-1": 0, "MMU-2": 0, "MMU-3": 1}
+    for slot, sid in (("MMU-1", 401), ("MMU-2", 402)):
+        rig.sm.add("spool", sid, location=slot, used_weight=10.0, initial_weight=1000.0,
+                   archived=False, filament={"weight": 1000.0})
+    rig.sm.add("spool", 400, location="SHELF-1", used_weight=10.0, initial_weight=1000.0,
+               archived=False, filament={"weight": 1000.0})
+    with rig, _download(_mmu_gcode({0: 5.0, 1: 3.0})):
+        print_deduct.deduct_completed_print(MMU, "m.gcode", JOB, fb_url="http://fb", start_spools={"0": 400, "1": 400})
+    said = [m for m, _l in warn_lines if "share one Position" in m]
+    assert len(said) == 1, warn_lines
+    assert ("MMU slots MMU-1 and MMU-2 share one Position, each slot holding a spool, so FCC can't tell which "
+            "slot printed; T1's head had no spool — pick the spool each line used") in said[0], said
+
+
+def test_a_refused_writes_error_carries_words_for_the_page(stamps, warn_lines, quiet_saves):
+    """UP1 (server), red on 5af23516 (only Spoolman's raw answer, which the page put on the
+    card: JSON, or requests' text with Spoolman's address): each failed write also says it
+    in words (spoolman_api.refusal_words)."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    rec, rows = _cancel_card(rig, end)
+    real = _refusing(rig, 300)
+    body = _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]}, rev=0)
+    rig.sm.patch = real
+    (err,) = body["errors"]
+    assert err["sid"] == 300 and "Max retries exceeded" in err["error"], body
+    assert err["words"] == "FCC couldn't reach Spoolman.", body

@@ -728,3 +728,86 @@ def test_a_total_used_corrected_while_the_save_is_out_is_sent_next_time(wiz, fir
     wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
     second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
     assert second["spool_data"].get("used_weight") == 140, second["spool_data"]
+
+
+
+# --- Group 64 fix review 4 (UP4 / UP5): what a Save sent, and in which session ---------
+
+def _weigh_reading(page, mode, used):
+    page.evaluate("""() => { window.WeightEntry = { openModal: (o) => { window.__weOpts = o; } };
+                             window.wizardOpenWeightEntry(); }""")
+    page.evaluate("""([mode, used]) => {
+        const o = window.__weOpts;
+        o.onSubmit({ mode, used_weight: used, remaining: 1000 - used, empty_spool_weight: null,
+                     derived_initial: undefined, typed_tare: null });
+    }""", [mode, used])
+
+
+def _gated_save(page, during):
+    """A Save held while `during` runs, then answered; then a second Save (a comment):
+    both posts."""
+    page.evaluate(GATE_JS)
+    page.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57 };"
+                  " window.__gateNext = true; }")
+    page.locator("#btn-wiz-submit").click()
+    page.wait_for_function("() => typeof window.__release === 'function'")
+    during()
+    page.evaluate("() => window.__release()")
+    page.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    page.locator("#wiz-spool-comment").fill("again")
+    page.locator("#btn-wiz-submit").click()
+    page.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    return page.evaluate("(u) => window.__posts.filter((p) => p.url === u).map((p) => p.body)", EDIT)
+
+
+def test_a_scale_reading_taken_while_the_save_is_out_keeps_its_own(wiz):
+    """UP4, red on 5af23516 (the answer spent the newer reading, the box showing its figure,
+    and the second Save went without {mode: "reading"}): only what the Save sent is spent."""
+    _open_edit_used(wiz, 100.37)
+    _weigh_reading(wiz, "gross", 130.0)
+    posts = _gated_save(wiz, lambda: _weigh_reading(wiz, "gross", 135.0))
+    assert posts[0].get("used_based_on") == {"mode": "reading"}, posts[0]
+    assert posts[1]["spool_data"].get("used_weight") == 135 and posts[1].get("used_based_on") == {"mode": "reading"}, posts[1]
+
+
+def test_an_addition_made_while_the_save_is_out_keeps_its_base(wiz):
+    """UP4's other half, red on 5af23516 (the addition went without its base, so the
+    server could neither refuse it over a charge nor leave it unstamped)."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    posts = _gated_save(wiz, lambda: wiz.locator("#wiz-spool-recent-usage").press_sequentially("35"))
+    assert posts[1]["spool_data"].get("used_weight") == pytest.approx(135.4, abs=0.05), posts[1]
+    assert posts[1].get("used_based_on") == {"mode": "additive", "used": 100.37}, posts[1]
+
+
+def test_a_saves_late_answer_leaves_a_form_opened_since_for_another_spool_alone(wiz):
+    """UP5, red on 5af23516 (#57's answer set #58's Total Used baseline to #57's figure, so
+    #58's comment-only Save sent its untouched 200, rewriting 199.97 and anything charged
+    since #58's form opened). The Save's answer, coming after Edit Spool was opened again
+    for #58, changes nothing on #58's form; a toast says #57 was saved."""
+    _open_edit_used(wiz, 100.37)
+    wiz.evaluate(GATE_JS)
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57,"
+                 " archived_now: true }; window.__gateNext = true; }")
+    wiz.locator("#wiz-spool-used").fill("130")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("() => typeof window.__release === 'function'")
+    d58 = _details()
+    d58.update(id=58, used_weight=199.97, remaining_weight=800.03)
+    wiz.evaluate("(d) => { window.__answers['/api/spool_details'] = d; window.openEditWizard(58); }", d58)
+    wiz.wait_for_function("() => wizardState.mode === 'edit_spool' && wizardState.editSpoolId == 58"
+                          " && document.getElementById('wiz-fil-color_name').value === 'Red'"
+                          " && wizardState.usedShown != null && !document.getElementById('btn-wiz-submit').disabled")
+    wiz.evaluate("() => window.__release()")
+    # The answer is handled: said in a toast (or, before the fix, on the form's status line).
+    toast = ("Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+             ".some((t) => t.innerText === 'Spool #57 saved.' && t.classList.contains('toast-success'))")
+    wiz.wait_for_function(f"() => {toast} || document.getElementById('wiz-status-msg').innerText.includes('Success')")
+    after = wiz.evaluate(f"() => ({{ shown: wizardState.usedShown, id: wizardState.editSpoolId, toast: {toast},"
+                         f" archived: document.getElementById('wiz-spool-archived').checked }})")
+    assert after == {"shown": "200", "archived": False, "id": 58, "toast": True}, after
+    wiz.locator("#wiz-spool-comment").fill("58's note")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert second["spool_id"] == 58 and "used_weight" not in second["spool_data"], second

@@ -282,8 +282,15 @@
                 n.appendChild(document.createTextNode(String(p)));
             }
         });
+        // Group 64 fix review 4 (UP2): a card kept as it was drawn, because FCC couldn't
+        // read the review list again after its Apply, says so whatever else it says.
+        if (card.dataset && card.dataset.stale === '1') {
+            n.appendChild(document.createTextNode((n.textContent ? ' ' : '') + STALE_CARD_WORDS));
+        }
         n.style.display = n.textContent ? '' : 'none';
     }
+    const STALE_CARD_WORDS = "FCC couldn't read the review list just now, so this card may be out of date: "
+        + 'Apply reads it again first, or close 🛑 Review and open it again.';
     // Group 64.2 (the look): a head's name in words the server sent (a refusal) is
     // bold, as on the card's own lines ("so that it reads as a toolhead", Derek,
     // 2026-11-12): the card's head names (`data-head-names`: every toolhead it names
@@ -1062,6 +1069,7 @@
         return {
             held, heldG, otherG: Math.max(0, total - heldG - retryG), sids,
             retry, retryG, retryWho: spoolListWords(once(retry.map((s) => s.sid))),
+            retryMany: once(retry.map((s) => s.sid)).length > 1,
             who: spoolListWords(sids), many: sids.length > 1,
             known: lines.every((p) => !!causes[p].known_order) && rows.every((s) => !!s.weighed.known_order),
             onlyHeld: held.length > 0 && lines.length === Object.keys(un).length && rows.length === allRows.length,
@@ -1105,9 +1113,15 @@
                     weighed them.`);
         }
         if (h.retry.length) {
-            // TP4: the spool is picked; its write is what failed.
-            parts.push(`The <b>${fmtG(h.retryG)}g</b> picked for ${esc(h.retryWho)} weren't written (Spoolman
-                    didn't take the write): <b>Apply</b> tries again, and FCC first checks whether it landed.`);
+            // TP4: the spool is picked; its write is what failed. Fix review 4 (UP6): a
+            // write FCC couldn't confirm (refused, or no answer), worded per count.
+            parts.push(h.retryMany
+                ? `The <b>${fmtG(h.retryG)}g</b> picked for ${esc(h.retryWho)} couldn't be confirmed as
+                    written (Spoolman didn't take their writes, or didn't answer): <b>Apply</b> tries again,
+                    and FCC first checks whether each landed.`
+                : `The <b>${fmtG(h.retryG)}g</b> picked for ${esc(h.retryWho)} couldn't be confirmed as
+                    written (Spoolman didn't take the write, or didn't answer): <b>Apply</b> tries again,
+                    and FCC first checks whether it landed.`);
         }
         if (h.held.length) {
             parts.push(`The <b>${fmtG(h.heldG)}g</b> on ${esc(h.who)} ${h.many ? 'are' : 'is'} held, not charged:
@@ -1489,7 +1503,22 @@
         return changed;
     }
     async function refreshBadge() {
-        applyBadges(await fetchPending());
+        const pending = await fetchPending();
+        // Group 64 fix review 4 (UP7): a list FCC couldn't read keeps the last counts
+        // (Group 52: a read that failed says so, never "empty"), the pill's tooltip
+        // saying why, instead of hiding every 🛑 until a read works again.
+        const badge = document.getElementById('cancel-review-badge');
+        if (badge && badge.dataset.titleWas == null) badge.dataset.titleWas = badge.getAttribute('title') || '';
+        if (pendingReadFailed) {
+            if (badge) {
+                badge.dataset.read = 'failed';
+                badge.setAttribute('title', `${badge.dataset.titleWas} (FCC couldn't read the review list just now: `
+                    + 'this count is from its last read)');
+            }
+            return;
+        }
+        if (badge) { delete badge.dataset.read; badge.setAttribute('title', badge.dataset.titleWas); }
+        applyBadges(pending);
     }
 
     // The open review's scan-buffer listener (scope D), so a review opened again
@@ -1510,6 +1539,13 @@
     async function openCancelReview() {
         const pending = await fetchPending();
         if (!pending.length) {
+            if (pendingReadFailed) {
+                // Group 64 fix review 4 (UP7): a list FCC couldn't read is no "no reviews",
+                // and the counts stay as they were.
+                toast("FCC couldn't read the review list just now, so it can't be shown. Try again in a moment.",
+                    'warning', 7000);
+                return;
+            }
             toast('No pending cancel reviews.', 'info');
             applyBadges(pending);
             return;
@@ -1609,6 +1645,9 @@
                 // still holds it.
                 const btn = card.querySelector('.fcc-cr-confirm');
                 if (btn) btn.disabled = false;
+                // Group 64 fix review 4 (UP2): marked, so its words say it may be out of
+                // date (sayOnCard) and its next Apply reads the list again first.
+                card.dataset.stale = '1';
                 return card;
             }
             if (!rec) { card.remove(); updateCount(); refreshBadge(); closeIfEmpty(); return null; }
@@ -1923,6 +1962,24 @@
                 // under the pointer, and the second press applied that one, unread
                 // (a press from the keyboard has detail 0).
                 if (e.detail > 1) return;
+                // Group 64 fix review 4 (UP2): a card kept as drawn after a list FCC couldn't
+                // read is read again before anything is posted: drawn again as FCC holds it
+                // (its next Apply posts what that shows), or still said to be unread. Posted
+                // as drawn, a spool an earlier Apply had charged read as a failure.
+                if (card.dataset.stale === '1') {
+                    e.target.disabled = true;
+                    const fresh = await rerenderCard(card, true);
+                    if (fresh && fresh !== card) {
+                        sayOnCard(fresh, 'Drawn again as FCC holds this card now: check it, then Apply.');
+                    } else if (fresh) {
+                        sayOnCard(card, '');
+                        toast(STALE_CARD_WORDS, 'warning', 7000);
+                    } else {
+                        toast('That card was already settled: nothing more to apply on it.', 'info');
+                        if (body.querySelector('.fcc-cr-card')) sayOnPanel('That card was already settled: nothing more to apply on it.');
+                    }
+                    return;
+                }
                 // 43.3: explicit picks become `charges`; a card whose rows all keep
                 // their own spool still sends the old `updates` shape.
                 const payload = { printer_name: printer, job_id: job };
@@ -2068,6 +2125,24 @@
                     });
                     const d = await r.json();
                     const took = (d.applied || []).reduce((a, x) => a + (Number(x.grams) || 0), 0);
+                    // Group 64 review (O4 / Y2): the weighed spools this Apply left
+                    // uncharged are said by name, in the words of what FCC knows
+                    // (weighed on FCC after the print, or a change it can't place).
+                    // Fix review 4 (US1 / US3): an Apply whose write failed settles them
+                    // too, so they are said beside a hold or a failure as well.
+                    const left = Array.isArray(d.left_weighed) ? d.left_weighed : [];
+                    const leftG = left.reduce((a, l) => a + (Number(l.grams) || 0), 0);
+                    const leftWho = spoolListWords(left.map((l) => l.sid));
+                    const leftWords = !left.length ? ''
+                        : (d.settled_unsure
+                            ? `left ${fmtG(leftG)}g uncharged on ${leftWho} as set: `
+                              + `${left.length > 1 ? 'their weights' : 'its weight'} changed after the print`
+                            : `left ${fmtG(leftG)}g uncharged on ${leftWho}: `
+                              + `${left.length > 1 ? 'they were' : 'it was'} weighed after the print`);
+                    const leftTail = leftWords ? ` ${leftWords.charAt(0).toUpperCase()}${leftWords.slice(1)}.` : '';
+                    // Fix review 4 (UP1): a refused write in words (spoolman_api.refusal_words),
+                    // never Spoolman's raw answer; FCC's own sentences have no `words`.
+                    const errWords = (x) => String((x && (x.words || x.error)) || 'failed');
                     if (d.status === 'confirmed' && d.kept) {
                         // 43.2: the picks couldn't take everything (a run-out or
                         // near-empty spool); the rest stays on the card to pick again.
@@ -2098,7 +2173,9 @@
                         // read as a failed Apply); a write that failed beside it is said too.
                         const why = d.held.map((h) => h.words + '.').join(' ');
                         const heldSids = new Set(d.held.map((h) => String(h.sid)));
-                        const failed = (d.errors || []).filter((x) => !heldSids.has(String(x.sid)));
+                        // Fix review 4 (UP2): a stale card's "not in this review" is no failure.
+                        const failed = (d.errors || []).filter((x) => !heldSids.has(String(x.sid))
+                            && x.error !== 'not in this review');
                         const failWords = failed.length ? ` ${failed.length} other spool(s) failed — check the log.` : '';
                         // Group 64 fix review 2 (CP5): the spools this Apply charged leave
                         // the redrawn card; the card's own line says so, as a kept card's does.
@@ -2110,25 +2187,13 @@
                             ? `Charged ${fmtG(took)}g to ${spoolListWords(tookSome.map((a) => a.sid))}. ` : '')
                             + (took0.length === 1 ? `#${took0[0].sid}'s record was at 0 g, so nothing was charged to it. `
                                 : took0.length ? `The records of ${spoolListWords(took0.map((a) => a.sid))} were at 0 g, so nothing was charged to them. ` : '');
-                        toast(`${chargedWords}${why} Nothing was charged to it: check its line and Apply again.${failWords}`,
+                        toast(`${chargedWords}${why} Nothing was charged to it: check its line and Apply again.${failWords}${leftTail}`,
                             failed.length ? 'error' : 'warning', 7000);
                         const fresh = await rerenderCard(card, true);
-                        sayOnCard(fresh, headPieces(fresh, `${chargedWords}${why} Nothing was charged to it: check its line and Apply again.${failWords}`));
+                        sayOnCard(fresh, headPieces(fresh, `${chargedWords}${why} Nothing was charged to it: check its line and Apply again.${failWords}${leftTail}`));
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'confirmed') {
-                        // Group 64 review (O4 / Y2): the weighed spools this Apply left
-                        // uncharged are said by name, in the words of what FCC knows
-                        // (weighed on FCC after the print, or a change it can't place).
-                        const left = Array.isArray(d.left_weighed) ? d.left_weighed : [];
-                        const leftG = left.reduce((a, l) => a + (Number(l.grams) || 0), 0);
-                        const leftWho = spoolListWords(left.map((l) => l.sid));
-                        const leftWords = !left.length ? ''
-                            : (d.settled_unsure
-                                ? `left ${fmtG(leftG)}g uncharged on ${leftWho} as set: `
-                                  + `${left.length > 1 ? 'their weights' : 'its weight'} changed after the print`
-                                : `left ${fmtG(leftG)}g uncharged on ${leftWho}: `
-                                  + `${left.length > 1 ? 'they were' : 'it was'} weighed after the print`);
                         const said = [];
                         if (took > 0) {
                             toastAndKeep(said, `Deducted from ${(d.applied || []).length} spool(s)${leftWords ? `; ${leftWords}` : ''}.`, 'success');
@@ -2144,7 +2209,13 @@
                             // Group 64 fix review 3 (TP8): the new card's own grams, never the
                             // weighed spools' named just above as left uncharged.
                             toastAndKeep(said, `${fmtG(d.shortfall_card_g != null ? d.shortfall_card_g : d.shortfall_g)}g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard.`, 'warning', 7000);
-                        } else if (!d.settled_held && Number(d.shortfall_g) - (Number(d.left_in_shortfall_g) || 0) > 0.05) {
+                        }
+                        // Fix review 4 (UP3): the rest of the shortfall (a head nobody picked)
+                        // is said beside a new card too, less that card's own grams (an older
+                        // FCC's answer, with no shortfall_card_g, says only the card's).
+                        const unplaced = Number(d.shortfall_g) - (Number(d.left_in_shortfall_g) || 0)
+                            - (d.shortfall_card ? (Number(d.shortfall_card_g) || 0) : 0);
+                        if (!d.settled_held && (!d.shortfall_card || d.shortfall_card_g != null) && unplaced > 0.05) {
                             // A settle's grams were left on purpose (Group 64 review, Y2), and so
                             // were the weighed spools' named above (Group 64 fix review 2, CS4:
                             // said twice, once as left uncharged and once as "couldn't be applied").
@@ -2155,7 +2226,7 @@
                             // the weighed spools account for (left_in_shortfall_g); on a card's
                             // first Apply a weighed row left at 0 g was never in it, and taking its
                             // grams off hid an unpicked head's.
-                            toastAndKeep(said, `${fmtG(Number(d.shortfall_g) - (Number(d.left_in_shortfall_g) || 0))}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
+                            toastAndKeep(said, `${fmtG(unplaced)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
                         }
                         // Group 64 fix review 2 (CP7): a write that failed on a spool of this
                         // card was re-queued by the server (a 43.6 retry row), so the card
@@ -2166,7 +2237,7 @@
                             // Group 64 fix review 3 (TP2): each spool's own words (a write
                             // Spoolman refused, a weight that changed since the last try, a spool
                             // gone), never one sentence for all of them.
-                            const why = retrying.map((x) => `#${x.sid} (${String(x.error || 'failed').replace(/[.\s]+$/, '')})`).join('; ');
+                            const why = retrying.map((x) => `#${x.sid} (${errWords(x).replace(/[.\s]+$/, '')})`).join('; ');
                             toastAndKeep(said, `Not charged: ${why}. The card stays: check it, then Apply again or Discard.`, 'error', 7000);
                             const fresh = await rerenderCard(card);
                             if (fresh) sayOnCard(fresh, headPieces(fresh, said.join(' ')));
@@ -2176,7 +2247,14 @@
                             refreshBadge();
                             document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                         } else {
-                            if ((d.errors || []).length) toastAndKeep(said, `${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
+                            // Fix review 4 (UP2): every error left here is a spool no longer on this
+                            // card ("not in this review": an earlier Apply settled it), no failure.
+                            const gone = (d.errors || []).filter((x) => x && x.error === 'not in this review');
+                            if (gone.length) {
+                                const them = gone.length > 1 ? 'them' : 'it';
+                                toastAndKeep(said, `${spoolListWords(gone.map((x) => x.sid))} ${gone.length > 1 ? 'were' : 'was'} `
+                                    + `no longer on this card (an earlier Apply settled ${them}): nothing more was charged to ${them}.`, 'info');
+                            }
                             // R1: the card under the pointer goes, so the second press of a
                             // double click reaches nothing behind it.
                             if (window.fccShieldNextPress) window.fccShieldNextPress();
@@ -2207,7 +2285,8 @@
                         tell(card, d.msg || 'Not applied — still no spool bound.');
                     } else {
                         e.target.disabled = false;
-                        const why = d.msg || ((d.errors || [])[0] || {}).error || 'Confirm failed — check the log.';
+                        const e0 = (d.errors || [])[0];
+                        const why = (d.msg || (e0 ? errWords(e0) : '') || 'Confirm failed — check the log.') + leftTail;
                         tell(card, why, 'error');
                         // Writes that failed leave a reshaped review: show what it holds now.
                         if ((d.errors || []).length) {
