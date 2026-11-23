@@ -898,3 +898,25 @@ def test_a_park_read_that_finds_nothing_leaves_the_end_read_to_the_end(logs):
         _tick("STOPPED")
     rec = _rec()
     assert rec["heads_source"] == "print_end" and _end_sids(rec)[4] == 42, rec
+
+
+@pytest.mark.parametrize("pause", ["ATTENTION", "PAUSED"], ids=["a park", "a pause from the menu"])
+def test_a_swap_carries_when_the_printer_stopped_for_it(logs, pause):
+    """Group 64 full review (OR2 / SP2), red on c7073d8 (the event had no moment): the
+    resume's swap carries when the printer stopped printing for that pause (its first
+    paused tick, not a later one), so a weighing of the spool it took off, even at the
+    printer's prompt, can be told from one before. A park (ATTENTION) and a pause from
+    the printer's menu (PAUSED) go through different branches of the tracker."""
+    import time as _t
+    with Indx() as p, _compute(USAGE):
+        _tick("PRINTING", _job(0.30))
+        t0 = _t.time()
+        _tick(pause, _job(0.42))
+        t1 = _t.time()
+        _tick(pause, _job(0.42))                # still paused: the moment stays the first tick's
+        p.load_229()
+        _tick("PRINTING", _job(0.43))
+        latch = print_monitor._PRINT_TRACKER[INDX]
+        ev = latch["swap_log"][0]
+        assert t0 <= ev["at"] <= t1, (t0, ev, t1)
+        assert "paused_at" not in latch, latch

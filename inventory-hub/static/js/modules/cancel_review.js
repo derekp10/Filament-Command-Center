@@ -1954,6 +1954,17 @@
                         sayOnCard(kept, headPieces(kept, msg));
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                    } else if (d.status === 'confirmed' && Array.isArray(d.held) && d.held.length) {
+                        // Group 64 full review: a spool weighed (or changed) after the
+                        // card was shown is charged nothing; the card stays, its line
+                        // marked and filled in again, for the person to look again.
+                        const why = d.held.map((h) => h.words + '.').join(' ');
+                        if (took > 0) toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
+                        toast(`${why} Nothing was charged to it: check its line and Apply again.`, 'warning', 7000);
+                        const fresh = await rerenderCard(card, true);
+                        sayOnCard(fresh, headPieces(fresh, `${why} Nothing was charged to it: check its line and Apply again.`));
+                        refreshBadge();
+                        document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'confirmed') {
                         // Group 64 review (O4 / Y2): the weighed spools this Apply left
                         // uncharged are said by name, in the words of what FCC knows

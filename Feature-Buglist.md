@@ -365,12 +365,6 @@
   handle multiple file request connections at once."* Direction: a setting that keeps dev from watching (or from
   downloading from) the real printers, its tests using the fakes; check first whether a printer serves two downloads at
   once. Standalone.
-* **⚖️ A 🛑 card's Apply doesn't see a weighing made after the card was opened (found 2026-11-20 building Group 64's
-  Decision 1).** Decision 1 holds a spool weighed between a print's end and its charge (pre-filled 0 g when FCC's own
-  stamp shows the order), and a card's row gets the same note when the card is made. A spool weighed after that, before
-  the card's Apply, is charged on top as before (the Apply re-reads the used weight so it doesn't overwrite the scale,
-  then adds the grams). Direction: at the Apply, check each row's spool's weigh stamp (`weigh_stamps`) against the
-  print's end read time (`heads_read_at`) and ask, as the card does at its making. Standalone.
 * **🔎 A person's typeahead and Enter on a 🛑 card's spool picker reach the scan path (found 2026-11-21 by Group
   64's fix review; older than the group).** The dashboard's scan accumulator reads a `<select>`'s keys, so typing
   "#2" to jump in a card's picker and then pressing Enter sends "#2" to processScan, and spool #2 joins the scan

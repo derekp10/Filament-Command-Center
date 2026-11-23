@@ -448,3 +448,35 @@ def test_a_discard_shields_the_press_behind_it_too(tmp_path):
              for j in ("a", "b")]
     res = run(tmp_path, RESPOND_JS + DISCARD_JS, {"pending": cards, "spools": SPOOLS})
     assert res["gone"] is True and res["shields"] == 1, res
+
+
+HELD_JS = r"""
+const c = cardOf('h');
+c.querySelector('.fcc-cr-confirm').click();
+await settle(120);
+const again = cardOf('h');
+return { toasts: __rec.toasts, kept: !!again,
+         notice: again ? ((again.querySelector('.fcc-cr-card-notice') || {}).textContent || '') : null };
+"""
+
+
+def test_a_held_line_keeps_the_card_on_screen_and_says_why(tmp_path):
+    """Group 64 full review (RW1 / OR1 / SP3 / PR1), red on c7073d8 (the card was taken
+    off the screen as if done, and the toast said a spool had failed). The Apply's
+    answer holds #200 (weighed after the card was made): the card is drawn again from
+    the server's, its words on the card and in a warning."""
+    words = "#200 on HEAD-1 was weighed on the Quick-Weigh at 14:05, after this print ended (at 13:50), " \
+            "so the scale already counted its 12.40 g"
+    rec = _base("h", "partial", total_grams=16.0,
+                spools=[_row(200, 12.4), _row(300, 3.6, toolhead="HEAD-2", position=1)],
+                heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                              {"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}])
+    confirm = {"status": "confirmed", "applied": [{"sid": 300, "grams": 3.6, "remaining": 896.4}],
+               "errors": [{"sid": 200, "error": words + ". Nothing was charged to it: check its line and Apply again."}],
+               "held": [{"sid": 200, "words": words, "known_order": True}]}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + HELD_JS, {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
+    assert res["kept"] is True, res
+    warned = [t for t in res["toasts"] if t["type"] == "warning"]
+    assert warned and warned[0]["msg"] == words + ". Nothing was charged to it: check its line and Apply again.", res
+    assert not any("failed" in t["msg"] for t in res["toasts"]), res["toasts"]
+    assert "Nothing was charged to it" in " ".join(res["notice"].split()), res["notice"]

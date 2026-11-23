@@ -1713,3 +1713,197 @@ def test_a_cards_own_write_found_landed_later_is_noted_from_when_it_was_sent(sta
     assert second["status"] == "confirmed", second
     assert rig.used(200) == pytest.approx(before + 12.4), "charged twice"
     assert stamps.charged_after(200, row["attempt_sent_at"] - 1) == pytest.approx(12.4)
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 full review: Decision 1 at a card's Apply (RW1 / OR1 / SP3 / PR1),  #
+# and a spool that left its head at a swap (OR2 / SP2)                         #
+# --------------------------------------------------------------------------- #
+
+def _cancel_card(rig, end):
+    with rig, _download(_two_tool_gcode()):
+        print_deduct._create_pending_cancel_review(XL, "x.gcode", JOB, 0.5, fb_url="http://fb", end_heads=end)
+    rec = cancel_review_store.get_pending(XL, str(JOB))
+    return rec, {r["sid"]: r for r in rec["spools"]}
+
+
+def _quick_weigh(rig, sid, used):
+    with rig:
+        return app_module.app.test_client().post("/api/spool/update", json={
+            "id": sid, "updates": {"used_weight": used},
+            "based_on": {"mode": "set_used", "screen": "quick"}}).get_json()
+
+
+def _apply_card(rig, updates):
+    with rig:
+        return app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": XL, "job_id": str(JOB), "updates": updates}).get_json()
+
+
+@pytest.fixture
+def quiet_saves(monkeypatch):
+    monkeypatch.setattr(routes_inventory, "_log_manual_weight_change", lambda *a, **k: None)
+    monkeypatch.setattr(print_deduct.stock_report, "check_after_deduct", lambda *a, **k: None)
+
+
+def test_a_spool_weighed_after_its_card_was_made_is_held_at_the_apply(stamps, warn_lines, quiet_saves):
+    """RW1 / OR1 / SP3 / PR1, red on c7073d8 (#200 charged the card's grams on top of
+    the scale's 130 g). The cancel's card is made, then #200 is weighed on the
+    Quick-Weigh; the card, unchanged, is applied as filled in. #200 is charged nothing
+    and the card stays, its line marked and filled in with 0 g; #300 is charged."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    rec, rows = _cancel_card(rig, end)
+    assert "weighed" not in rows[200], rows[200]
+    _quick_weigh(rig, 200, 130.0)
+    body = _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]})
+    assert body["status"] == "confirmed", body
+    assert rig.used(200) == 130.0, "charged on top of the scale"
+    assert rig.used(300) == pytest.approx(50.0 + rows[300]["grams"])
+    assert [h["sid"] for h in body["held"]] == [200] and body["held"][0]["known_order"] is True, body
+    kept = cancel_review_store.get_pending(XL, str(JOB))
+    row = next(r for r in kept["spools"] if r["sid"] == 200)
+    assert row["weighed"]["known_order"] is True and row["prefill"] == 0.0, row
+    assert "was weighed on the Quick-Weigh" in row["weighed"]["words"], row
+    said = [m for m, lvl in warn_lines if lvl == "WARNING" and "#200" in m and "Nothing was charged" in m]
+    assert len(said) == 1, warn_lines
+
+
+def test_a_held_line_is_charged_as_typed_once_the_card_has_shown_it(stamps, quiet_saves):
+    """The person sees the mark and types grams anyway (the weighing came before the
+    print): the next Apply charges them, the card having shown that change."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    rec, rows = _cancel_card(rig, end)
+    _quick_weigh(rig, 200, 130.0)
+    _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]})
+    body = _apply_card(rig, {"200": 5.0})
+    assert body["status"] == "confirmed" and not body.get("held"), body
+    assert rig.used(200) == pytest.approx(135.0)
+    assert cancel_review_store.get_pending(XL, str(JOB)) is None
+
+
+def test_a_change_fcc_cant_place_after_the_card_is_held_with_its_grams(stamps, quiet_saves):
+    """An edit in Spoolman's own page after the card was made: held, its line filled
+    in with the print's grams and marked as a change FCC can't place."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    rec, rows = _cancel_card(rig, end)
+    rig.sm.records["spool"][200]["used_weight"] = 104.0
+    body = _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]})
+    assert rig.used(200) == 104.0 and body["held"][0]["known_order"] is False, body
+    row = next(r for r in cancel_review_store.get_pending(XL, str(JOB))["spools"] if r["sid"] == 200)
+    assert row["prefill"] == rows[200]["grams"] and "can't tell" in row["weighed"]["words"], row
+
+
+def test_a_card_whose_spools_didnt_change_applies_in_one_go(stamps, quiet_saves):
+    """Passes on c7073d8 by design."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    rec, rows = _cancel_card(rig, end)
+    body = _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]})
+    assert body["status"] == "confirmed" and not body.get("held"), body
+    assert cancel_review_store.get_pending(XL, str(JOB)) is None
+
+
+def test_a_line_the_card_already_showed_as_weighed_is_charged_as_typed(stamps, quiet_saves):
+    """The weighing came before the card: its line was marked when the card was made,
+    so the Apply charges what the person typed (passes on c7073d8 by design)."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    _quick_weigh(rig, 200, 120.0)
+    rec, rows = _cancel_card(rig, end)
+    assert rows[200]["prefill"] == 0.0, rows[200]
+    body = _apply_card(rig, {"200": 5.0, "300": rows[300]["grams"]})
+    assert body["status"] == "confirmed" and not body.get("held"), body
+    assert rig.used(200) == pytest.approx(125.0)
+
+
+def test_a_set_spool_weighed_after_the_card_holds_its_box(stamps, quiet_saves):
+    """SP3 (b), red on c7073d8 (the set's share for #200 charged on top). A set's spool
+    on its head at the end, weighed after the card was made: its box is held."""
+    import time as _t
+    rig = TwoHeadsOverHTTP()
+    _set_card()
+    rec = cancel_review_store.pop_pending(XL, str(JOB))
+    rec["heads_at_end"][0]["used"] = {"200": 100.0}
+    rec["heads_at_end"][1]["used"] = {"300": 50.0}
+    rec["end_at_s"] = _t.time() - 60
+    cancel_review_store.add_pending(rec)
+    _quick_weigh(rig, 200, 130.0)
+    body = _post_set(rig, 12.4)
+    assert rig.used(200) == 130.0 and [h["sid"] for h in body["held"]] == [200], body
+    assert rig.used(300) == pytest.approx(53.6)
+
+
+def test_the_spools_that_left_their_head_at_a_swap_and_when():
+    """OR2 / SP2: each spool that left its head at a swap and didn't come back, with
+    the moment the printer stopped for that swap."""
+    log = [{"seq": 0, "position": 0, "from_sid": 100, "to_sid": 200, "at": 10.0},
+           {"seq": 1, "position": 0, "from_sid": 200, "to_sid": 300, "at": 20.0}]
+    assert print_deduct._swap_left_at(log) == {"100": 10.0, "200": 20.0}
+    log.append({"seq": 2, "position": 0, "from_sid": 300, "to_sid": 100, "at": 30.0})
+    assert print_deduct._swap_left_at(log) == {"200": 20.0, "300": 30.0}       # #100 came back
+    assert print_deduct._swap_left_at([{"seq": 0, "position": 0, "from_sid": 1, "to_sid": 2}]) == {}
+    entry = {"start_spools": {"0": 100}, "swap_log": []}
+    print_deduct._record_swap_events(entry, {0: 200}, 0.5, at=123.5)
+    assert entry["swap_log"][0]["at"] == 123.5 and entry["swap_log"][0]["from_sid"] == 100
+
+
+def test_a_spool_that_left_at_a_swap_and_was_weighed_after_is_marked_on_its_card(stamps):
+    """OR2 / SP2, red on c7073d8 (no mark: the swapped-out spool's share pre-filled and
+    charged on top of the scale). A weighing before the swap is no weighing of it."""
+    import time as _t
+    t_swap = _t.time() - 120
+    stamps.note(100, "the Quick-Weigh", at=t_swap + 30)
+    stamps.note(400, "the Quick-Weigh", at=t_swap - 30)
+    rows = [{"sid": 100, "toolhead": "XL-1", "position": 0, "grams": 12.4},
+            {"sid": 400, "toolhead": "XL-1", "position": 0, "grams": 2.0},
+            {"sid": 200, "toolhead": "XL-1", "position": 0, "grams": 3.0}]
+    print_deduct._mark_weighed_rows(rows, [], _t.time() - 60, {"100": t_swap, "400": t_swap})
+    assert rows[0]["prefill"] == 0.0 and rows[0]["weighed"]["known_order"] is True, rows[0]
+    assert "left XL-1 at a swap" in rows[0]["weighed"]["words"], rows[0]
+    assert "weighed" not in rows[1] and "weighed" not in rows[2], rows
+
+
+def test_a_spool_that_left_at_a_swap_weighed_after_its_card_is_held_at_the_apply(stamps, quiet_saves):
+    """OR2 / SP2 at the Apply, red on c7073d8: the swapped-out spool, weighed after the
+    card was made, is charged nothing and its line marked."""
+    import time as _t
+    rig = TwoHeadsOverHTTP()
+    rig.sm.add("spool", 100, location="SHELF-1", used_weight=300.0, initial_weight=1000.0,
+               archived=False, filament={"weight": 1000.0})
+    rec = {"printer_name": XL, "job_id": str(JOB), "filename": "x.gcode", "progress": 1.0, "total_grams": 12.4,
+           "ambiguous": False, "kind": "partial", "created": "2026-11-22 00:00:00",
+           "swap_left_at": {"100": _t.time() - 120},
+           "spools": [{"sid": 100, "toolhead": "XL-1", "position": 0, "grams": 12.4, "display": "#100",
+                       "color": "ff0000", "ambiguous": False}],
+           "heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": 200, "sids": [200], "used": {"200": 100.0}}],
+           "end_at_s": _t.time() - 60}
+    cancel_review_store.add_pending(rec)
+    _quick_weigh(rig, 100, 312.4)
+    body = _apply_card(rig, {"100": 12.4})
+    assert rig.used(100) == 312.4 and [h["sid"] for h in body["held"]] == [100], body
+    row = cancel_review_store.get_pending(XL, str(JOB))["spools"][0]
+    assert row["prefill"] == 0.0 and "left XL-1 at a swap" in row["weighed"]["words"], row
+
+
+def test_a_cards_apply_judges_the_order_by_the_end_reads_own_moment(stamps, quiet_saves):
+    """The card keeps the end read's moment (`end_at_s`), not only its words to the
+    second (`heads_read_at`), so the Apply tells a weighing after the end from one
+    before as the charge does. Here the end read is a minute old (its words say now),
+    and the weighing 30 s after it: known order, 0 g."""
+    rig = TwoHeadsOverHTTP()
+    end = _end_read(rig)
+    end["at_s"] -= 60
+    rec, rows = _cancel_card(rig, end)
+    assert rec["end_at_s"] == pytest.approx(end["at_s"]), rec.get("end_at_s")
+    rig.sm.records["spool"][200]["used_weight"] = 130.0
+    stamps.note(200, "the Quick-Weigh", at=end["at_s"] + 30)
+    body = _apply_card(rig, {"200": rows[200]["grams"], "300": rows[300]["grams"]})
+    assert body["held"][0]["known_order"] is True, body

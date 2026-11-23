@@ -63,7 +63,7 @@ import print_deduct  # type: ignore
 
 # {printer_name: {"state": str, "job_id", "filename", "progress", "start_spools",
 #                  "snapshot_job", "swap_log", "pause_progress", "saw_attention",
-#                  "park_heads", "park_read"}}: the latch (each key is described where
+#                  "park_heads", "park_read", "paused_at"}}: the latch (each key is described where
 # it is set). Group 64.3 (4) dropped "file_meta", which nothing read.
 _PRINT_TRACKER = {}
 _PRINT_TRACKER_LOCK = threading.Lock()
@@ -758,6 +758,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
         snap_jid = None
         need_swap_snapshot = False  # 22.3(b): flag a resume-edge mid-print swap capture
         park_was = None  # Group 64.3 (4): the park's read, spent at a PRINTING tick
+        paused_was = None  # Group 64 full review: when the print stopped for this pause
         swap_jid = None
         swap_progress = None
         swap_runout = False
@@ -765,11 +766,19 @@ def _track_print_edge(printer_name, state_info, fb_url):
             entry = _PRINT_TRACKER.setdefault(printer_name, {})
             prev_state = entry.get('state')  # 22.3(b): pre-overwrite, for resume detection
             entry['state'] = cur
+            if cur in _PAUSED_CONDITION_STATES and entry.get('filename') and 'paused_at' not in entry:
+                # Group 64 full review (OR2 / SP2): when the print stopped (its first
+                # paused tick; a PRINTING tick spends it). A swap at this pause ends the
+                # share of the spool it takes off, and a spool weighed at the printer's
+                # prompt was weighed after its share ended. An ATTENTION park is noted
+                # below, in the branch that handles it.
+                entry['paused_at'] = time.time()
             if cur == 'PRINTING':
                 # Group 64.3 (4): printing again, the park's read is spent: a resume
                 # checks for a swap against it (below), and the next park reads afresh.
                 park_was = entry.pop('park_heads', None)
                 entry.pop('park_read', None)
+                paused_was = entry.pop('paused_at', None)
             if job:
                 # Reject blank/zero ids (None/''/'0'/0) — same "blank job" set
                 # print_deduct_ledger keys on, so the tracker and the ledger
@@ -833,6 +842,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     entry.pop('saw_attention', None)
                     entry.pop('park_heads', None)
                     entry.pop('park_read', None)
+                    entry.pop('paused_at', None)
                 if job.get('filename'):
                     entry['filename'] = job['filename']
                 if new_jid is not None:
@@ -926,7 +936,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
                             if _sid is not None:
                                 _before[str(_pos)] = _sid
                         _added = print_deduct._record_swap_events(
-                            e, snap, swap_progress, runout=swap_runout, before=_park_map)
+                            e, snap, swap_progress, runout=swap_runout, before=_park_map,
+                            at=paused_was)
                         # Say what the diff actually found. A zero here is the
                         # interesting case: FCC looked and the Spoolman mapping
                         # was unchanged, which is what a purely physical roll
@@ -1124,6 +1135,10 @@ def _track_print_edge(printer_name, state_info, fb_url):
                             f"— will check for a spool swap on resume.",
                             "INFO", "6cb2eb")
                     entry['saw_attention'] = True
+                    if 'paused_at' not in entry:
+                        # Group 64 full review (OR2 / SP2): when the print stopped for this
+                        # park, as the PAUSED states note it above.
+                        entry['paused_at'] = time.time()
                     if not entry.get('park_read'):
                         # Group 64.3 (4): one read of the heads per park (off the lock, below).
                         entry['park_read'] = True
