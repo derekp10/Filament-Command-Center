@@ -404,9 +404,11 @@
   wizard's weight boxes are still `type="number"`, which keep a reading's digits (CLAUDE.md's weight-entry paragraph
   lists it as not covered). Group 64's full review (PI2) found the same root from the other side: a spool label
   scanned into Edit Spool's Total Used leaves its digits there (ID:57 reads 57, the box rejecting the letters and
-  the ':'), and Save writes them as the used weight. Group 64 stopped Edit Spool stamping such a figure as FCC's
-  weighing (only a scale reading's is stamped), so a print is no longer held at 0 g over it; the overwrite itself
-  stays until these boxes take the weight capture (`fcc-weight-box`, `window.parseGramsReading`).
+  the ':'), and Save writes them as the used weight; the Scale Gross box does the same, its digits worked out as a
+  gross reading (Group 64 fix review 2, CP1 / CX2). Group 64 stopped Edit Spool stamping either figure as FCC's
+  weighing (only Weigh from Scale's reading is stamped), so a print is no longer held at 0 g over it; the overwrite
+  itself stays until these boxes take the weight capture (`fcc-weight-box`, `window.parseGramsReading`), and then
+  the Scale box's figure can count as a reading again.
 
 * **🟡 Two silent saves (noted by Group 47; filed 2026-11-16).** _(→ **Group 67.3**, 2026-11-16)_ (1) A refused slot-order save looks saved: the route answers 400 with no log line (`routes_bindings.py`), and `putSlotOrder` (`inv_loc_mgr.js`) ignores the status, so the order looks applied until a reload. (2) `update_filament` and `update_vendor` PATCH with `timeout=2` (`spoolman_api.py`), so a slow Spoolman can show a failure while the write lands (spool writes have a longer timeout and read a lost answer back, Group 54).
 * **🧹 Comments that say a paused Activity Log drops its lines (noted by Group 47.6; filed 2026-11-16).** _(→ **Group 67.7**, 2026-11-16)_ `routes_state_pulse.py` and `inv_core.js` still say a paused log swaps 'logs' for 'status'; since 2026-08-05 a pause only freezes the drawing (`inv_core.js`: "PAUSE IS A RENDER-FREEZE, NOT A FETCH-FREEZE"). Comments only. Also (2026-11-17, found while checking Groups 72 and 73's task files): `logic._active_print_info_for_location`'s docstring (`logic.py` ~:18-21) says PRINTING / PAUSED / BUSY count as a print, but since 13.8 only PRINTING, PAUSING and RESUMING do (`prusalink_api.py` ~:507-515); `fab_drag.js` ~:121 calls the search panel z 1045, but it is 1090 (`.fcc-offcanvas-search`, `global.css` ~:1464; two tests' comments say 1045 too, `tests/test_global_search_key_covered_js.py` ~:9 and `tests/test_audit_find_and_tiles_58_e2e.py` ~:366); and two z-index rules are dead, `.fcc-modal-top`'s 2000 (worn only by two Bootstrap windows) and the "NUCLEAR" 1100 rule (`global.css` ~:1458, ~:1545-1553), since the page sets an inline `!important` z-index on every window it shows (`inv_core.js` ~:3628-3632).
