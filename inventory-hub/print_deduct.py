@@ -2050,6 +2050,18 @@ def _card_head_of(rec, sid):
     return None
 
 
+def _hold_head(rec, row, sid):
+    """The head a hold's words name for spool `sid` on `row`: the row's own toolhead
+    when it names the spool's head (a row one spool's two heads merged into names them
+    both, "XL-4, XL-5"), else the head the card's heads name the spool on (a pick on
+    another head's line, Group 64 full review FX6), else the row's."""
+    own = _card_head_of(rec, sid)
+    th = row.get("toolhead")
+    if not own or own in [t.strip() for t in str(th or '').split(',')]:
+        return th or own
+    return own
+
+
 def _held_at_apply(rec, row, sid, used_now, shown=None):
     """Decision 1 at a card's Apply, under the spool's lock (Group 64 full review: RW1 /
     OR1 / SP3 / PR1, and OR2 / SP2 for a spool that left its head at a swap): the info
@@ -2082,7 +2094,7 @@ def _held_at_apply(rec, row, sid, used_now, shown=None):
                 was = None
             if was is not None and abs(seen - was) <= 0.02:
                 return None
-        return dict(info, toolhead=_card_head_of(rec, sid) or row.get("toolhead"))
+        return dict(info, toolhead=_hold_head(rec, row, sid))
     left = (rec.get("swap_left_at") or {}).get(str(sid))
     if left is None:
         return None
@@ -2094,7 +2106,7 @@ def _held_at_apply(rec, row, sid, used_now, shown=None):
             return None
     except (TypeError, ValueError):
         pass
-    return {"sid": sid, "toolhead": _card_head_of(rec, sid) or row.get("toolhead"), "then": None,
+    return {"sid": sid, "toolhead": _hold_head(rec, row, sid), "then": None,
             "now": round(used_now, 2), "ours": 0.0, "stamp": stamp, "ended": float(left), "left": True}
 
 

@@ -2263,3 +2263,16 @@ def test_a_failed_writes_retry_row_never_settles_as_held(stamps, quiet_saves):
             "printer_name": XL, "job_id": key, "rev": 0, "settle_held": True, "charges": []}).get_json()
     assert body["status"] == "error" and not body.get("settled_held"), body
     assert cancel_review_store.get_pending(XL, key) is not None
+
+
+def test_a_hold_on_a_row_one_spools_two_heads_merged_names_both_heads():
+    """FX6's refinement (red on 90bf96a, which named only XL-1): a row one spool's two
+    heads merged into ("XL-1, XL-2") keeps its own words; a pick on another head's
+    line names the spool's own head; a spool on no head keeps the row's."""
+    rec = {"heads_at_end": [{"toolhead": "XL-1", "position": 0, "sid": 230, "sids": [230]},
+                            {"toolhead": "XL-2", "position": 1, "sid": 230, "sids": [230]},
+                            {"toolhead": "XL-3", "position": 2, "sid": 300, "sids": [300]}]}
+    assert print_deduct._hold_head(rec, {"toolhead": "XL-1, XL-2"}, 230) == "XL-1, XL-2"
+    assert print_deduct._hold_head(rec, {"toolhead": "XL-1"}, 300) == "XL-3"
+    assert print_deduct._hold_head(rec, {"toolhead": "XL-1"}, 999) == "XL-1"
+    assert print_deduct._hold_head(rec, {}, 300) == "XL-3"
