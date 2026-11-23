@@ -1266,11 +1266,28 @@ def _cancel_monitor_tick():
         except Exception:
             state_info = None
         probed[name] = state_info  # distinct keys per thread → GIL-safe
+        # Group 65.1 (2): lost and back, said once each, before the edge (so a print
+        # that ended unseen is named from the latch the edge is about to clear). A
+        # printer back mid-print is said after it, from the progress its job read
+        # brings up to date.
+        back = None
+        try:
+            back = _note_contact(name, state_info)
+        except Exception as e:
+            try:
+                state.logger.debug(f"contact note failed for {name}: {e}")
+            except Exception:
+                pass
         try:
             _track_print_edge(name, state_info, fb_url)
         except Exception as e:
             try:
                 state.logger.debug(f"cancel-monitor probe failed for {name}: {e}")
+            except Exception:
+                pass
+        if back:
+            try:
+                _say_back_printing(name, back)
             except Exception:
                 pass
 
@@ -1284,6 +1301,9 @@ def _cancel_monitor_tick():
         for stale in [p for p in _PRINT_TRACKER if p not in names]:
             _PRINT_TRACKER.pop(stale, None)
         snapshot = {k: dict(v) for k, v in _PRINT_TRACKER.items()}
+    with _CONTACT_LOCK:
+        for stale in [p for p in _CONTACT if p not in names]:
+            _CONTACT.pop(stale, None)
 
     # Slice 7: persist the latch snapshot so an in-flight print survives an FCC /
     # host restart (reconciled on monitor start via _recover_print_tracker_on_
@@ -1312,6 +1332,135 @@ def _cancel_monitor_tick():
             busy = True
             break
     return busy
+
+
+# ---------------------------------------------------------------------------
+# Group 65.1 (2): one line when FCC loses contact with a printer, one when it's back
+# (Derek, 2026-11-09: "the biggest problem, is if the network drops mid print, and fcc
+# doesn't receive data when everything re-connects"). A failed probe answered None
+# without a word, and hub.log held no printer line all day. Three failed monitor probes
+# in a row count as lost (30 s at the busy pace, 90 s at the idle one): a WARNING while
+# a print is latched, INFO otherwise (switching a printer off is normal). Silent for a
+# printer with no PrusaLink IP saved (the boot check names those), for one that hasn't
+# answered since FCC started, and for a one- or two-probe blip. Only the monitor's own
+# probes count, never the heartbeat's. In memory: a restart starts afresh, and restart
+# recovery says once when a latched print's printer is silent.
+# {printer: {"misses": n, "since": first failed probe's time, "said": "lost" said,
+#            "answered": answered since FCC started, "last": its last state}}
+_CONTACT = {}
+_CONTACT_LOCK = threading.Lock()
+_LOST_AFTER_MISSES = 3
+
+
+def _how_long(seconds):
+    """'40 s', '12 min', '2 h 38 min', '3 days 4 h': a gap in words."""
+    s = max(0, int(round(seconds)))
+    if s < 60:
+        return f"{s} s"
+    m = s // 60
+    if m < 60:
+        return f"{m} min"
+    h, m = divmod(m, 60)
+    if h < 48:
+        return f"{h} h {m} min" if m else f"{h} h"
+    d, h = divmod(h, 24)
+    return f"{d} days {h} h" if h else f"{d} days"
+
+
+def _latched(name):
+    """A copy of the printer's latch while it holds a print, else None."""
+    with _PRINT_TRACKER_LOCK:
+        entry = dict(_PRINT_TRACKER.get(name) or {})
+    return entry if entry.get('filename') else None
+
+
+def _latch_pct(latch):
+    return max(0.0, min(1.0, float(latch.get('progress') or 0.0))) * 100
+
+
+def _doing_words(latch):
+    """"it was printing 'x.bgcode' (~30%)": the latched print, its file escaped."""
+    verb = {"PAUSED": "paused in", "PAUSING": "paused in",
+            "ATTENTION": "waiting at a prompt in"}.get(str(latch.get('state') or '').upper(), "printing")
+    return f"it was {verb} '{print_deduct._esc(latch.get('filename'))}' (~{_latch_pct(latch):.0f}%)"
+
+
+_STATE_WORDS = {"IDLE": "idle", "READY": "ready", "OPERATIONAL": "idle", "FINISHED": "on its finished screen",
+                "STOPPED": "on its stopped screen", "ERROR": "showing an error", "BUSY": "busy"}
+
+
+def _note_contact(name, state_info):
+    """Keep the printer's contact record and say "lost" once. Returns what to say
+    after the edge for a printer back mid-print ({"gap", "state"}), else None (a
+    printer back at the end of a print, or idle, is said here, before its edge)."""
+    now = time.time()
+    with _CONTACT_LOCK:
+        rec = _CONTACT.setdefault(name, {"misses": 0, "since": None, "said": False,
+                                         "answered": False, "last": None})
+        if state_info is None:
+            if not rec["answered"] or prusalink_api.last_probe_failure(name) == "no_ip":
+                return None
+            rec["misses"] += 1
+            if rec["since"] is None:
+                rec["since"] = now
+            if rec["misses"] < _LOST_AFTER_MISSES or rec["said"]:
+                return None
+            rec["said"] = True
+            last = rec["last"]
+        else:
+            cur = str(state_info.get('state') or '').upper()
+            was_said, since = rec["said"], rec["since"]
+            rec.update(misses=0, since=None, said=False, answered=True, last=cur)
+            if not was_said:
+                return None
+    shown = print_deduct._esc(name)
+    if state_info is None:
+        latch = _latched(name)
+        if latch:
+            state.add_log_entry(f"📡 Lost contact with {shown}: {_doing_words(latch)} when FCC last "
+                                f"saw it.", "WARNING", "ffaa00")
+        else:
+            state.add_log_entry(f"📡 Lost contact with {shown} (it was "
+                                f"{_STATE_WORDS.get(last, str(last or 'idle').lower())}).", "INFO", "6cb2eb")
+        return None
+    gap = _how_long(now - since) if since else None
+    if cur in _INPROGRESS_PRINT_STATES or cur == 'ATTENTION':
+        return {"gap": gap, "state": cur}
+    after = f" after {gap}" if gap else ""
+    latch = _latched(name)
+    if latch:
+        seen = f"the print FCC last saw at ~{_latch_pct(latch):.0f}%"
+        if cur in _COMPLETE_TERMINAL_STATES:
+            fate = f"{seen} finished while FCC couldn't see it."
+        elif cur in _CANCEL_TERMINAL_STATES:
+            fate = f"{seen} stopped while FCC couldn't see it."
+        else:
+            fate = f"{seen} ended while FCC couldn't see it; 🛑 Review will ask about it."
+        state.add_log_entry(f"📡 {shown} is back{after} ({print_deduct._esc(cur)}): {fate}", "INFO", "6cb2eb")
+    else:
+        state.add_log_entry(f"📡 {shown} is back{after} ({print_deduct._esc(cur)}).", "INFO", "6cb2eb")
+    return None
+
+
+def _say_back_printing(name, back):
+    """A printer back mid-print: its state and the progress the edge's job read saw."""
+    latch = _latched(name)
+    pct = f", ~{_latch_pct(latch):.0f}%" if latch else ""
+    after = f" after {back['gap']}" if back.get("gap") else ""
+    state.add_log_entry(f"📡 {print_deduct._esc(name)} is back{after} ({print_deduct._esc(back['state'])}{pct}).",
+                        "INFO", "6cb2eb")
+
+
+def _note_silent_at_restart(name, entry):
+    """Restart recovery found a latched print's printer silent: say so once, and count
+    it as lost, so its first answer is said as "back"."""
+    if prusalink_api.last_probe_failure(name) == "no_ip":
+        return
+    with _CONTACT_LOCK:
+        _CONTACT[name] = {"misses": _LOST_AFTER_MISSES, "since": time.time(), "said": True,
+                          "answered": True, "last": str(entry.get('state') or '').upper()}
+    state.add_log_entry(f"📡 {print_deduct._esc(name)} hasn't answered since FCC restarted; "
+                        f"{_doing_words(entry)} when FCC last saw it.", "WARNING", "ffaa00")
 
 
 def _stamp_charging(rec):
@@ -1788,6 +1937,11 @@ def _recover_one_print_latch(name, entry, fb_url):
     if cur is None:
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = dict(entry)
+        if fb_url:
+            try:
+                _note_silent_at_restart(name, entry)   # Group 65.1 (2): the probe ran, and failed
+            except Exception:
+                pass
         return True
 
     if cur in _INPROGRESS_PRINT_STATES:

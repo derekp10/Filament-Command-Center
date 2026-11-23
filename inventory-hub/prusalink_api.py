@@ -679,12 +679,14 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
     _ACTIVE_PRINT_STATES = {"PRINTING", "PAUSING", "RESUMING"}
     creds = fetch_printer_credentials(filabridge_url, printer_name)
     if not creds or not creds.get("ip_address"):
+        _note_probe_failure(printer_name, "no_ip")
         return None
     ip = creds["ip_address"]
     api_key = creds.get("api_key")
     headers = {"X-Api-Key": api_key} if api_key else {}
 
     # v1 status — returns {"printer": {"state": "PRINTING", ...}, ...}
+    why = "unreadable"
     try:
         r = requests.get(f"http://{ip}/api/v1/status", headers=headers, timeout=2)
         if r.ok:
@@ -692,12 +694,16 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
             printer = body.get("printer") or {}
             state_str = str(printer.get("state", "")).upper()
             if state_str:
+                _note_probe_failure(printer_name, None)
                 return {"state": state_str, "is_active": state_str in _ACTIVE_PRINT_STATES}
-    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        else:
+            why = f"http {r.status_code}"
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         # L3 fix B: a connection-level failure (timeout / refused / no route)
         # means the printer is unreachable. The legacy endpoint lives on the
         # SAME ip:port and will time out too — skip it instead of burning a
         # second 2s timeout. Halves the probe cost for an offline printer.
+        _note_probe_failure(printer_name, _connection_failure_kind(e))
         return None
     except Exception:
         # v1 answered but the body was unusable (bad JSON / odd shape) — fall
@@ -718,11 +724,51 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
             # printing flag.
             is_active = bool(flags.get("printing")) or state_text in _ACTIVE_PRINT_STATES
             if state_text:
+                _note_probe_failure(printer_name, None)
                 return {"state": state_text, "is_active": is_active}
+        elif why == "unreadable":
+            why = f"http {r.status_code}"
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        why = _connection_failure_kind(e)
     except Exception:
         pass
 
+    _note_probe_failure(printer_name, why)
     return None
+
+
+# Group 65.1 (2): why each printer's last state probe failed, beside its unchanged
+# answer (None, fail-open, for every caller): "no_ip" (no PrusaLink IP saved),
+# "timeout", "refused" (the printer answered, and nothing listens: it is on the
+# network), "no_route", "connection" (another connection failure), "http <status>",
+# "unreadable" (a body FCC couldn't read). Cleared by an answer. The print monitor reads
+# it to stay quiet about a printer with no IP saved, and (65.1 (3)) to tell PrusaLink
+# stuck from a printer that doesn't answer at all.
+_LAST_PROBE_FAILURE = {}
+
+
+def _note_probe_failure(printer_name, why):
+    if why is None:
+        _LAST_PROBE_FAILURE.pop(printer_name, None)
+    else:
+        _LAST_PROBE_FAILURE[printer_name] = why
+
+
+def _connection_failure_kind(e):
+    if isinstance(e, requests.exceptions.Timeout):
+        return "timeout"
+    text = str(e).lower()
+    if "refused" in text:
+        return "refused"
+    if "no route" in text or "unreachable" in text:
+        return "no_route"
+    return "connection"
+
+
+def last_probe_failure(printer_name):
+    """Why `printer_name`'s last state probe failed (see _LAST_PROBE_FAILURE), or None
+    when it answered (or was never probed)."""
+    return _LAST_PROBE_FAILURE.get(printer_name)
 
 
 def _parse_v1_job(body: Dict) -> Optional[Dict]:
