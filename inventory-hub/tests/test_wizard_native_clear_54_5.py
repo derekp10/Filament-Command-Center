@@ -688,3 +688,43 @@ def test_a_save_after_spool_saved_but_filament_refused_sends_total_used_only_if_
     wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
     second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
     assert "used_weight" not in second["spool_data"] and "used_based_on" not in second, second
+
+
+
+GATE_JS = r"""() => {
+  const real = window.fetch;
+  window.fetch = function (url, opts) {
+    const path = String(url).split('?')[0];
+    if (path === '/api/edit_spool_wizard' && window.__gateNext) {
+      window.__gateNext = false;
+      window.__posts.push({ url: path, body: opts.body ? JSON.parse(opts.body) : null });
+      const answer = JSON.parse(JSON.stringify(window.__answers[path]));
+      return new Promise((res) => { window.__release = () => res({ ok: true, status: 200,
+          json: () => Promise.resolve(answer) }); });
+    }
+    return real.apply(this, arguments);
+  };
+}"""
+
+
+@pytest.mark.parametrize("first_answer", [{"success": False, "spool_saved": True, "msg": "Filament update failed (test)"},
+                                          {"success": True, "spool_id": 57}], ids=["spool_saved", "success"])
+def test_a_total_used_corrected_while_the_save_is_out_is_sent_next_time(wiz, first_answer):
+    """Group 64 fix review 3 (TP5), red on a5857f84 (the baseline was read from the box
+    when the answer came, so a correction typed while the Save was out was never sent):
+    the baseline is what the Save sent."""
+    _open_edit_used(wiz, 100.37)
+    wiz.evaluate(GATE_JS)
+    wiz.evaluate("(a) => { window.__answers['/api/edit_spool_wizard'] = a; window.__gateNext = true; }", first_answer)
+    wiz.locator("#wiz-spool-used").fill("130")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("() => typeof window.__release === 'function'")
+    wiz.locator("#wiz-spool-used").fill("140")
+    wiz.evaluate("() => window.__release()")
+    wiz.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57 }; }")
+    wiz.locator("#wiz-spool-comment").fill("again")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert second["spool_data"].get("used_weight") == 140, second["spool_data"]

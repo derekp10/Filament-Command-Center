@@ -796,7 +796,9 @@ def test_a_partly_failed_apply_keeps_its_retry_card_on_the_panel(tmp_path):
     res = run(tmp_path, RESPOND_JS + PARTFAIL_JS, {"pending": [h, o], "spools": SPOOLS})
     assert res["kept"] is True and res["rows"] == ["200"], res
     words = " ".join(res["notice"].split())
-    assert words.startswith("Deducted from 1 spool(s).") and "1 spool(s) failed: the card stays" in words, res
+    # Group 64 fix review 3 (TP2): each spool's own words, never one sentence for all.
+    assert words == ("Deducted from 1 spool(s). Not charged: #200 (HTTP 500: database is locked). The card "
+                     "stays: check it, then Apply again or Discard."), res
     assert res["panel"] is False, res
 
 
@@ -834,7 +836,144 @@ def test_a_held_rows_grams_left_at_0g_are_never_also_couldnt_be_applied(tmp_path
                 spools=[_row(200, 12.4, prefill=0.0, weighed={"words": WORDS_KNOWN, "known_order": True})],
                 heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}])
     confirm = {"status": "confirmed", "applied": [], "errors": [], "shortfall_g": 12.4, "settled_unsure": False,
-               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}]}
+               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}],
+               "left_in_shortfall_g": 12.4}
     res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + ONCE_JS, {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
     msgs = [t["msg"] for t in res["toasts"]]
     assert msgs == ["Left 12.4g uncharged on #200: it was weighed after the print."], msgs
+
+
+
+# --------------------------------------------------------------------------- #
+# Group 64 fix review 3 (2026-11-22): TP1, TP3, TP4, TP6, TP7, TP8 (page)      #
+# --------------------------------------------------------------------------- #
+
+def test_a_first_applys_unpicked_head_is_said_beside_a_weighed_row_left_at_0g(tmp_path):
+    """TP1, red on a5857f84 (no "couldn't be applied" toast: the page took #200's 12.4 g
+    off a shortfall of 8.96 g that never counted them): the server says what of the
+    shortfall the weighed spools account for (here none)."""
+    rec = _base("f", "partial", total_grams=21.36,
+                spools=[_row(200, 12.4, prefill=0.0, weighed={"words": WORDS_KNOWN, "known_order": True})],
+                unresolved_usage={"2": 8.96},
+                heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}])
+    confirm = {"status": "confirmed", "applied": [], "errors": [], "shortfall_g": 8.96, "settled_unsure": False,
+               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}],
+               "left_in_shortfall_g": 0.0}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + ONCE_JS.replace("cardOf('k')", "cardOf('f')"),
+              {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
+    msgs = [t["msg"] for t in res["toasts"]]
+    assert msgs == ["Left 12.4g uncharged on #200: it was weighed after the print.",
+                    "8.96g couldn't be applied — weigh that spool to true up."], msgs
+
+
+def test_the_new_cards_toast_says_the_new_cards_own_grams(tmp_path):
+    """TP8 (page), red on a5857f84 ("12.12g ... on a new card" for a 2.6 g card)."""
+    rec = _base("n", "partial", rev=1, total_grams=13.12,
+                spools=[_row(200, 12.4, prefill=0.0, weighed={"words": WORDS_KNOWN, "known_order": True})],
+                heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}])
+    confirm = {"status": "confirmed", "applied": [{"sid": 300, "grams": 1.0, "remaining": 0.0}], "errors": [],
+               "shortfall_g": 15.0, "shortfall_card": "n#shortfall", "shortfall_card_g": 2.6, "settled_unsure": False,
+               "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}],
+               "left_in_shortfall_g": 12.4}
+    res = run(tmp_path, RESPOND_JS + CONFIRM_ANSWER_JS + ONCE_JS.replace("cardOf('k')", "cardOf('n')"),
+              {"pending": [rec], "spools": SPOOLS, "confirm": confirm})
+    new = [t["msg"] for t in res["toasts"] if "new card" in t["msg"]]
+    assert new == ["2.6g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard."], res
+
+
+def _shortfall_with_rows(job, rows, total, lines=None, causes=None):
+    return _base(job, "shortfall", rev=1, total_grams=total, unresolved_usage=lines or {},
+                 shortfall_causes=causes or {}, spools=rows,
+                 heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                               {"toolhead": "HEAD-2", "position": 1, "sid": None, "sids": []}])
+
+
+TITLES_JS = r"""
+const out = {};
+for (const c of document.querySelectorAll('.fcc-cr-card')) {
+  out[c.dataset.job] = { title: c.querySelector('.fcc-cr-short-title').textContent.replace(/\s+/g, ' ').trim(),
+                         banner: c.querySelector('.fcc-cr-short-banner').textContent.replace(/\s+/g, ' ').trim() };
+}
+return out;
+"""
+
+
+def test_the_card_head_names_one_spool_once_and_a_retry_row_apart(tmp_path):
+    """TP3, red on a5857f84 ("16g held: #200 and #200 were weighed"), and TP4 (older: a
+    failed write's retry row read "5g went to no spool" with the joined-spool banner)."""
+    words_200 = WORDS_KNOWN
+    dup = _shortfall_with_rows(
+        "d#shortfall", [_row(200, 3.6, toolhead="HEAD-2", position=1, prefill=0.0,
+                             weighed={"words": words_200, "known_order": True})], 16.0,
+        lines={"0": 12.4}, causes={"0": {"why": "weighed", "sid": 200, "toolhead": "HEAD-1", "archived": False,
+                                         "known_order": True, "words": words_200}})
+    retry = _shortfall_with_rows(
+        "r#shortfall", [_row(300, 12.4, toolhead="HEAD-2", position=1, prefill=0.0,
+                             weighed={"words": WORDS_KNOWN.replace("#200", "#300"), "known_order": True}),
+                        _row(200, 5.0, attempt_used_before=100.0, attempt_used_after=105.0)], 17.4)
+    res = run(tmp_path, RESPOND_JS + TITLES_JS, {"pending": [dup, retry], "spools": SPOOLS})
+    assert res["d#shortfall"]["title"] == "⚖️ TESTER — 16g held: #200 was weighed after this print", res
+    assert res["r#shortfall"]["title"] == "⚖️ TESTER — 12.4g held; 5g to retry on #200", res
+    assert "joined spool" not in res["r#shortfall"]["banner"], res
+    assert "The 5g picked for #200 weren't written" in res["r#shortfall"]["banner"], res
+
+
+NULLREAD_JS = r"""
+let confirmed = false;
+const __b5 = window.__respond;
+window.__respond = (url, method, body) => {
+  if (url.startsWith('/api/cancel_deduct/pending') && confirmed) return { status: 500, body: {} };
+  if (url.startsWith('/api/cancel_deduct/confirm')) {
+    confirmed = true;
+    return { body: { status: 'confirmed', applied: [{ sid: 300, grams: 3.6, remaining: 896.4 }],
+                     errors: [{ sid: 200, error: 'HTTP 500: database is locked' }] } };
+  }
+  return __b5(url, method, body);
+};
+cardOf('h').querySelector('.fcc-cr-confirm').click();
+await settle(150);
+const c = cardOf('h');
+return { kept: !!c, enabled: c ? !c.querySelector('.fcc-cr-confirm').disabled : null,
+         notice: c ? ((c.querySelector('.fcc-cr-card-notice') || {}).textContent || '') : '' };
+"""
+
+
+def test_a_card_whose_list_couldnt_be_read_after_a_partly_failed_apply_stays(tmp_path):
+    """TP6, red on a5857f84 (the card taken off the panel, its words nowhere, while the
+    server held it): a failed read of the list is no card gone."""
+    h = _base("h", "partial", total_grams=16.0,
+              spools=[_row(200, 12.4), _row(300, 3.6, toolhead="HEAD-2", position=1)],
+              heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                            {"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}])
+    o = _base("o", "partial", total_grams=3.6, spools=[_row(300, 3.6, toolhead="HEAD-2", position=1)],
+              heads_at_end=[{"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}])
+    res = run(tmp_path, RESPOND_JS + NULLREAD_JS, {"pending": [h, o], "spools": SPOOLS})
+    assert res["kept"] is True and res["enabled"] is True, res
+    assert "Not charged: #200 (HTTP 500: database is locked)" in " ".join(res["notice"].split()), res
+
+
+ZERO_JS = r"""
+const __b6 = window.__respond;
+window.__respond = (url, method, body) => (url.startsWith('/api/cancel_deduct/confirm')
+  ? { body: { status: 'confirmed',
+              applied: [{ sid: 300, grams: 3.6, remaining: 896.4 }, { sid: 301, grams: 0.0, remaining: 0.0 }],
+              errors: [{ sid: 200, error: 'held' }],
+              held: [{ sid: 200, words: D.words, known_order: true }] } }
+  : __b6(url, method, body));
+cardOf('z').querySelector('.fcc-cr-confirm').click();
+await settle(150);
+return { toasts: __rec.toasts.map((t) => t.msg) };
+"""
+
+
+def test_a_spool_that_took_0g_is_never_named_as_charged(tmp_path):
+    """TP7, red on a5857f84 ("Charged 3.6g to #300 and #301.")."""
+    z = _base("z", "partial", total_grams=21.0,
+              spools=[_row(200, 12.4), _row(300, 3.6, toolhead="HEAD-2", position=1),
+                      _row(301, 5.0, toolhead="HEAD-3", position=2)],
+              heads_at_end=[{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                            {"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]},
+                            {"toolhead": "HEAD-3", "position": 2, "sid": 301, "sids": [301]}])
+    res = run(tmp_path, RESPOND_JS + ZERO_JS, {"pending": [z], "spools": SPOOLS, "words": WORDS_KNOWN})
+    assert res["toasts"][0].startswith(
+        "Charged 3.6g to #300. #301's record was at 0 g, so nothing was charged to it. #200 on HEAD-1"), res

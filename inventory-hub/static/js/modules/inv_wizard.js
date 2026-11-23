@@ -4206,6 +4206,18 @@ window.wizardSettleCreatePlacements = (data, { host = null, onDone = null, pick 
     return asked;
 };
 
+// Group 64 review (S3), fix review 2 (CP6) and 3 (TP5): once a Save's spool write
+// landed, Total Used's baseline is the figure that Save sent (a figure typed while it
+// was out still differs, so the next Save sends it; read from the box at the answer,
+// it was never sent). An addition or a reading is spent only while the box still shows
+// the figure it named (a new reading taken meanwhile keeps its own).
+function wizardSavedUsed(sent) {
+    wizardState.usedShown = sent;
+    const now = (document.getElementById('wiz-spool-used') || {}).value;
+    if (wizardState.usedAdd && now === wizardState.usedAdd.shown) wizardState.usedAdd = null;
+    if (wizardState.usedRead && now === wizardState.usedRead.shown) wizardState.usedRead = null;
+}
+
 window.wizardSubmit = async () => {
     document.getElementById('btn-wiz-submit').disabled = true;
     const msg = document.getElementById('wiz-status-msg');
@@ -4254,6 +4266,9 @@ window.wizardSubmit = async () => {
         // the box (or a label's digits a scan left there) says nothing, and isn't stamped
         // as FCC's weighing.
         const usedSent = isWizardEdit && 'used_weight' in sp_payload;
+        // Group 64 fix review 3 (TP5): what Total Used showed when this Save went out,
+        // the figure its baseline becomes once the spool's write lands.
+        const usedBoxSent = getVal('wiz-spool-used');
         const usedBasedOn = (usedSent && wizardState.usedAdd && getVal('wiz-spool-used') === wizardState.usedAdd.shown)
             ? { mode: 'additive', used: wizardState.usedAdd.base }
             : (usedSent && wizardState.usedRead && getVal('wiz-spool-used') === wizardState.usedRead.shown)
@@ -4570,9 +4585,7 @@ window.wizardSubmit = async () => {
             if (isWizardEdit) wizardAfterOwnWrite(data, editSid, wizModal);
             // Group 64 review (S3): the box shows what this Save wrote, so the next
             // Save in this session sends it only if it changes again.
-            if (isWizardEdit) wizardState.usedShown = document.getElementById('wiz-spool-used').value;
-            if (isWizardEdit) wizardState.usedAdd = null;
-            if (isWizardEdit) wizardState.usedRead = null;
+            if (isWizardEdit) wizardSavedUsed(usedBoxSent);
             if (isWizardEdit && data.location_moved) {
                 // Group 40.7: where the Location move put it, in short arrows.
                 const lr = data.location_result;
@@ -4756,9 +4769,7 @@ window.wizardSubmit = async () => {
                 // succeeded kept): the retry sends the used weight only if it changes again,
                 // never this one over a print's charge that landed in between, nor a second
                 // weighing's stamp.
-                wizardState.usedShown = document.getElementById('wiz-spool-used').value;
-                wizardState.usedAdd = null;
-                wizardState.usedRead = null;
+                wizardSavedUsed(usedBoxSent);
             }
         }
     } catch (e) {

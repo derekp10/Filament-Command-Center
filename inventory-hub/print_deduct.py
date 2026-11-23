@@ -3975,10 +3975,13 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                f"was charged{_uncharged_tail(lines, phrases, heads)}.")
     elif no_spool and mmu_shared:
         # Group 64 fix review 2 (CS2 / CX5): a spool is bound; the slots share a Position.
-        slots = _and_list(_and_list(s for s, _ss in h) for h in mmu_shared.values())
+        # Fix review 3 (TS4): each Position's slots on their own ("MMU-1 and MMU-2 share
+        # one Position, and MMU-3 and MMU-4 another"), never all four run together.
+        groups = [_and_list(s for s, _ss in h) for h in mmu_shared.values()]
+        lead = f"MMU slots {groups[0]} share one Position" + "".join(f", and {g} another" for g in groups[1:])
         msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{_esc(filename)}') but no spool was "
-               f"charged: MMU slots {slots} share one Position and each holds a spool, so FCC can't tell "
-               f"which slot printed — pick the spool it used in 🛑 Review, or Discard.")
+               f"charged: {lead}, each slot holding a spool, so FCC can't tell which slot printed — pick "
+               f"the spool {'each line' if len(groups) > 1 else 'it'} used in 🛑 Review, or Discard.")
     elif no_spool:
         msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{_esc(filename)}') but it "
                f"couldn't be deducted (no spool bound to the toolhead, or the write was "
@@ -5339,6 +5342,12 @@ def api_cancel_deduct_confirm():
     # left unpicked, or a clamp). A retry re-stashed by an earlier Apply carries
     # it, with the grams that Apply already charged; otherwise this Apply sets it.
     requested_total = rec.get("requested_total")
+    # Group 64 fix review 3 (TS1 / TP1): the rows whose grams that ask counts, the rows
+    # the Apply that set it posted. A weighed row left at its 0 g (never posted) is not
+    # in it, so its grams are never taken off the shortfall the uncharged line says:
+    # they hid an unpicked head's grams, said nowhere. None: every row's (a no_spool
+    # card's whole usage, or a record from before the rows were kept).
+    requested_sids = rec.get("requested_sids") if requested_total is not None else None
     # Group 64.2 (5): what this Apply charges each of the card's rows short of, or
     # beyond, what the card showed, where the ask is fixed; read before the picks
     # replace the rows, and kept on the record (a retry carries it) for the line.
@@ -5481,6 +5490,20 @@ def api_cancel_deduct_confirm():
                                        if str(k) not in picked_tools}
         updates = {str(r["sid"]): r["grams"] for r in picked}
         kind = "partial"
+    if rec.get("kind") == "shortfall" and charges is None:
+        # Group 64 fix review 3 (TS3): an Apply that posts `updates` (a retry of a
+        # failed write) leaves the card's held rows it doesn't post where they are: the
+        # same rule as beside picks (CS3 / CX1), settled or kept, never dropped.
+        posted = set()
+        for k, v in updates.items():
+            try:
+                if math.isfinite(float(v)) and float(v) > 0:
+                    posted.add(str(int(k)))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        held_beside = [r for r in rec.get("spools") or []
+                       if isinstance(r, dict) and isinstance(r.get("weighed"), dict)
+                       and r.get("attempt_used_before") is None and str(r.get("sid")) not in posted]
     if kind == "progress_unknown":
         # No measured usage + no preview spools — nothing to auto-apply. Don't let
         # the partial loop below 0g-"confirm" it (that would re-lose it). Re-stash
@@ -5525,6 +5548,7 @@ def api_cancel_deduct_confirm():
                 continue
         requested_total = round(sum(g for s, g in (_grams_of(k, v) for k, v in updates.items())
                                     if s in rec_rows) + uncharged + set_left, 2)
+        requested_sids = sorted(str(s) for s in asked)
     prior_g = float(rec.get("applied_g") or 0)
 
     applied, errors = [], []
@@ -5733,10 +5757,28 @@ def api_cancel_deduct_confirm():
                 if sid_ in held_rows:
                     row.update(held_rows[sid_])
                 retry_rows.append(row)
+            # Group 64 fix review 3 (TS3 / TS5): a weighed row this Apply left at its 0 g
+            # (a held pick on an uncharged-grams card, or a row a cancel's card marked)
+            # stays on the retry card with its mark, to settle with it: the retry card
+            # held only the failed rows, and the row was never named as left uncharged.
+            on_card = {str(r.get("sid")) for r in retry_rows}
+            # (A cancel's marked row redirected to another spool was charged on its head:
+            # _weighed_rows_left judges by the head, as the Apply's success does.)
+            at_0 = {str(l["sid"]) for l in _weighed_rows_left(weighed_rows, rec_rows, asked)}
+            left_at_0 = (held_beside if rec.get("kind") == "shortfall"
+                         else [r for r in weighed_rows if str(r.get("sid")) in at_0 and r.get("sid") not in held_rows])
+            for r in left_at_0:
+                if str(r.get("sid")) not in on_card and r.get("sid") not in failed_sids:
+                    retry_rows.append(dict(r))
+                    on_card.add(str(r.get("sid")))
             retry_rec = dict(rec)
             retry_rec["spools"] = retry_rows
             # The retry reports the job's shortfall when it finally commits.
             retry_rec["requested_total"] = requested_total
+            if requested_sids is not None:
+                retry_rec["requested_sids"] = requested_sids
+            else:
+                retry_rec.pop("requested_sids", None)
             retry_rec["applied_g"] = round(prior_g + sum(a['grams'] for a in applied), 2)
             if rec.get("kind") == "shortfall":
                 # 43.2 — what the rows that did apply couldn't take stays on the
@@ -5792,6 +5834,7 @@ def api_cancel_deduct_confirm():
     charged_now = round(sum(a['grams'] for a in applied), 2)
     residue_card = None
     settled = []
+    settled_rows = []
     if rec.get("kind") == "shortfall":
         # 43.2 — what a shortfall card's picks couldn't take stays on the card
         # (Derek: an archived run-out spool is charged what it has, 0 g for #99,
@@ -5811,7 +5854,8 @@ def api_cancel_deduct_confirm():
         if held_beside:
             if data.get("settle_held") is True and not left and not drained:
                 # CS3 / CX1: settled with the lines, named as left uncharged.
-                settled = list(settled or []) + _weighed_rows_left(held_beside, {}, {})
+                settled_rows = _weighed_rows_left(held_beside, {}, {})
+                settled = list(settled or []) + settled_rows
             else:
                 held_kept = held_beside
         if held_kept or (left and sum(left.values()) >= max(0.05, _shortfall_review_min_g())):
@@ -5823,6 +5867,10 @@ def api_cancel_deduct_confirm():
                         rev=int(rec.get("rev") or 0) + 1, applied_g=applied_total)
             if requested_total is not None:
                 kept["requested_total"] = requested_total
+                if requested_sids is not None:
+                    kept["requested_sids"] = requested_sids
+                else:
+                    kept.pop("requested_sids", None)
             _note_drained(kept, drained)
             cancel_review_store.add_pending(kept)
             # Group 64 fix review (FS2): the card's weighed lines are no grams with no
@@ -5873,16 +5921,31 @@ def api_cancel_deduct_confirm():
     # Group 64 review (O3 / O4): the weighed lines and rows this Apply left
     # uncharged, said once each, and handed to the page for its toast.
     left_weighed = settled or _weighed_rows_left(weighed_rows, rec_rows, asked)
+    # Group 64 fix review 3 (TS1 / TP1): what of them the shortfall counts: every settled
+    # line (the card's lines are in its ask), and a row only when the ask counted its
+    # grams (requested_sids: the Apply that set the ask posted it, as a hold's did).
+    # `settled` is the settled lines, then the settled rows (appended last).
+    left_rows = settled_rows if settled else left_weighed
+    left_lines = settled[:len(settled) - len(settled_rows)] if settled else []
+    left_row_sids = {str(l.get("sid")) for l in left_rows}
+    left_in_shortfall = round(
+        sum(float(l["grams"]) for l in left_lines)
+        + sum(float(l["grams"]) for l in left_rows
+              if requested_sids is None or str(l.get("sid")) in requested_sids), 2)
     if left_weighed:
         _say_left_weighed(printer, rec.get('filename'), rec.get('shortfall_of') or job_id, left_weighed)
         resp["left_weighed"] = left_weighed
         resp["settled_unsure"] = any(not l["known_order"] for l in left_weighed)
         if settled:
             resp["settled_held"] = True
+        # The page takes these off the shortfall it says "couldn't be applied" for.
+        resp["left_in_shortfall_g"] = left_in_shortfall
     if shortfall is not None:
         resp["shortfall_g"] = shortfall
         if residue_card is not None:
             resp["shortfall_card"] = residue_card["job_id"]
+            # Group 64 fix review 3 (TP8): the new card's own grams, for the page's words.
+            resp["shortfall_card_g"] = residue_card["total_grams"]
             state.add_log_entry(
                 f"⚠️ {printer}: {residue_card['total_grams']:.2f}g of '{_esc(rec.get('filename'))}' couldn't "
                 f"be charged to the spool(s) picked ({_shortfall_reasons(residue_card)}) — pick another "
@@ -5901,8 +5964,13 @@ def api_cancel_deduct_confirm():
         if left_weighed:
             # Group 64 fix review 2 (CS4): every weighed line and row this Apply left is
             # said by _say_left_weighed's line, above, as uncharged on purpose; counted
-            # here too, they were said a second time as grams no spool took.
-            say_short = round(max(0.0, shortfall - sum(float(l["grams"]) for l in left_weighed)), 2)
+            # here too, they were said a second time as grams no spool took. Fix review 3
+            # (TS1 / TP1): only what the shortfall counts comes off it, and a row named
+            # there is no row "left off" (TS2: the line said it again, and its sum went
+            # wrong: "but 12.4 g more ... were typed for other spools").
+            say_short = round(max(0.0, shortfall - left_in_shortfall), 2)
+            say_rec = dict(say_rec, rows_short=[e for e in (say_rec.get("rows_short") or [])
+                                                if str(e.get("sid")) not in left_row_sids])
         _say_uncharged(printer, say_rec, say_short, residue_card,
                        clamped=round(float(rec.get("clamped_g") or 0) + clamp_g, 2))
     return jsonify(resp)
