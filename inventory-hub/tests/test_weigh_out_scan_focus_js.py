@@ -187,10 +187,13 @@ def _updates(page):
     exact bodies below say `"auto_archive": True` (updated deliberately). Since
     Group 63.6 a row's save also carries `based_on`, the figures its reading was
     worked out from: it is left out of the bodies here (updated deliberately) and
-    checked on its own (`_bases`; test_weigh_based_on_page_63_6_js)."""
+    checked on its own (`_bases`; test_weigh_based_on_page_63_6_js). Since Group
+    65.3 each also carries `weigh`, what the save was: left out the same way
+    (updated deliberately), and checked in test_weigh_facts_65_3_js."""
     bodies = page.evaluate("() => window.__posts.filter((p) => p.url === '/api/spool/update').map((p) => p.body)")
     for body in bodies:
         body.pop("based_on", None)
+        body.pop("weigh", None)
     return bodies
 
 

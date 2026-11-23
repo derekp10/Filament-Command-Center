@@ -1507,6 +1507,39 @@ def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
     page.locator("#fcc-archive-later").click()
 
 
+def test_the_empty_weight_prompts_add_ons_line_is_readable(page: Page, base_url: str):
+    """Group 65.3: both empty-spool prompts say "Take off any clip, cap or edge guards
+    first: FCC counts them as filament." (the post-archive prompt, and the missing-tare
+    question a Gross reading with no empty weight asks). Each line on its prompt's dark
+    ground, scored from the dialog and proved scored. A stub filament, every write
+    answered in the browser, nothing saved."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9004, "name": "Ocean Blue", "material": "PLA", "spool_weight": None,
+                "vendor": {"id": 9005, "name": "Example Brand", "empty_spool_weight": None}}
+    _read_only(page, extra_get={"/api/filament_details": filament})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.showArchiveEmptyWeightPrompt === 'function'"
+                           " && typeof window.promptMissingEmptyWeight === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    words = "Take off any clip, cap or edge guards first"
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 9004, null); }")
+    expect(page.locator("#fcc-archive-empty-overlay #fcc-archive-empty-addons")).to_be_visible()
+    dialog = page.locator("#fcc-archive-empty-overlay [data-fcc-weight-keys]")
+    assert [o for o in conftest.contrast_offenders(dialog) if words in (o.get("text") or "")] == []
+    assert any(words in (o.get("text") or "") for o in conftest.contrast_offenders(dialog, min_ratio=100))
+    page.locator("#fcc-archive-later").click()
+    expect(page.locator("#fcc-archive-empty-overlay")).to_have_count(0)
+    # The missing-tare question (no Promise handed back: evaluate would wait on it).
+    page.evaluate("() => { window.promptMissingEmptyWeight({ vendor: 'Example Brand', material: 'PLA',"
+                  " color: 'Ocean Blue', allowSkip: true }); }")
+    expect(page.locator("#fcc-missing-empty-weight-overlay-addons")).to_be_visible()
+    question = page.locator("#fcc-missing-empty-weight-overlay [role=dialog]")
+    assert [o for o in conftest.contrast_offenders(question) if words in (o.get("text") or "")] == []
+    assert any(words in (o.get("text") or "") for o in conftest.contrast_offenders(question, min_ratio=100))
+    page.keyboard.press("Escape")
+
+
 def test_the_refill_question_is_readable(page: Page, base_url: str):
     """Group 63.1: the question a refill after a toolhead asks (window.askRefillPlace):
     its title, words, answers (Back on the head greyed out, its reason line in yellow)

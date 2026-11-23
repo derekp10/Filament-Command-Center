@@ -992,7 +992,49 @@ def api_create_inventory_wizard():
         return jsonify({"success": False, "msg": str(e)})
 
 
-def _log_manual_weight_change(spool_id, pre, post):
+_WEIGH_MODES = ("gross", "net", "additive", "set_used")
+
+
+def _weigh_from(data):
+    """Group 65.3: what a weigh screen did with a save, from the request's top-level
+    `weigh` ({source, mode, reading, tare, tare_skipped}), else None: absent, not an
+    object, an unknown mode, or a reading or empty-spool weight that isn't a finite
+    number of at least 0 is ignored as a whole, and the save and its line are as
+    before. `source` is "quick_weigh" or "weigh_out" ('' for anything else)."""
+    w = data.get('weigh') if isinstance(data, dict) else None
+    if not isinstance(w, dict):
+        return None
+    mode = str(w.get('mode') or '').strip().lower()
+    if mode not in _WEIGH_MODES:
+        return None
+    figures = {}
+    for key in ("reading", "tare"):
+        v = w.get(key)
+        if v is None:
+            figures[key] = None
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0:
+            return None
+        figures[key] = float(v)
+    source = str(w.get('source') or '')
+    return {"source": source if source in ("quick_weigh", "weigh_out") else "", "mode": mode,
+            "reading": figures["reading"], "tare": figures["tare"], "tare_skipped": w.get('tare_skipped') is True}
+
+
+def _weighed_g(weigh):
+    """Group 65.3: the filament a weighing measured, before any cap: the reading less
+    the empty spool for Gross, the reading for Net. None for a hand edit (Additive, Set
+    Used, a skipped empty weight) or a figure the request didn't carry."""
+    if not weigh or weigh.get('tare_skipped') or weigh.get('reading') is None:
+        return None
+    if weigh['mode'] == 'net':
+        return weigh['reading']
+    if weigh['mode'] == 'gross' and weigh.get('tare') is not None:
+        return weigh['reading'] - weigh['tare']
+    return None
+
+
+def _log_manual_weight_change(spool_id, pre, post, weigh=None):
     """24.F — write a before➔after Activity-Log breakdown for a MANUAL weight
     adjustment (mirrors the auto-deduct wording at _apply_usage_to_printer).
 
@@ -1005,6 +1047,18 @@ def _log_manual_weight_change(spool_id, pre, post):
     so non-weight edits never reach here. The L200 Prusament correction has its
     own dedicated log and does NOT route through this.
 
+    Group 65.3 (Derek, 2026-11-03: weigh-in drift, step 1): a weigh screen's save
+    says what it did (`weigh`, _weigh_from). A Gross or Net reading is a weighing:
+    "⚖️ Weighed — Spool #57: 655.0 g left (scale 875 g − empty spool 220 g). FCC
+    expected 654.7 g: 0.3 g heavier. (used 345.3g ➔ 345.0g)", Net's sum "(empty spool
+    taken off by hand)", a capped reading said, and "FCC expected" only from the
+    spool's own record (_is_spool_record; get_spool hands back Spoolman's 404 or 5xx
+    body as a dict), or, when a print FCC hasn't charged yet used the spool, that
+    print named instead of a comparison (print_deduct.uncharged_print_for). Additive,
+    Set Used and a skipped empty weight are "✏️ Weight edited by hand". No `weigh`:
+    today's line, byte for byte. A `pre` that isn't the spool's own record gives no
+    expectation and no made-up "before" figures (the old line read them as 0.0g).
+
     Group 49.2b: it also hands the write to stock_report's low-stock check (one
     WARNING when the spool's filament just went under `low_stock_g`, or out of
     stock), which runs off the request thread and can't fail the caller.
@@ -1015,17 +1069,53 @@ def _log_manual_weight_change(spool_id, pre, post):
         def _wf(d, k):
             v = (d or {}).get(k)
             return float(v) if isinstance(v, (int, float)) else 0.0
+        own = _is_spool_record(pre, spool_id)
         old_rem, new_rem = _wf(pre, 'remaining_weight'), _wf(post, 'remaining_weight')
         old_used, new_used = _wf(pre, 'used_weight'), _wf(post, 'used_weight')
         old_init, new_init = _wf(pre, 'initial_weight'), _wf(post, 'initial_weight')
         total_note = (f"  [total {old_init:.1f}g ➔ {new_init:.1f}g]"
-                      if abs(old_init - new_init) >= 0.05 else "")
+                      if own and abs(old_init - new_init) >= 0.05 else "")
         color = (spoolman_api.format_spool_display(post) or {}).get('color', '888888')
-        state.add_log_entry(
-            f"✏️ Weight updated — Spool #{spool_id}: "
-            f"[{old_rem:.1f}g ➔ {new_rem:.1f}g remaining] "
-            f"(used {old_used:.1f}g ➔ {new_used:.1f}g){total_note}",
-            "INFO", color)
+        used_note = (f"(used {old_used:.1f}g ➔ {new_used:.1f}g)" if own else f"(used {new_used:.1f}g)")
+        measured = _weighed_g(weigh)
+        if measured is not None:
+            line = f"⚖️ Weighed — Spool #{spool_id}: {measured:.1f} g left " + (
+                f"(scale {weigh['reading']:g} g − empty spool {weigh['tare']:g} g)." if weigh['mode'] == 'gross'
+                else "(empty spool taken off by hand).")
+            recorded = stock_report.remaining_g(post)
+            cap = spoolman_api.effective_initial_weight(post)
+            if recorded is not None and measured > recorded + 0.05:
+                line += (f" That's more than its {cap:g} g total, so FCC recorded {recorded:.1f} g."
+                         if cap is not None else f" FCC recorded {recorded:.1f} g.")
+            elif recorded is not None and measured < recorded - 0.05:
+                line += f" The scale read less than the empty spool, so FCC recorded {recorded:.1f} g."
+            expected = stock_report.remaining_g(pre) if own else None
+            if expected is not None:
+                # Imported here: app.py imports print_deduct after this module, and an
+                # import at the top would load it (and register its routes) first.
+                import print_deduct  # type: ignore
+                unpaid = print_deduct.uncharged_print_for(spool_id)
+                if unpaid:
+                    line += (f" FCC expected {expected:.1f} g, but job {html.escape(str(unpaid['job_id']), quote=False)}"
+                             f" on {html.escape(str(unpaid['printer_name']), quote=False)}, which used this spool, "
+                             f"isn't charged yet.")
+                else:
+                    diff = measured - expected
+                    line += (f" FCC expected {expected:.1f} g: "
+                             + ("the same." if abs(diff) < 0.05
+                                else f"{abs(diff):.1f} g {'heavier' if diff > 0 else 'lighter'}."))
+            state.add_log_entry(f"{line} {used_note}{total_note}", "INFO", color)
+            return
+        title = "✏️ Weight edited by hand" if weigh else "✏️ Weight updated"
+        if own:
+            state.add_log_entry(
+                f"{title} — Spool #{spool_id}: "
+                f"[{old_rem:.1f}g ➔ {new_rem:.1f}g remaining] "
+                f"{used_note}{total_note}",
+                "INFO", color)
+        else:
+            state.add_log_entry(f"{title} — Spool #{spool_id}: {new_rem:.1f}g remaining {used_note}",
+                                "INFO", color)
     except Exception as _log_e:
         state.logger.warning(f"24.F weight-log skipped for spool {spool_id}: {_log_e}")
     # Group 49.2b: one Activity Log warning when this write took the spool's
@@ -2153,7 +2243,8 @@ def api_spool_update():
         # may have clamped used_weight ≤ initial, so post values come from `res`).
         # Shared with the wizard edit-spool save via _log_manual_weight_change.
         if any(k in updates for k in ("used_weight", "initial_weight", "remaining_weight")):
-            _log_manual_weight_change(spool_id, pre, res)
+            # Group 65.3: what the weigh screen did, when it says (`weigh`).
+            _log_manual_weight_change(spool_id, pre, res, weigh=_weigh_from(data))
         if not stamped:
             # A write whose lost answer a read-back showed had landed (one that
             # answered was stamped inside the lock, above).

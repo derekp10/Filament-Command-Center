@@ -50,6 +50,16 @@ const capacityOf = (d) => {
 };
 // A spool whose own total is 0 g can't be weighed until it has one: in words.
 const zeroTotalWords = (id) => `#${id}'s total weight is 0 g in Spoolman: set its total in Edit Spool first, then weigh it`;
+// Group 65.3 (weigh-in drift, step 1): what a weigh save did, posted as `weigh` beside
+// `id` and `updates`: where from, the mode, the reading and the empty-spool weight as
+// numbers (null when the mode has none, or a figure isn't a number of at least 0),
+// and whether the empty weight was skipped. The server words the Activity Log line
+// from it ("⚖️ Weighed …" or "✏️ Weight edited by hand …") and ignores one it can't read.
+const weighFacts = (source, mode, reading, tare, tareSkipped) => {
+    const g = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) || Number(v) < 0)
+        ? null : Number(v);
+    return { source, mode, reading: g(reading), tare: g(tare), tare_skipped: tareSkipped === true };
+};
 const ownTotalIsZero = (d) => !!d && d.initial_weight !== null && d.initial_weight !== undefined
     && d.initial_weight !== '' && Number(d.initial_weight) === 0;
 
@@ -1016,7 +1026,8 @@ window.saveWeighOutRow = async (idStr) => {
             // now (review R3-1); and the buffer's word on whether the spool is
             // archived: its details couldn't be read.
             window.saveSpoolWeight(id, n, null, switchOn === true && n <= 0, null,
-                { archiveSwitch: switchOn, empties: n <= 0, wasArchived: heldArchived(id) });
+                { archiveSwitch: switchOn, empties: n <= 0, wasArchived: heldArchived(id),
+                  weigh: weighFacts('weigh_out', 'net', n, null, false) });
             return;
         }
 
@@ -1107,7 +1118,10 @@ window.saveWeighOutRow = async (idStr) => {
         window.saveSpoolWeight(id, null, rowUpdates, autoArchive, details.empty,
             { archiveSwitch: switchOn, empties: remainingAfter <= 0, wasArchived: details.archived === true,
               // Group 63.6: the figures this reading was worked out from.
-              basedOn: { mode, capacity: details.initial, used: details.used, screen: 'list' }, fromList: true });
+              basedOn: { mode, capacity: details.initial, used: details.used, screen: 'list' }, fromList: true,
+              // Group 65.3: what this save was (an Additive figure is grams typed).
+              weigh: weighFacts('weigh_out', mode, mode === 'additive' ? null : window.parseGramsReading(raw),
+                  mode === 'gross' ? details.empty : null, false) });
     } finally {
         // Not saved after all, and scanned again while its details were read:
         // its box is open for the new reading, with what was typed for it.
@@ -1209,6 +1223,10 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     const request = { id: id, updates: updates };
     if (archiveSwitch !== null) request.auto_archive = archiveSwitch;
     if (told.basedOn && typeof told.basedOn === 'object') request.based_on = told.basedOn;
+    // Group 65.3: what the screen did with this save ({source, mode, reading, tare,
+    // tare_skipped}), so the Activity Log says whether it was a weighing and what
+    // FCC expected. The server ignores one it can't read.
+    if (told.weigh && typeof told.weigh === 'object') request.weigh = told.weigh;
 
     setProcessing(true);
 
@@ -1581,7 +1599,13 @@ window.openQuickWeigh = (spoolId) => {
                     window.saveSpoolWeight(d.id, null, updates, autoArchive, payload.empty_spool_weight,
                         { archiveSwitch: switchOn, empties, wasArchived: d.archived === true,
                           // Group 63.6: the figures this window read when it opened.
-                          basedOn: { mode: payload.mode, capacity: initial, used, screen: 'quick' } });
+                          basedOn: { mode: payload.mode, capacity: initial, used, screen: 'quick' },
+                          // Group 65.3: what this save was (an Additive figure is grams
+                          // typed, no reading).
+                          weigh: weighFacts('quick_weigh', payload.mode,
+                              payload.mode === 'additive' ? null : payload.value,
+                              payload.mode === 'gross' ? payload.empty_spool_weight : null,
+                              payload.tare_skipped === true) });
                 },
             });
         })

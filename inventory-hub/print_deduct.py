@@ -1368,6 +1368,32 @@ def _usable_heads(end_heads):
     return heads, str(end_heads.get('source') or 'print_end'), end_heads.get('at')
 
 
+def uncharged_print_for(spool_id):
+    """Group 65.3 (Claude's call 12): a print FCC hasn't charged yet that used this
+    spool, as {"job_id", "printer_name"}, else None: a queued print whose print-end
+    read names it (the fetch queue), or an open 🛑 review whose rows or heads name it
+    (a shortfall card answers its print's job). A spool weighed while its print's file
+    still downloads (20 to 33 minutes on the INDX) would otherwise read as drift; the
+    weigh line says so instead of comparing (Group 64's Decision 1 handles the charge).
+    Reads only FCC's own two files. Best-effort: None on any failure."""
+    try:
+        want = str(spool_id)
+        for rec in cancel_fetch_store.list_pending():
+            usable = _usable_heads((rec or {}).get('end_heads'))
+            if usable and any(want in [str(s) for s in h['sids']] for h in usable[0]):
+                return {"job_id": str(rec.get('job_id') or ''), "printer_name": rec.get('printer_name') or ''}
+        for rec in cancel_review_store.list_pending():
+            names = {str(r.get('sid')) for r in (rec.get('spools') or []) if isinstance(r, dict)}
+            for h in rec.get('heads_at_end') or []:
+                names |= {str(s) for s in _head_sids(h)}
+            if want in names:
+                return {"job_id": str(rec.get('job_id') or '').split('#')[0],
+                        "printer_name": rec.get('printer_name') or ''}
+    except Exception:
+        return None
+    return None
+
+
 def _heads_as_locs(heads):
     """A print-end read as active_locs [(toolhead, {position})], for the code that
     names a row's head from them."""
