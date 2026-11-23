@@ -35,6 +35,7 @@ import locations_db  # type: ignore
 import spoolman_api  # type: ignore
 import logic  # type: ignore
 import prusalink_api  # type: ignore
+import print_file_watch  # type: ignore
 import print_deduct_ledger  # type: ignore
 import cancel_review_store  # type: ignore
 import cancel_fetch_store  # type: ignore
@@ -2598,11 +2599,20 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
         # once the printer leaves STOPPED). (Was an immediate terminal error.)
         return None, {"status": "error", "reason": "download_failed", "job_id": job_id}
     content = prepared["gcode"]
+    # Group 65.2 (b): every file FCC reads is scanned for slicer tags FCC doesn't know
+    # and tag words with no ';', before the walk's own warnings, so a cause comes
+    # first. It only logs and never raises (print_file_watch.scan_tags); this try is a
+    # second guard, so nothing in it can stop a charge.
+    try:
+        print_file_watch.scan_tags(printer_name, filename, content)
+    except Exception:
+        pass
     # The swap points' remapped cuts, when the download gave one for each.
     at = prepared.get("fractions") if swap_points else None
     at = list(at) if isinstance(at, (list, tuple)) and len(at) == len(swap_points or ()) else []
     cums = []
     measured = None
+    walked = None
     if use_footer:
         # Completion: the full per-tool slicer footer (exact, = FilaBridge).
         usage_map = prusalink_api.parse_footer_usage(content)
@@ -2661,9 +2671,31 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
 
     if measured:
         _warn_parse_gap(printer_name, filename, measured, sole_position=sole)
+    elif use_footer:
+        _warn_completion_gap(printer_name, filename, content, walked, sole)
     if cums_out is not None and figures:
         cums_out.update(figures)
     return usage_map, None
+
+
+def _warn_completion_gap(printer_name, filename, content, walked, sole_position):
+    """Group 65.2 (a) (Derek, 2026-11-03: "I'd like to try to prevent changes in how the
+    systems perform from sneaking up on us like this in the future"): a finished print's
+    file is walked as a cancel's is and compared head by head with the slicer's footer,
+    by _warn_parse_gap's rule (2% and 0.1 g), in ONE line per print naming every head
+    over it. The charge stays the footer's: on a completion the footer is the slicer's
+    own count, and every gap seen so far was FCC misreading the file (job 1135, read with
+    the walker from before the ;EXCLUDE_E hotfix, would have been charged 14.34 g instead
+    of 5.89 g), which a cancel of the same file would be charged by. The swap walk's
+    figures are used when the print had swaps (`walked`), else one walk with no cut. Its
+    own try: a walk that raises never stops the charge."""
+    try:
+        if walked is None:
+            walked = prusalink_api.measure_filament_usage(content, [])
+        if walked:
+            _warn_parse_gap(printer_name, filename, walked, sole_position=sole_position, completion=True)
+    except Exception as e:
+        state.logger.warning(f"65.2: the completion walk of {filename!r} on {printer_name} failed: {e}")
 
 
 # Group 56.2 — how far a cancel's whole-file G-code walk may drift from the
@@ -2737,7 +2769,8 @@ def _fold_sole_tool(printer_name, usage_map, swap_cums=None):
     return usage, swap_cums, sole
 
 
-def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charged=True):
+def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charged=True,
+                    completion=False):
     """Group 56.2 — one WARNING per charged head whose whole-file walk and slicer
     footer differ by more than _PARSE_GAP_PCT (and by at least _PARSE_GAP_MIN_G),
     and per footer tool the walk sees no extrusion of at all (it would never be
@@ -2748,15 +2781,21 @@ def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charge
     short. `sole_position` is the head a single-head printer's lone tool was folded
     onto, so the line names that head. `charged=False` (the walk read no extrusion
     at all, so nothing is charged from this file) words the line for that.
+    `completion=True` (Group 65.2 (a), _warn_completion_gap): every footer head is
+    checked, and the heads over the rule share ONE line, since what's wrong is the
+    file, not a charge.
     Best-effort: never raises into the deduct."""
     try:
         whole = measured.get("whole") or {}
         footer = measured.get("footer") or {}
-        tools = set((measured.get("partials") or [{}])[0])
-        # A footer tool the walk sees nothing of is never charged, whatever the
-        # cut: say so even when this cancel came before that tool printed (an
-        # untouched head still walks to its own total over the whole file).
-        tools |= {t for t, g in footer.items() if (g or 0) > 0 and float(whole.get(t) or 0) <= 0}
+        if completion:
+            tools = {t for t, g in footer.items() if (g or 0) > 0}
+        else:
+            tools = set((measured.get("partials") or [{}])[0])
+            # A footer tool the walk sees nothing of is never charged, whatever the
+            # cut: say so even when this cancel came before that tool printed (an
+            # untouched head still walks to its own total over the whole file).
+            tools |= {t for t, g in footer.items() if (g or 0) > 0 and float(whole.get(t) or 0) <= 0}
         tools = sorted(tools)
         try:
             pm = locations_db.get_active_printer_map() or {}
@@ -2766,6 +2805,7 @@ def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charge
         for loc_id, info in pm.items():
             if info.get('printer_name') == printer_name:
                 heads_at.setdefault(info.get('position', 0), []).append(str(loc_id).upper())
+        over = []
         for tool in tools:
             want = float(footer.get(tool) or 0)
             if want <= 0:
@@ -2775,7 +2815,29 @@ def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charge
             if abs(gap) <= _PARSE_GAP_PCT or abs(got - want) < _PARSE_GAP_MIN_G:
                 continue
             pos = sole_position if sole_position is not None else tool
-            head = "/".join(sorted(heads_at.get(pos, []))) or f"T{tool}"
+            over.append(("/".join(sorted(heads_at.get(pos, []))) or f"T{tool}", got, want, gap))
+        if completion:
+            if not over:
+                return
+            # "7.50g against the slicer's 3.23g for RCOI-1 (+132.2%) and 4.63g against
+            # 1.90g for RCOI-2 (+143.7%)": the first head says whose figure it is.
+            whose = "the slicer's "
+            figures = _and_list(
+                f"{got:.2f}g against {whose if i == 0 else ''}{want:.2f}g for {_esc(head)} ({gap:+.1f}%)"
+                for i, (head, got, want, gap) in enumerate(over))
+            unseen = [head for head, got, _w, _g in over if got <= 0]
+            fates = []
+            if len(unseen) < len(over):
+                fates.append("would be charged wrong")
+            if unseen:
+                fates.append(f"would charge {_esc(_and_list(unseen))} nothing")
+            state.add_log_entry(
+                f"⚠️ {printer_name}: FCC's G-code walk of '{_esc(filename)}' came to {figures}. This "
+                f"finished print was charged the slicer's figures, so its charge stands, but FCC reads "
+                f"this file differently from the slicer: a cancelled print like it "
+                f"{' and '.join(fates)}.", "WARNING", "ffaa00")
+            return
+        for head, got, want, gap in over:
             then = ("The cancel charge is scaled to the slicer's figure, but a gap over "
                     f"{_PARSE_GAP_PCT:.0f}% means FCC may be misreading this file."
                     if charged else "Nothing was charged from this file: FCC can't read its moves.")

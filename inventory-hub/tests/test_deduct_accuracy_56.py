@@ -413,10 +413,17 @@ def test_a_footer_tool_the_walk_never_sees_is_named_even_before_it_prints(logs):
     assert "0.00g" in lines[0][0] and "-100.0%" in lines[0][0], lines
 
 
-def test_a_completion_reads_the_footer_and_says_nothing_about_the_walk(logs):
+def test_a_completion_is_charged_the_footer_and_says_once_that_the_walk_differs(logs):
+    """Group 65.2 (a) turned this round (it was "a completion says nothing about the
+    walk", which no reason in Group 56 kept): a finished print's file walks too, and
+    the heads past the rule share one line. The charge is still the footer's."""
     usage, terminal = _cancel_usage(_gap_file(), 1.0, _XL_PM, use_footer=True)
     assert terminal is None and usage == {0: 10.0, 1: 10.0}
-    assert _gap_lines(logs) == []
+    assert _gap_lines(logs) == [(
+        f"⚠️ XL: FCC's G-code walk of '{NASTY_ESC}' came to 11.00g against the slicer's 10.00g for "
+        "XL-2 (+10.0%). This finished print was charged the slicer's figures, so its charge stands, "
+        "but FCC reads this file differently from the slicer: a cancelled print like it would be "
+        "charged wrong.", ("WARNING", "ffaa00"))]
 
 
 # --------------------------------------------------------------------------- #
@@ -605,7 +612,7 @@ def test_the_escape_canary_catches_raw_outside_text():
 def test_every_deduct_and_monitor_log_line_escapes_its_outside_text():
     offenders, checked = [], set()
     for name in ("print_deduct.py", "print_monitor.py", "startup_migrations.py",
-                 "cancel_review_store.py"):
+                 "cancel_review_store.py", "print_file_watch.py"):
         with open(os.path.join(_HUB, name), encoding="utf-8") as fh:
             bad, seen = _unescaped_free_text(fh.read(), name)
         offenders += bad
