@@ -58,6 +58,9 @@ KNOWN_TAGS = {
     "FLUSH_END": "a flush ends",
     "EXCLUDE_E_START": "the moves after it are no filament used, until EXCLUDE_E_END",
     "EXCLUDE_E_END": "ends EXCLUDE_E_START's stretch",
+    # PrusaSlicer's default filament end G-code writes ";END gcode for filament" (found by
+    # the 2026-11-23 census in three slices made with default profiles): a comment.
+    "END": "the default filament end G-code's comment: no part of the count",
     # Markers Derek's printer profiles write: no part of the slicer's count.
     "BEFORE_LAYER_CHANGE": "a profile's marker before a layer change",
     "AFTER_LAYER_CHANGE": "a profile's marker after a layer change",

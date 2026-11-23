@@ -123,6 +123,7 @@ EFFECTS = {
     "FLUSH_END": ([";FLUSH_START", "G1 E-2", "G1 E4", ";FLUSH_END"], 14.0),
     "EXCLUDE_E_START": ([";EXCLUDE_E_START", "G1 E3", ";EXCLUDE_E_END"], 10.0),
     "EXCLUDE_E_END": ([";EXCLUDE_E_START", "G1 E3", ";EXCLUDE_E_END"], 10.0),
+    "END": ([";END gcode for filament"], 10.0),
     "BEFORE_LAYER_CHANGE": ([";BEFORE_LAYER_CHANGE"], 10.0),
     "AFTER_LAYER_CHANGE": ([";AFTER_LAYER_CHANGE"], 10.0),
     "Z": ([";Z:0.2"], 10.0),
@@ -353,3 +354,102 @@ def test_the_real_completion_deduct_charges_the_footer_of_a_file_that_walks_far_
     assert cancel_review_store.list_pending() == []
     lines = [m for m, a in _gap_lines(logs)]
     assert len(lines) == 1 and "25.00g against the slicer's 10.00g for XL-1 (+150.0%)" in lines[0], lines
+
+
+# --------------------------------------------------------------------------- #
+# Real files: the repo's slices always; Derek's captures where they are       #
+# --------------------------------------------------------------------------- #
+
+import os  # noqa: E402
+import re  # noqa: E402
+
+import bgcode_decode  # noqa: E402
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_CAPTURES = os.path.join(_HERE, "..", "..", ".captures")
+_FLEXI2 = os.path.join(_CAPTURES, "indx-corrections-2026-11-03", "files", "FLEXI-~2.BGC")
+_RACCOON = os.path.join(_CAPTURES, "indx-raccoon-2026-10-08", "racoon_decoded.gcode")
+_RCOI = {f"RCOI-{n}": {"printer_name": "INDX", "position": n - 1} for n in (1, 2, 3, 4)}
+
+
+def _text(path):
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    if bgcode_decode.is_bgcode(raw):
+        return bgcode_decode.decode_bgcode(raw)["gcode"]
+    return raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
+
+
+@pytest.mark.parametrize("name", ["sample.bgcode", "mmu3_three_cubes.bgcode"])
+def test_the_repos_real_slices_have_no_unknown_tag_and_walk_to_their_footers(name, logs):
+    text = _text(os.path.join(_HERE, "fixtures", name))
+    assert print_file_watch.find_tags(text) == {"unknown": [], "bare": []}
+    usage, terminal = _completion(text, _RCOI)
+    assert terminal is None and usage
+    assert _gap_lines(logs) == []
+
+
+@pytest.fixture(scope="module")
+def flexi_1135():
+    if not os.path.exists(_FLEXI2):
+        pytest.skip("the INDX captures are git-ignored (only on Derek's PC)")
+    return _text(_FLEXI2)
+
+
+def test_job_1135s_file_is_quiet_and_would_have_named_every_head_before_the_exclude_e_fix(flexi_1135, logs):
+    """Job 1135 (2026-11-03): with the walk reading ;EXCLUDE_E, as it has since the
+    hotfix, the file walks to its footer; with that reading switched off (the walker
+    the scoping replayed), one line names all four heads."""
+    assert print_file_watch.find_tags(flexi_1135) == {"unknown": [], "bare": []}
+    _completion(flexi_1135, _RCOI)
+    assert _gap_lines(logs) == []
+    with patch.object(prusalink_api, "_EXCLUDE_E_TAG_RE", re.compile(r"(?!x)x")):
+        usage, terminal = _completion(flexi_1135, _RCOI)
+    assert terminal is None and usage == {0: 3.23, 1: 1.9, 2: 0.35, 3: 0.41}     # the footer's, still
+    assert [m for m, a in _gap_lines(logs)] == [
+        "⚠️ INDX: FCC's G-code walk of '/usb/FLEXI-~2.BGC' came to 7.50g against the slicer's 3.23g for "
+        "RCOI-1 (+132.2%), 4.63g against 1.90g for RCOI-2 (+143.9%), 1.07g against 0.35g for RCOI-3 "
+        "(+205.9%) and 1.14g against 0.41g for RCOI-4 (+177.3%). This finished print was charged the "
+        "slicer's figures, so its charge stands, but FCC reads this file differently from the slicer: a "
+        "cancelled print like it would be charged wrong."]
+
+
+def test_the_old_indx_profiles_bare_words_are_found_in_the_raccoon_print(logs):
+    if not os.path.exists(_RACCOON):
+        pytest.skip("the raccoon capture is git-ignored (only on Derek's PC)")
+    text = _text(_RACCOON)
+    assert print_file_watch.find_tags(text) == {"unknown": [], "bare": ["EXCLUDE_E_START", "EXCLUDE_E_END"]}
+    print_file_watch.scan_tags("INDX", "/usb/RACOON~1.BGC", text)
+    assert len(logs) == 1 and "has EXCLUDE_E_START and EXCLUDE_E_END on lines of their own" in logs[0][0], logs
+
+
+# The old INDX profile's files (sliced 2026-10-01 to 10-20): the only ones with bare words.
+_OLD_PROFILE = {"RACOON~3.BGC", "RACOON~4.BGC", "SPIRIT~1.BGC", "SPIRIT~2.BGC", "SPIRIT~3.BGC",
+                "SPIRIT~4.BGC", "racoon_decoded.gcode", "racoon_indx.bgcode"}
+
+
+@pytest.mark.skipif(os.environ.get("FCC_CAPTURE_CENSUS") != "1",
+                    reason="every capture on this PC: set FCC_CAPTURE_CENSUS=1 to run it (about 12 minutes)")
+def test_the_capture_census(logs):
+    """Every whole print file under .captures (158 on 2026-11-23, with the repo's
+    fixtures): no tag FCC doesn't know, bare words only in the old INDX profile's
+    files, and no finished print's walk past the rule."""
+    if not os.path.isdir(_CAPTURES):
+        pytest.skip("no .captures here")
+    import glob
+    files = set()
+    for pat in ("*.bgcode", "*.BGC", "*.bgc", "*.gcode", "*.GCO", "*.gco"):
+        files |= {os.path.normcase(os.path.abspath(f))
+                  for f in glob.glob(os.path.join(_CAPTURES, "**", pat), recursive=True)}
+    bad = []
+    for path in sorted(files):
+        text = _text(path)
+        found = print_file_watch.find_tags(text)
+        if found["unknown"] or (found["bare"] and os.path.basename(path) not in
+                                {os.path.normcase(n) for n in _OLD_PROFILE} | _OLD_PROFILE):
+            bad.append((path, found))
+        m = prusalink_api.measure_filament_usage(text, [])
+        if m:
+            print_deduct._warn_parse_gap("CENSUS", path, m, completion=True)
+    assert bad == [], bad
+    assert _gap_lines(logs) == []
