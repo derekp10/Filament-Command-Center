@@ -665,9 +665,16 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                 f"surfacing a review (couldn't measure usage)…", "INFO")
         else:
             pct = max(0.0, min(1.0, float(progress or 0.0))) * 100
+            back = str((lost_contact or {}).get('back_state') or '').upper()
+            if back in _COMPLETE_TERMINAL_STATES:
+                # Group 65 fix review (WT2): a finished screen FCC can't tie to the print.
+                said = (f"❓ {print_deduct._esc(printer_name)} is on its finished screen, which FCC can't tie to "
+                        f"the print it last saw ('{print_deduct._esc(filename)}', ~{pct:.0f}%)")
+            else:
+                said = (f"❓ Print on {print_deduct._esc(printer_name)} reached idle without a clear cancel/finish "
+                        f"signal (~{pct:.0f}% reached)")
             state.add_log_entry(
-                f"❓ Print on {printer_name} reached idle without a clear cancel/finish "
-                f"signal (~{pct:.0f}% reached){print_deduct._lost_contact_words(lost_contact)} — "
+                f"{said}{print_deduct._lost_contact_words(lost_contact)} — "
                 f"computing a review (couldn't confirm completed vs cancelled)…", "INFO")
     except Exception:
         pass
@@ -902,16 +909,29 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     # the pre-runout PRINTING high-water, which lags by up to one poll
                     # (measured ~3 g off, 2026-07-02). `saw_attention` ⇒ this pause was a
                     # RUNOUT, so the split charges the run-out spool the path remnant.
-                    swap_progress = max(float(entry.get('progress', 0.0)),
-                                        float(entry.get('pause_progress', 0.0)))
                     swap_runout = bool(entry.get('saw_attention'))
+                    if int(entry.get('misses') or 0) >= _LOST_AFTER_MISSES:
+                        # Group 65 fix review (WT6): FCC sees the resume only after it lost
+                        # sight of the print, and the progress just read is where the print
+                        # got to since, not where the spool was changed: a run-out park FCC
+                        # saw is cut at its frozen progress; with no such point no swap is
+                        # recorded (FCC can't place it), and the end's Decision 1 holds the
+                        # head as a set to split by hand.
+                        if swap_runout and entry.get('pause_progress') is not None:
+                            swap_progress = float(entry['pause_progress'])
+                        else:
+                            need_swap_snapshot = False
+                            swap_jid = None
+                    else:
+                        swap_progress = max(float(entry.get('progress', 0.0)),
+                                            float(entry.get('pause_progress', 0.0)))
             # Group 65.1 (1): FCC sees the print: any lost contact is over (a job change
             # took the outgoing job's facts above, before they went), once a job read
             # names the latched print (Group 65 review, OR6: a tick whose job read failed
             # ended the stretch, and a job change found a tick later had no lost contact
             # to say).
             if _confirms_latch(entry, job):
-                _end_lost_stretch(entry)
+                _end_lost_stretch(entry, job)
         # 22.3 (off-lock, like get_printer_job): capture the start-spool snapshot for
         # mid-print swap detection. Taken whatever `fcc_owns_completion_deduct` says
         # (Group 64.3 (2)): since the hotfix of 2026-11-11 the cancel and ambiguous
@@ -1057,8 +1077,11 @@ def _track_print_edge(printer_name, state_info, fb_url):
     # Group 65 review (RW7): an end FCC sees only after it lost sight of the latched print
     # may be another print's (FCC can't see a job change while it can't see the printer):
     # which job this end is is read off the lock, before the edge is decided.
+    # A stopped screen isn't read: PrusaLink names no job after a stop, and a cancel opens a
+    # review either way (Group 65 fix review, WT2: every cancel seen after lost contact
+    # went to the ambiguous review).
     end_job = None
-    if cur in _CANCEL_TERMINAL_STATES or cur in _COMPLETE_TERMINAL_STATES:
+    if cur in _COMPLETE_TERMINAL_STATES:
         latch = _latched(printer_name)
         if latch and _lost_contact_from(latch, cur):
             try:
@@ -1117,7 +1140,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
             edge_kind = 'ambiguous'
         else:
             edge_kind = None
-        if (edge_kind in ('cancel', 'complete') and end_job is not None and entry
+        if (edge_kind == 'complete' and end_job is not None and entry
                 and entry.get('filename') and not _confirms_latch(entry, end_job)):
             # Group 65 review (RW7): not the latched print's end, or FCC can't tell which
             # print this is: the latched print ended unseen, so it goes to the ❓ review
@@ -1172,12 +1195,18 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 # Group 65.1 (1): FCC sees the printer: its print is seen, any lost
                 # contact over (an end after it would have fired above), once a job read
                 # names the latched print (an ATTENTION park's own; Group 65 review, OR6).
-                if not entry.get('filename') or _confirms_latch(entry, pause_job):
-                    _end_lost_stretch(entry)
+                lost = int(entry.get('misses') or 0) >= _LOST_AFTER_MISSES
+                ours = _confirms_latch(entry, pause_job)
+                # Group 65 fix review (WT3): a park whose job read names another print, or
+                # one FCC can't tie to the latched print after lost contact, is no park of
+                # the latched print: its frozen progress, its line and its read stay off it.
+                park_ok = not _names_other_job(entry, pause_job) and (ours or not lost)
+                if not entry.get('filename') or ours:
+                    _end_lost_stretch(entry, pause_job)
                 # 22.3(b): during an ATTENTION runout park of a latched job, record the
                 # frozen pause progress + that an ATTENTION was seen (so a swap on the
                 # resume is treated as a RUNOUT). Keep the MAX across re-polls.
-                if cur == 'ATTENTION' and entry.get('filename'):
+                if cur == 'ATTENTION' and entry.get('filename') and park_ok:
                     # Log the FIRST park only — this re-polls every 10s. Without
                     # this line, "the printer parked and we looked" and "the
                     # printer never left PRINTING" are indistinguishable after
@@ -1434,6 +1463,9 @@ def _reach_verdict(name):
         why = prusalink_api.last_probe_failure(name)
         if why == "refused":
             return "prusalink"
+        if why == "unreadable":
+            # Group 65 fix review (WT4): something answered, but not as PrusaLink: no ping.
+            return "address"
         if isinstance(why, str) and why.startswith("http "):
             # Group 65 review (RW2): PrusaLink answered, with an error. No ping, and words
             # of their own: a key the printer no longer takes is no stuck PrusaLink, and a
@@ -1456,6 +1488,9 @@ def _reach_words(name, verdict, printing):
                 f"it back" + (", but a restart ends a print: wait until its print is done." if printing else "."))
     if verdict == "none":
         return f"{shown} doesn't answer at all (off, or off the network)."
+    if verdict == "address":
+        return (f"Something answers at {shown}'s address, but not as PrusaLink: check the address in Settings, "
+                f"🔌 Printer Connections.")
     if verdict in ("login", "error"):
         code = print_deduct._esc(str(prusalink_api.last_probe_failure(name) or "").replace("http ", "HTTP "))
         if verdict == "login":
@@ -1505,13 +1540,35 @@ def _confirms_latch(entry, job):
     return bool(job.get('filename')) and str(job.get('filename')) == str(entry.get('filename'))
 
 
-def _end_lost_stretch(entry):
-    """FCC sees the latched print again: its lost-contact facts go, and a park read taken
-    before a lost stretch is dropped (Group 65 review, OR5: across the stretch FCC can't
-    tell whether the print resumed, with that spool or another, and parked again; the
-    end then reads the heads, and Decision 1 asks about a changed one)."""
-    if int(entry.get('misses') or 0) >= _LOST_AFTER_MISSES:
-        entry.pop('park_heads', None)
+def _names_other_job(entry, job):
+    """Whether a job read names a print other than the latched one (a real job id that
+    isn't the latch's; Group 65 fix review, WT3)."""
+    if not isinstance(job, dict):
+        return False
+    blank = (None, '', '0', 0)
+    jid = job.get('job_id')
+    return jid not in blank and entry.get('job_id') not in blank and str(jid) != str(entry.get('job_id'))
+
+
+def _end_lost_stretch(entry, job=None):
+    """FCC sees the latched print again: its lost-contact facts go. A park read taken
+    before a lost stretch is kept only when the printer is still in that park (the job
+    read's frozen progress is the read's own: the print never moved; Group 65 fix
+    review, WT5: a 30 s blip at a park dropped it and took none, and a spool loaded at
+    the prompt was read as the print's); else it is dropped and the park FCC sees now
+    is read afresh (Group 65 review, OR5: across the stretch FCC can't tell whether the
+    print resumed, with that spool or another, and parked again)."""
+    park = entry.get('park_heads')
+    if int(entry.get('misses') or 0) >= _LOST_AFTER_MISSES and isinstance(park, dict):
+        try:
+            still = (entry.get('state') == 'ATTENTION' and isinstance(job, dict)
+                     and job.get('progress') is not None and park.get('progress') is not None
+                     and abs(float(job['progress']) - float(park['progress'])) < 1e-6)
+        except (TypeError, ValueError):
+            still = False
+        if not still:
+            entry.pop('park_heads', None)
+            entry.pop('park_read', None)
     entry.pop('misses', None)
     entry.pop('lost_at', None)
     entry.pop('lost_why', None)
@@ -2238,10 +2295,30 @@ def _recover_one_print_latch(name, entry, fb_url):
 
     if cur == "FINISHED":
         if _fcc_owns_completion_deduct():
+            # Group 65 fix review (WT1): a finished screen after FCC's restart is the latched
+            # print's only when a job read names it (another print may have run and finished
+            # while FCC was down): else the latched print opens the ❓ review, as at an idle
+            # screen, and the end is said.
+            try:
+                end_job = prusalink_api.get_printer_job(fb_url, name) or {}
+            except Exception:
+                end_job = {}
+            if not _confirms_latch(entry, end_job):
+                _say_other_end(name, {"filename": filename, "job_id": job_id}, end_job, cur)
+                _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url,
+                                         progress_unknown=not progress_sampled,
+                                         unmeasured_reason="unsampled",
+                                         **_edge_kwargs(print_deduct._validated_start_spools(entry, job_id),
+                                                        print_deduct._validated_swap_log(entry, job_id),
+                                                        "restart",
+                                                        lost_contact=_restart_contact(entry, progress, cur)))
+                with _PRINT_TRACKER_LOCK:
+                    _PRINT_TRACKER[name] = {'state': cur}
+                return True
             # Phase-2: FCC owns completions → recover the completion deduct missed
-            # during the restart. Still FINISHED = unambiguous (a completion, not a
-            # cleared-then-reprinted job). Idempotent via the (printer, job_id)
-            # ledger, so a double restart can't double-deduct.
+            # during the restart. Still FINISHED, and the job read names it: a
+            # completion. Idempotent via the (printer, job_id) ledger, so a double
+            # restart can't double-deduct.
             state.add_log_entry(
                 f"✅ Recovering a completion missed during an FCC restart on {name} "
                 f"('{print_deduct._esc(filename)}') — printer still FINISHED.", "INFO")

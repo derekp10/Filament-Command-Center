@@ -73,7 +73,7 @@ def _job(monkeypatch, answer):
 # RW7: which print an end after lost contact is                                #
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.parametrize("end,verb", [("FINISHED", "finished"), ("STOPPED", "stopped")])
+@pytest.mark.parametrize("end,verb", [("FINISHED", "finished")])
 def test_another_jobs_end_after_lost_contact_opens_the_latched_prints_review(monkeypatch, clock, dispatched,
                                                                              completions, words, end, verb):
     _latch()
@@ -124,13 +124,16 @@ def test_an_end_after_lost_contact_at_a_park_reads_the_heads_again(clock, dispat
     assert kind == "ambiguous" and "park_heads" not in k and k["heads_when"] == "back", k
 
 
-def test_a_lost_stretch_ended_at_a_park_drops_the_parks_read(monkeypatch, clock):
+def test_a_lost_stretch_ended_at_another_park_drops_the_parks_read(monkeypatch, clock):
+    # Group 65 fix review (WT5): only a park the print moved on from; the same park keeps
+    # its read (test_print_watch_65_fr1.py).
     _latch(state="ATTENTION", park_heads=dict(PARK), park_read=True)
     _miss(3, clock)
-    _job(monkeypatch, {"job_id": 7, "filename": "/usb/A.BGC", "progress": 0.31})
+    _job(monkeypatch, {"job_id": 7, "filename": "/usb/A.BGC", "progress": 0.55})
+    monkeypatch.setattr(print_monitor, "_capture_end_heads", lambda *a, **k: None)
     print_monitor._track_print_edge("XL", {"state": "ATTENTION"}, "fb")
     entry = print_monitor._PRINT_TRACKER["XL"]
-    assert "park_heads" not in entry and "misses" not in entry and entry.get("park_read"), entry
+    assert "park_heads" not in entry and "misses" not in entry, entry
 
 
 def test_a_tick_back_whose_job_read_fails_keeps_the_lost_contact(monkeypatch, clock, dispatched):

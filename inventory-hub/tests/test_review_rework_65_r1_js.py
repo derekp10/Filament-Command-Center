@@ -100,7 +100,9 @@ return { shields, gone: !cardOf('a') };
 def test_the_keyboard_comes_back_to_how_far_it_got_with_its_figure_selected(tmp_path):
     res = run(tmp_path, RESPOND_JS + SERVER_JS + LOOKUP_JS + r"""
 answer = whole40;
-cardOf('a').querySelector('.fcc-cr-whole').click();
+const w = cardOf('a').querySelector('.fcc-cr-whole');
+w.focus();                        // a button takes the keyboard when it is clicked
+w.click();
 await settle(120);
 const box = cardOf('a').querySelector('.fcc-cr-pct');
 return { focused: document.activeElement === box, value: box.value, selected: [box.selectionStart, box.selectionEnd] };

@@ -184,8 +184,9 @@ def test_a_card_that_kept_no_start_snapshot_gives_such_a_head_a_line_never_a_row
         ans = _recompute(rev=0, whole=True)
     rec = ans["record"]
     assert [r["sid"] for r in rec["spools"]] == [57] and rec["unresolved_usage"] == {"1": 20.0}, rec
-    assert rec["unresolved_notes"]["1"] == ("FCC hadn't seen XL-2 print when it last saw this print, and this card "
-                                            "keeps no record of the spools it had then: pick the spool it used."), rec
+    assert rec["unresolved_notes"]["1"] == ("#58 was on XL-2 when FCC logged the print, but FCC has no record of the "
+                                            "spool XL-2 had when the print started, so it can't vouch for one there: "
+                                            "pick the spool it used."), rec
 
 
 # --------------------------------------------------------------------------- #
@@ -296,7 +297,7 @@ def test_another_tabs_apply_while_a_recompute_works_is_applied_and_the_recompute
 # RW6 / PI5: after an Apply                                                    #
 # --------------------------------------------------------------------------- #
 
-def test_after_an_apply_that_only_held_its_row_the_card_can_be_worked_out_again(logs):
+def test_after_an_apply_that_only_held_its_row_the_card_is_refused_in_words_that_say_so(logs):
     _card(start_spools={"0": 57, "1": 58}, swap_log=[])
     late = {"sid": 57, "toolhead": "XL-1", "then": 100.0, "now": 160.0, "ours": 0.0,
             "stamp": {"at": time.time() - 10, "how": "Quick Weigh"}, "ended": time.time() - 100,
@@ -307,11 +308,12 @@ def test_after_an_apply_that_only_held_its_row_the_card_can_be_worked_out_again(
     assert held["applied"] == [] and held.get("held"), held
     kept = cancel_review_store.get_pending("XL", "J-1")
     assert kept["requested_total"] is not None and float(kept.get("applied_g") or 0) == 0.0, kept
+    # Group 65 fix review (RC1 / AD1 / RC4): a kept card no longer holds the rows that
+    # Apply settled or left at 0 g, so it is refused, saying what the Apply did.
     with _spoolman({57: 160.0, 58: 50.0}):
         ans = _recompute(rev=kept["rev"], whole=True)
-    assert ans["status"] == "recomputed", ans
-    assert "requested_total" not in ans["record"] and "requested_keys" not in ans["record"], ans
-    assert [r["grams"] for r in ans["record"]["spools"]] == [40.0, 20.0], ans
+    assert ans["status"] == "error" and "held or settled a spool" in ans["msg"], ans
+    assert cancel_review_store.get_pending("XL", "J-1") == kept
 
 
 @pytest.mark.parametrize("more,words", [

@@ -537,6 +537,7 @@
                 none: 'Doesn’t answer at all (off, or off the network)',
                 login: 'PrusaLink answers, but turns FCC’s API key away: check the key in Settings, 🔌 Printer Connections',
                 error: 'PrusaLink answers, but with an error',
+                address: 'Something answers at its address, but not as PrusaLink: check the address in Settings, 🔌 Printer Connections',
             };
             const why = said[reach] || 'Printer unreachable (offline, networked elsewhere, or cold-rebooting)';
             return {
