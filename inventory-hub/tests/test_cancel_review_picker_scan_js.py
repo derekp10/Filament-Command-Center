@@ -686,7 +686,7 @@ def test_the_id_box_reads_a_number_or_a_spool_label_in_every_form(tmp_path):
         assert got["looked"] == ["/api/spools/42"], got
         assert got["info"] == "#42 Galaxy Black (SHELF-2)", got
     assert res["changed"] == "#43 Signal Red (SHELF-3)", res["changed"]
-    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "ns",
+    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "ns", "rev": 0,
                                 "charges": [{"position": 4, "sid": 42, "grams": 84.28}]}], res["confirms"]
     assert res["elsewhere"] == [{"job": "s#shortfall", "info": "#57 Ocean Blue"},
                                 {"job": "set", "info": "#57 Ocean Blue"}], res["elsewhere"]
@@ -886,7 +886,7 @@ def test_every_picker_lists_the_scan_buffer(tmp_path):
     assert [g.get("cls") or g.get("option") for g in row] == [
         "243", "fcc-cr-ended", "fcc-cr-started", "fcc-cr-buffer", "other"], row
     assert res["remaining"] == "412.4", res["remaining"]
-    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "p",
+    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "p", "rev": 0,
                                 "charges": [{"row": 243, "sid": 57, "grams": 75.32}]}], res["confirms"]
 
 
@@ -966,7 +966,7 @@ def test_the_buffer_list_follows_the_buffer(tmp_path):
     assert opening["row"] == ["777"] and opening["short"] == ["777"], opening
     assert opening["untouched"] == ["57"], opening
     assert res["empty"] == {"row": [], "line": ["57"], "picked": "57"}, res["empty"]
-    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "ns",
+    assert res["confirms"] == [{"printer_name": "TESTER", "job_id": "ns", "rev": 0,
                                 "charges": [{"position": 4, "sid": 57, "grams": 84.28}]}], res["confirms"]
     assert res["listening"] == 1, res["listening"]
     assert res["closed"] == {"open": False, "listening": 0}, res["closed"]
@@ -1023,6 +1023,212 @@ READ_JS = r"""
 const { info } = lineOf(cardOf('ns'), '4');
 return { style: info.getAttribute('style') || '' };
 """
+
+
+# --------------------------------------------------------------------------- #
+# Group 64.2 (4): a scan with the keyboard on a picker picks that spool on its line
+# --------------------------------------------------------------------------- #
+# The dashboard's scan accumulator (scripts.html) reads a <select>'s keys, so a label
+# scanned with the keyboard on a picker went to the scan path: the spool joined the
+# scan buffer and turned up under "In the scan buffer", and the line kept what it
+# had. The real scan predicates of inv_core.js are loaded; the accumulator is stood
+# in for by its bubble-phase essentials (keys onto state.scanBuffer, an Enter sends
+# the buffer to processScan).
+
+def _picker_pre():
+    src = (MODULES / "inv_core.js").read_text(encoding="utf-8")
+    parts = []
+    for name in ("isScanInFlight", "scanIsArriving", "isScannerBurst", "enterIsAScan", "clearScanBuffer"):
+        m = re.search(r"const %s = .*?\nwindow\.%s = %s;\n" % (name, name, name), src, re.S)
+        assert m, f"inv_core.js's {name} moved: teach this test where"
+        parts.append(m.group(0))
+    look = re.search(r"window\.looksLikeScanPayload = \(txt\) =>.*?;\n", src, re.S)
+    assert look, "inv_core.js's looksLikeScanPayload moved"
+    return look.group(0) + "".join(parts)
+
+
+PICKER_SCAN_JS = r"""
+state.scanBuffer = ''; state.scanStartTime = 0;
+window.__scans = [];
+window.processScan = (t, src) => window.__scans.push([t, src]);
+document.addEventListener('keydown', (e) => {          // scripts.html's accumulator, in short
+  const t = e.target;
+  if (t && t.tagName === 'INPUT') return;
+  if (e.key === 'Enter') {
+    window.__acEnters = (window.__acEnters || 0) + 1;
+    if (state.scanBuffer) { window.processScan(state.scanBuffer, 'barcode'); state.scanBuffer = ''; state.scanStartTime = 0; }
+    return;
+  }
+  if (e.key.length !== 1) return;
+  if (!state.scanBuffer) state.scanStartTime = Date.now();
+  state.scanBuffer += e.key;
+});
+// A closed <select>'s typeahead, the browser's default for a key nobody kept from it.
+const typeahead = (sel, k) => {
+  const o = Array.from(sel.options).find((x) => x.textContent.trim().toLowerCase().startsWith(k.toLowerCase()));
+  if (o && o.value !== sel.value) { sel.value = o.value; fire(sel, 'change'); }
+};
+const out = {};
+const typeOn = async (sel, text, gap, second) => {
+  sel.focus();
+  for (const ch of text) { const ev = key(sel, ch); if (!ev.defaultPrevented) typeahead(sel, ch); if (gap) await settle(gap); }
+  const enter = key(sel, 'Enter');
+  // A scanner set to end with CR LF sends a second Enter right behind: the scan's too.
+  if (second) out.secondEnterIsTheScans = window.enterIsAScan();
+  await settle(30);
+  return enter.defaultPrevented;
+};
+const c = cardOf('ns');
+const L = lineOf(c, '4');
+// A spool the picker doesn't list (#57), at a scanner's speed: the #ID box takes it.
+out.fast = { prevented: await typeOn(L.sel, 'ID:57', 0, true) };
+Object.assign(out.fast, { value: L.sel.value, box: L.box.value, shown: L.box.style.display !== 'none',
+                          info: L.info.textContent, scans: window.__scans.length });
+await settle(2100);
+// A spool the picker lists (#229, on the head when the print ended), by its other label.
+await typeOn(L.sel, 'SPL:229', 0);
+out.listed = { value: L.sel.value, shown: L.box.style.display !== 'none', scans: window.__scans.length };
+await settle(2100);
+// A slower scanner, 160 ms a key, after the person had picked #229: the ':' says scan.
+pickIn(L.sel, '229');
+await typeOn(L.sel, 'ID:43', 160);
+out.slow = { value: L.sel.value, box: L.box.value, info: L.info.textContent, scans: window.__scans.length };
+await settle(2100);
+// A person's typeahead still moves the picker ('a': "Another spool by #ID…"), and
+// their Enter after it, a second later, is no scan of the picker's.
+pickIn(L.sel, '');
+L.sel.focus();
+const ta = key(L.sel, 'a'); if (!ta.defaultPrevented) typeahead(L.sel, 'a');
+out.person = { moved: L.sel.value };
+await settle(1000);
+const pEnter = key(L.sel, 'Enter');
+await settle(20);
+out.person.prevented = pEnter.defaultPrevented;
+out.person.box = L.box.value;
+out.scans = window.__scans;
+out.buffer = state.scanBuffer;
+out.acEnters = window.__acEnters || 0;
+return out;
+"""
+
+
+def test_a_scan_on_a_picker_picks_that_spool_on_its_line(tmp_path):
+    """Group 64.2 (4): a label scanned with the keyboard on a picker picks that spool
+    on its line, at a scanner's speed and a slower scanner's: the picker's own option
+    when it lists the spool, else "Another spool by #ID…" with the label in its box,
+    looked up as a typed number is. The scan never reaches processScan (the spool
+    never joins the scan buffer). A person's typeahead still moves the picker, and
+    their Enter a second later goes on as before."""
+    # On 1d1ddc2: AssertionError: the scan reached processScan ([['ID:57', 'barcode']]) and the line
+    # stayed on its pick.
+    res = run(tmp_path, _picker_pre() + _scenario(PICKER_SCAN_JS), {"pending": [NO_SPOOL], "spools": SPOOLS})
+    f = res["fast"]
+    assert f["prevented"] and f["value"] == "other" and f["box"] == "ID:57" and f["shown"], f
+    assert f["info"] == "#57 Ocean Blue", f
+    assert f["scans"] == 0, f
+    assert res["secondEnterIsTheScans"] is True, res
+    assert res["listed"] == {"value": "229", "shown": False, "scans": 0}, res["listed"]
+    s = res["slow"]
+    assert s["value"] == "other" and s["box"] == "ID:43" and s["info"] == "#43 Signal Red (SHELF-3)", s
+    assert s["scans"] == 0, s
+    p = res["person"]
+    assert p["moved"] == "other" and not p["prevented"] and p["box"] in ("ID:43", ""), p
+    # Only the person's stray key reached the accumulator (its old behaviour: no picker
+    # scan), and nothing is left in the buffer.
+    assert res["scans"] == [["a", "barcode"]] and res["buffer"] == "", res
+    # No scan's Enter reached the accumulator at all (the capture stops it, then clears
+    # the buffer, the keyboard idiom's pair): only the person's did.
+    assert res["acEnters"] == 1, res
+
+
+WEIGHT_BOXES_JS = r"""
+const boxes = document.querySelectorAll('.fcc-cr-grams, .fcc-cr-pgrams');
+return { n: boxes.length, rows: document.querySelectorAll('.fcc-cr-grams').length,
+         all: boxes.every((b) => b.classList.contains('fcc-weight-box')) };
+"""
+
+
+TYPEAHEAD_JS = r"""
+const c = cardOf('ns');
+const L = lineOf(c, '4');
+pickIn(L.sel, '');
+L.sel.focus();
+const typed = [];
+for (const ch of '#2') { const ev = key(L.sel, ch); if (!ev.defaultPrevented) typeahead(L.sel, ch); typed.push(L.sel.value); await settle(90); }
+await settle(-30);                                   // the Enter 60 ms after the last key
+const enter = key(L.sel, 'Enter');
+await settle(30);
+return { typed, prevented: enter.defaultPrevented, value: L.sel.value, box: L.box.value,
+         scans: window.__scans, acEnters: window.__acEnters || 0 };
+"""
+
+
+def test_a_persons_typeahead_and_a_quick_enter_is_no_scan_of_the_pickers(tmp_path):
+    """Group 64 review (O1), red on 82dbb38: "#2" typed on a picker (90 ms a key)
+    and an Enter 60 ms later was still in flight (isScanInFlight's 500 ms) and was
+    taken as a scan, so the line moved to "Another spool by #ID…" with #2 in its
+    box, and Apply charged spool #2. Only a scanner burst or a buffer that looks
+    like a scan (a ':' or '/') is a scan here; the Enter goes on, as a person's."""
+    scenario = PICKER_SCAN_JS.split("const out = {};")[0] + TYPEAHEAD_JS
+    res = run(tmp_path, _picker_pre() + _scenario(scenario), {"pending": [NO_SPOOL], "spools": SPOOLS})
+    assert res["prevented"] is False, res
+    assert res["value"] != "other" and res["box"] == "", res
+    assert res["value"] == res["typed"][-1], res      # where the person's typeahead left it
+    assert res["acEnters"] == 1 and res["scans"] == [["#2", "barcode"]], res
+
+
+BARE_LABEL_JS = r"""
+const c = cardOf('ns');
+const L = lineOf(c, '4');
+const out = {};
+const typeOn = async (sel, text, gap) => {
+  sel.focus();
+  for (const ch of text) { const ev = key(sel, ch); if (!ev.defaultPrevented) typeahead(sel, ch); if (gap) await settle(gap); }
+  const enter = key(sel, 'Enter');
+  await settle(30);
+  return enter.defaultPrevented;
+};
+const one = async (name, text, gap) => {
+  pickIn(L.sel, '229');
+  L.box.value = '';                         // the last case's box text (hidden off "other")
+  const before = window.__scans.length;
+  const prevented = await typeOn(L.sel, text, gap);
+  out[name] = { prevented, value: L.sel.value, box: L.box.value, info: L.info.textContent,
+                toProcessScan: window.__scans.slice(before) };
+  await settle(150);
+  state.scanBuffer = ''; state.scanStartTime = 0;
+};
+await one('bare2_fast', '57', 0);           // an old digits-only label, scanner speed
+await one('bare3_slow', '300', 70);         // three digits from a slower scanner, 70 ms a key
+await one('person', '#2', 90);              // a person's typeahead, 90 ms a key
+return out;
+"""
+
+
+def test_a_bare_number_label_at_a_scanners_pace_picks_its_spool_on_the_line(tmp_path):
+    """Group 64 fix review (FP1), red on abb67aa: O1's gate (a ':' or '/', or a
+    scanner burst of 3+ characters) dropped an old digits-only label, which has no
+    ':' and, at two digits, is never a burst: the scan went to the scan path (the
+    spool joined the scan buffer) and the line kept #229. Digits typed on the picker
+    at a scanner's pace (every key and the Enter within 80 ms) are a scan again; a
+    person's typeahead, slower, still moves the picker and its Enter goes on."""
+    scenario = PICKER_SCAN_JS.split("const out = {};")[0] + BARE_LABEL_JS
+    res = run(tmp_path, _picker_pre() + _scenario(scenario), {"pending": [NO_SPOOL], "spools": SPOOLS})
+    f = res["bare2_fast"]
+    assert f["prevented"] and f["value"] == "other" and f["box"] == "57", f
+    assert f["info"] == "#57 Ocean Blue" and f["toProcessScan"] == [], f
+    s = res["bare3_slow"]
+    assert s["prevented"] and s["value"] == "other" and s["box"] == "300" and s["toProcessScan"] == [], s
+    p = res["person"]
+    assert not p["prevented"] and p["value"] != "other" and p["box"] == "", p
+    assert p["toProcessScan"] == [["#2", "barcode"]], p
+
+
+def test_every_grams_box_is_a_weight_box(tmp_path):
+    """Group 64.2 (11): a row's grams and a line's grams, on every card kind."""
+    res = run(tmp_path, _scenario(WEIGHT_BOXES_JS),
+              {"pending": [NO_SPOOL, PARTIAL, SHORTFALL, HELD_SET], "spools": SPOOLS})
+    assert res["rows"] >= 1 and res["n"] >= 4 and res["all"], res
 
 
 def test_the_box_words_are_readable_and_use_a_named_size(tmp_path):

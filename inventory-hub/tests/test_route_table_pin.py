@@ -31,6 +31,7 @@ EXPECTED_ROUTES = [
     ("/api/cancel_deduct/candidates", "GET", "api_cancel_deduct_candidates"),  # Group 43.3 spool picker
     ("/api/cancel_deduct/confirm", "POST", "api_cancel_deduct_confirm"),
     ("/api/cancel_deduct/dismiss", "POST", "api_cancel_deduct_dismiss"),
+    ("/api/cancel_deduct/retry_fetch", "POST", "api_cancel_deduct_retry_fetch"),
     ("/api/cancel_deduct/pending", "GET", "api_cancel_deduct_pending"),
     ("/api/config", "GET", "api_get_config"),
     ("/api/config", "PUT", "api_put_config"),

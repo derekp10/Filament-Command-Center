@@ -510,7 +510,53 @@ def test_the_yes_counts_every_plain_line_its_press_leaves_uncharged(tmp_path):
         assert o["notice"] == notice, (job, o)
     # The second press goes ahead as asked: nothing for T6, whose grams the server
     # leaves uncharged, as the button said.
-    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "psl", "updates": {}}], res["posted"]
+    # Group 64.2 (2): the second press says what the person saw of the set (set_ack).
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "psl", "rev": 0, "updates": {},
+                              "set_ack": {"4": 0}}], res["posted"]
+
+
+# Group 64.2 (6): where the ask is fixed (a no_spool card, or a review an earlier
+# Apply fixed: `requested_total`), a picked plain line typed under FCC's figure
+# leaves the grams it was typed short of, as the ledger counts them
+# (print_deduct._lines_left_unplaced), and the orange Yes counts them; typed over,
+# they make up for another line's. On any other card a picked line is charged what
+# its pick says, as before.
+FIXED_CASES = [
+    {"job": "nss", "fill": {"set:4:42": 30, "6": 12}, "pick": {"6": "243"}},   # no_spool: T6 8 g short
+    {"job": "pk12", "fill": {"pos:6": 12}, "pick": {"pos:6": "243"}},           # not fixed: charged as typed
+    {"job": "pkf", "fill": {"pos:6": 12}, "pick": {"pos:6": "243"}},            # fixed (a retry): 8 g short
+    {"job": "pko", "fill": {"pos:6": 26}, "pick": {"pos:6": "243"}},            # fixed: 6 g over
+]
+FIXED_PENDING = [dict(NOSPOOL_PLUS_LINE, job_id="nss"), dict(SET_PLUS_LINE, job_id="pk12"),
+                 dict(SET_PLUS_LINE, job_id="pkf", requested_total=104.28),
+                 dict(SET_PLUS_LINE, job_id="pko", requested_total=104.28)]
+FIXED_JS = PLAIN_JS.replace("cardOf('psl')", "cardOf('nss')")
+
+T6_SHORT = "⚠️ Yes below charges 8 g less than FCC worked out on T6 · HEAD-7, leaving them uncharged."
+T6_MORE = "⚠️ Yes below charges 6 g more than FCC worked out on T6 · HEAD-7."
+
+
+def test_the_yes_counts_a_picked_lines_shortfall_where_the_ledger_does(tmp_path):
+    # On 1d1ddc2: AssertionError: ('nss', ... '⚠️ Yes, leave 54.28 g uncharged') (T6's 8 g, which the
+    # ledger counts and the Activity Log names, weren't counted)
+    import print_deduct
+    res = _run(tmp_path, FIXED_JS, FIXED_PENDING, cases=FIXED_CASES)
+    out = res["out"]
+    want = {"nss": ("⚠️ Yes, leave 62.28 g uncharged", [PART_PLACED], T6_SHORT),
+            "pk12": ("⚠️ Yes, leave 84.28 g uncharged", [NONE_PLACED], None),
+            "pkf": ("⚠️ Yes, leave 92.28 g uncharged", [NONE_PLACED], T6_SHORT),
+            "pko": ("⚠️ Yes, go ahead as typed", [NONE_PLACED], T6_MORE)}
+    for job, (text, alerts, notice) in want.items():
+        o = out[job]
+        assert o["btn"]["text"] == text and _waiting(o["btn"]), (job, o)
+        assert o["alerts"] == alerts, (job, o)
+        assert o["notice"] == notice, (job, o)
+    # The no_spool card's Yes says what the server's own rule makes of the picks
+    # its second press posts: 54.28 g of T4's set and T6's 8 g.
+    posted = [b for b in res["posted"] if b.get("job_id") == "nss"]
+    assert len(posted) == 1 and posted[0]["set_ack"] == {"4": 30}, res["posted"]
+    under, over, _picked = print_deduct._lines_left_unplaced(FIXED_PENDING[0], "no_spool", posted[0]["charges"])
+    assert round(sum(under.values()) - sum(over.values()), 2) == 62.28, (under, over)
 
 
 PLAIN_CHANGE_JS = r"""
@@ -699,3 +745,58 @@ def test_a_heads_name_is_bold_on_its_line_and_by_the_buttons(tmp_path):
         # the same again after a double click's second press.
         for press in ("first", "second"):
             assert o[press] == {"text": text, "bold": bold, "tags": 0}, (job, press, o)
+
+
+# --------------------------------------------------------------------------- #
+# Group 64.2 (the look): a head named in the server's words is bold             #
+# --------------------------------------------------------------------------- #
+
+LOOK_MSG = "The grams typed for HEAD-5 changed since FCC asked about them; HEAD-50 isn't on this card, T4 is."
+
+HEAD_REFUSAL_JS = r"""
+const old = window.__respond;
+let answer = { status: 'error', msg: D.msg };
+window.__respond = (url, m, b) => url.startsWith('/api/cancel_deduct/confirm') ? { body: answer } : old(url, m, b);
+const partsOf = (c) => c.querySelector('.fcc-cr-card-notice').childNodes.map(
+  (x) => (x.nodeType === 3 ? ['text', x.textContent] : [x.tagName, x.className, x.textContent]));
+const press = async () => {
+  const c = cardOf('ps');
+  fill(c, 'set:4:42', 40); fill(c, 'set:4:229', 44.28);
+  c.querySelector('.fcc-cr-confirm').click();
+  await settle(60);
+  return cardOf('ps');
+};
+const refused = partsOf(await press());
+answer = { status: 'error', stale: true, msg: D.msg };
+const stale = partsOf(await press());
+return { refused, stale, toasts: window.__rec.toasts.map((t) => t.msg) };
+"""
+
+
+def test_a_head_named_in_a_refusal_is_bold_on_the_card(tmp_path):
+    """The card's own head names (a toolhead, or its T<n>) standing whole in the
+    server's words are drawn bold, as the card's lines draw them; "HEAD-50", which
+    only starts like one, stays plain. The toast keeps the words as they came."""
+    # On 2742bb7: AssertionError: the notice was one text node.
+    res = _run(tmp_path, HEAD_REFUSAL_JS, [PARTIAL_SET], msg=LOOK_MSG)
+    want = [["text", "The grams typed for "], ["B", "fcc-cr-notice-head", "HEAD-5"],
+            ["text", " changed since FCC asked about them; HEAD-50 isn't on this card, "],
+            ["B", "fcc-cr-notice-head", "T4"], ["text", " is."]]
+    assert res["refused"] == want, res["refused"]
+    assert res["stale"] == want, res["stale"]        # the card drawn again says it the same way
+    assert LOOK_MSG in res["toasts"], res["toasts"]
+
+
+SPACED_MSG = "Spool #42 isn't a row on HEAD 2, and HEAD-70 is another printer's."
+
+
+def test_the_longest_head_name_wins_and_a_hyphen_goes_on(tmp_path):
+    """Head ids may hold a Space: on a card naming "HEAD" and "HEAD 2", "HEAD 2" is
+    bold whole, never "HEAD" with " 2" after it; and "HEAD-70" isn't "HEAD"."""
+    heads = [{"toolhead": "HEAD", "position": 4, "sid": 229, "sids": [229]},
+             {"toolhead": "HEAD 2", "position": 6, "sid": 243, "sids": [243]},
+             {"toolhead": "HEAD", "position": 4, "sid": 42, "when": "start"}]
+    card = dict(PARTIAL_SET, spools=[dict(PARTIAL_SET["spools"][0], toolhead="HEAD 2")], heads_at_end=heads)
+    res = _run(tmp_path, HEAD_REFUSAL_JS, [card], msg=SPACED_MSG)
+    assert res["refused"] == [["text", "Spool #42 isn't a row on "], ["B", "fcc-cr-notice-head", "HEAD 2"],
+                              ["text", ", and HEAD-70 is another printer's."]], res["refused"]

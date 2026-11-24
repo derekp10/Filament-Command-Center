@@ -247,7 +247,8 @@ def test_real_bgcode_round_trip_matches_footer():
     # Real G-code moves recovered (space-less, Prusa no-spaces MeatPack).
     assert "G1X" in g and g.count("\nG1") > 1000
     # Decode → prefix-parse at 100% reproduces the footer (tool 1 = 6.35 g)
-    # within slicer-estimate tolerance (~1.3% high; high-water E accounting).
+    # (since Group 64.6 to the slicer's own count: the file is an MMU3 print, and the
+    # walk reads the slicer's MMU rule; it was ~1.4% high before).
     full = prusalink_api.parse_partial_filament_usage(g, 1.0)
     assert set(full.keys()) == {1}, full
     assert 6.1 < full[1] < 6.7, full

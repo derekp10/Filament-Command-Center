@@ -3,6 +3,7 @@ import state # type: ignore
 import config_loader # type: ignore
 import locations_db # type: ignore  # L271 Phase 2: single hierarchy resolver
 import attr_migration # type: ignore  # Group 36: shared force_reset safety layer
+import contextlib
 import datetime
 import html
 import json
@@ -385,6 +386,101 @@ class SpoolListRead:
             self.reads = 1
             self._spools, self.error = read_spool_list(self.allow_archived)
         return self._spools
+
+
+# Group 64.2 (1): one weight write of a spool at a time, in this process. A print's
+# charge reads the spool's used weight and writes used + grams, an absolute value;
+# a weigh screen's save, Edit Spool's weight fields and Prusament's apply-weights
+# write weights too. Without a shared lock a save landing between a charge's read
+# and its write was overwritten by the charge (the scale's reading lost); with it,
+# the second writer waits for the first: a save after a charge writes the scale's
+# reading over it, and a charge after a save reads it (the completion deduct's own
+# check under the lock then holds the charge, Group 64 review S4: the spool changed
+# weight after the print ended). Edit Spool takes it around its write only: the read
+# its form was drawn from is the page's own, made when it opened, which no lock here
+# can hold, so the page sends Total Used only when the person changed it (Group 64
+# review, S3: a form opened before a charge and saved after it wrote the old used
+# weight back). Spoolman has no compare-and-set, so a write from Spoolman's own
+# page, or another FCC process, can't take this lock. Re-entrant; never held across
+# two spools.
+_SPOOL_WRITE_LOCKS = {}
+_SPOOL_WRITE_LOCKS_GUARD = threading.Lock()
+
+
+def spool_lock(sid):
+    """The lock FCC's weight writes of spool `sid` hold (Group 64.2 (1)): from its
+    read to its write, the print deduct's charge (print_deduct._spool_lock),
+    /api/spool/update's weight saves and /api/spool/prusament_apply_weights; around
+    its write only, Edit Spool's weight fields (its read is the page's own)."""
+    key = str(sid)
+    with _SPOOL_WRITE_LOCKS_GUARD:
+        lock = _SPOOL_WRITE_LOCKS.get(key)
+        if lock is None:
+            lock = _SPOOL_WRITE_LOCKS[key] = threading.RLock()
+    return lock
+
+
+# Group 64.3 (1): one spool-list read shared by a print-end step's location reads.
+_ONE_LIST_READ = threading.local()
+
+
+class _OneListRead:
+    """The non-archived spool list for ONE print-end step on one thread (a
+    one_spool_list_read block), read on first use: every location read inside the
+    block (get_spools_at_location_detailed, so get_spools_at_location and
+    select_deduct_targets too) is answered from it. `why` says why the read
+    failed (it is None while the read worked, or none was needed); `reads` counts
+    the HTTP reads (0 or 1); `record(sid)` is a spool's record from the read."""
+
+    def __init__(self):
+        self.reads = 0
+        self.why = None
+        self._spools = None
+        self._by_id = None
+
+    def spools(self):
+        if not self.reads:
+            self.reads = 1
+            self._spools, self.why = read_spool_list(False)
+        return self._spools
+
+    def record(self, sid):
+        if self._spools is None:
+            return None
+        if self._by_id is None:
+            self._by_id = {}
+            for s in self._spools:
+                try:
+                    self._by_id[int(s.get('id'))] = s
+                except (TypeError, ValueError, AttributeError):
+                    continue
+        try:
+            return self._by_id.get(int(sid))
+        except (TypeError, ValueError):
+            return None
+
+
+@contextlib.contextmanager
+def one_spool_list_read():
+    """A block in which the location readers share ONE read of the spool list
+    (Group 64.3 (1)). A print-end step that looks at every head of a printer used to
+    read the whole list once per head (each get_spools_at_location is a whole-list
+    GET: about 8 on the INDX, and up to three such reads at an edge). A read that
+    fails answers every location empty, as it always did, and the block's `why`
+    says so, so the caller can tell "couldn't read" from "empty" (Group 52's honest
+    read). Per thread (each edge and retry runs on its own); a block inside another
+    shares the outer one's read. Never kept past the block: FCC has no cross-step
+    cache. A test that stands in for get_spools_at_location never reaches it."""
+    outer = getattr(_ONE_LIST_READ, "ctx", None)
+    if outer is not None:
+        yield outer
+        return
+    ctx = _OneListRead()
+    _ONE_LIST_READ.ctx = ctx
+    try:
+        yield ctx
+    finally:
+        _ONE_LIST_READ.ctx = None
 
 
 class FilamentListRead:
@@ -2979,7 +3075,11 @@ def get_spools_at_location_detailed(loc_name):
     try:
         # allow_archived=False mirrors the historical bare /api/v1/spool fetch
         # this function used inline (Spoolman omits archived spools by default).
-        for s in get_all_spools(allow_archived=False):
+        # Inside a one_spool_list_read block (Group 64.3 (1)) the block's one read
+        # answers; a failed one answers [] here and says why on the block.
+        shared = getattr(_ONE_LIST_READ, "ctx", None)
+        spools = shared.spools() if shared is not None else get_all_spools(allow_archived=False)
+        for s in spools or []:
             item = _build_location_match(s, target_loc_upper, check_unassigned)
             if item is not None:
                 found.append(item)

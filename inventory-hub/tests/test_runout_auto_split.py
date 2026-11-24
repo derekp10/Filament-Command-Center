@@ -195,8 +195,8 @@ def test_route_auto_split_builds_both_rows():
     assert sids == {126: 25.78, 127: 85.98}   # 23.78 + 2 path remnant, and footer - 23.78
     # Each row says the stretch of the print its spool fed (the card's set shows it).
     segs = {r["sid"]: r["segments"] for r in rec["spools"]}
-    assert segs == {126: [{"from": None, "to": 0.19, "runout": True}],
-                    127: [{"from": 0.19, "to": None, "runout": False}]}
+    assert segs == {126: [{"from": None, "to": 0.19, "runout": True, "grams": 25.78}],
+                    127: [{"from": 0.19, "to": None, "runout": False, "grams": 85.98}]}
 
 
 def test_route_falls_back_to_full_footer_when_gcode_unavailable():

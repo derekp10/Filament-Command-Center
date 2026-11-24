@@ -4,8 +4,8 @@ Moved verbatim from app.py: _resolve_active_locs_for_printer (MMU M0/M1
 alias ordering — every deduct resolver depends on it), the deduct core
 (_apply_usage_to_printer, _record_applied_deduct, snapshot/swap helpers,
 _compute_cancel_usage, deduct_cancelled_print, deduct_completed_print,
-review routing/stash/enqueue/create), the /api/cancel_deduct/* routes +
-_confirm_no_spool_review, /api/smart_move, and the three adjacent read
+review routing/stash/enqueue/create), the /api/cancel_deduct/* routes,
+/api/smart_move, and the three adjacent read
 endpoints (multi-spool filaments, spools_by_filament, backfill weights).
 
 Contracts preserved verbatim (see the carve plan + CLAUDE.md):
@@ -23,10 +23,10 @@ commit) so intra-module calls see the patches.
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
 from flask import request, jsonify  # type: ignore
+import functools
 import html
 import math
 import requests  # type: ignore
-import threading
 import time
 
 import state  # type: ignore
@@ -39,8 +39,21 @@ import print_deduct_ledger  # type: ignore
 import cancel_review_store  # type: ignore
 import cancel_fetch_store  # type: ignore
 import stock_report  # type: ignore  # Group 49.2b: the low-stock warning after a deduct
+import weigh_stamps  # type: ignore  # Group 64, Decision 1: when FCC weighed a spool
 
 from app_core import app
+
+
+def _sharing_one_list_read(fn):
+    """Run `fn` with every head it reads sharing ONE read of the spool list
+    (Group 64.3 (1), spoolman_api.one_spool_list_read): each of its
+    get_spools_at_location / select_deduct_targets calls was a whole-list GET of its
+    own, about 8 for an INDX step. A block inside another shares the outer read."""
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        with spoolman_api.one_spool_list_read():
+            return fn(*args, **kwargs)
+    return run
 
 
 def _esc(text):
@@ -327,19 +340,15 @@ def _spool_read(sid):
 # one spool on two threads that both read the same weight lose one of them. Since
 # scope C each queued print is computed on a thread of its own, and a review's Apply
 # runs on a request thread. Held around one spool's read, compute and write, never
-# across spools, so no thread ever holds two of these.
-_SPOOL_LOCKS = {}
-_SPOOL_LOCKS_GUARD = threading.Lock()
+# across spools, so no thread ever holds two of these. Since Group 64.2 (1) it is
+# spoolman_api.spool_lock, which FCC's own weight saves take too (the weigh
+# screens, Edit Spool, Prusament's apply-weights), so a save never lands between a
+# charge's read and its write.
 
 
 def _spool_lock(sid):
     """The lock a deduct of spool `sid` holds from its read to its write."""
-    key = str(sid)
-    with _SPOOL_LOCKS_GUARD:
-        lock = _SPOOL_LOCKS.get(key)
-        if lock is None:
-            lock = _SPOOL_LOCKS[key] = threading.RLock()
-    return lock
+    return spoolman_api.spool_lock(sid)
 
 
 def _write_landed(sid, new_used):
@@ -368,8 +377,10 @@ def _deduct_payload(spool, new_used):
     return payload
 
 
+@_sharing_one_list_read
 def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
-                            active_locs=None, failed_out=None, heads=None):
+                            active_locs=None, failed_out=None, heads=None, watch=None,
+                            held_out=None):
     """Deduct per-toolhead grams from the spools currently mapped to
     `printer_name`'s toolheads. `usage_map` is {toolhead_position: grams}.
 
@@ -411,8 +422,18 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
     the write set the spool's used weight to this print's grams. A spool FCC can't
     read is charged nothing; its grams go to the caller's shortfall card or
     no_spool review. Each spool's read, compute and write hold _spool_lock(sid).
+
+    `watch` and `held_out` (Group 64 review, S4): the print-end read's used weights
+    ({"used": {sid: grams}, "end_at": epoch}, _end_watch) and a dict that receives
+    {position: info} for each head this loop leaves uncharged because its spool's
+    used weight, read under the lock, isn't the print-end read's plus FCC's own
+    charges since (_changed_since_check): a save that landed after the caller's
+    Decision 1 check and before this read. Each charge that lands is noted
+    (weigh_stamps.note_charge, S1), so a later print's check can tell it from a
+    weighing.
     """
     captured = None
+    mmu_shared_at = {}
     if heads is not None:
         captured = {}
         active_locs = []
@@ -421,12 +442,15 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
             if pos not in captured:
                 captured[pos] = _head_sids(head)
                 active_locs.append((str(head.get('toolhead') or '').upper(), {'position': pos}))
+                if head.get('mmu_shared'):
+                    mmu_shared_at[pos] = list(head['mmu_shared'])     # Group 64 full review (WD3)
     elif active_locs is None:
         printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2
         active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
     spools_updated = 0
     details = []
     processed_positions = set()
+    mmu_ids = None
     for loc_id, p_info in active_locs:
         toolhead_idx = p_info.get('position', 0)
         if toolhead_idx in processed_positions:
@@ -441,6 +465,20 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
         if not loc_spools:
             continue  # try the next alias for this position
         processed_positions.add(toolhead_idx)
+        if captured is None:
+            # Group 64.6: MMU slots sharing this Position, each holding a
+            # spool: FCC can't tell which slot printed, so it charges none of them.
+            if mmu_ids is None:
+                mmu_ids = _mmu_slot_ids()
+            if str(loc_id).upper() in mmu_ids:
+                holders = _mmu_slot_holders(active_locs, toolhead_idx, mmu_ids)
+                if len(holders) > 1:
+                    state.add_log_entry(
+                        f"⚠️ {printer_name}: MMU slots {_and_list(h for h, _s in holders)} share Position "
+                        f"{toolhead_idx} (T{toolhead_idx}) and each holds a spool, so FCC can't tell which "
+                        f"slot printed; {weight_used:.2f}g not deducted. Give each MMU slot its own Position "
+                        f"in Settings (slot 1 = Position 0), and weigh the spool to true up.", "WARNING", "ffaa00")
+                    continue
         # >1 spool at one toolhead = a stale GHOST + the current load (or two
         # mis-assignments). Resolve to the directly-loaded spool; only fetch the
         # detailed/ghost info in this rare case so the single-spool common path is
@@ -453,6 +491,17 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                 ambiguous = True
             else:
                 loc_spools, ambiguous = spoolman_api.select_deduct_targets(loc_id)
+            if ambiguous and mmu_shared_at.get(toolhead_idx):
+                # Group 64 full review (WD3): the print-end read names every sharing
+                # slot's spool on the first slot's head; the generic line blamed that
+                # slot for holding them all, beside a card saying the slots share one.
+                state.add_log_entry(
+                    f"⚠️ {printer_name}: MMU slots {_and_list(mmu_shared_at[toolhead_idx])} share Position "
+                    f"{toolhead_idx} (T{toolhead_idx}) and each held a spool when the print ended, so FCC can't "
+                    f"tell which slot printed; {weight_used:.2f}g not deducted: pick the spool it used on the "
+                    f"🛑 Review card, or weigh it to true up. Give each MMU slot its own Position in Settings "
+                    f"(slot 1 = Position 0) so FCC can tell next time.", "WARNING", "ffaa00")
+                continue
             if ambiguous:
                 state.add_log_entry(
                     f"⚠️ {printer_name}: toolhead {str(loc_id).upper()} has "
@@ -465,6 +514,13 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                 spool_data = _spool_read(sid)
                 if spool_data and weight_used > 0:
                     used = float(spool_data.get('used_weight', 0) or 0)
+                    late = _changed_since_check(watch, sid, used) if held_out is not None else None
+                    if late is not None:
+                        # Group 64 review (S4): Decision 1 again, under the lock. A save
+                        # that landed after deduct_completed_print's check and before
+                        # this read holds the head as that check would have.
+                        held_out[toolhead_idx] = dict(late, toolhead=str(loc_id).upper())
+                        continue
                     # 43.1 — clamp against the EFFECTIVE capacity: the spool's own
                     # initial_weight, else its filament's net weight (how Spoolman
                     # computes remaining_weight). This read `initial_weight or 0`, so an
@@ -484,6 +540,7 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                         actual_g = min(float(weight_used), remaining)
                         new_remaining = max(0.0, remaining - actual_g)
                     new_used = used + actual_g
+                    sent_at = time.time()
                     ok = bool(spoolman_api.update_spool(sid, _deduct_payload(spool_data, new_used)))
                     if not ok:
                         err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
@@ -498,6 +555,7 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                                 "WARNING", "ffaa00")
                     if ok:
                         spools_updated += 1
+                        weigh_stamps.note_charge(sid, actual_g, at=sent_at)
                         # Record the ACTUALLY-absorbed grams so the ledger and the
                         # callers' shortfall math reflect reality — else an
                         # over-capacity deduct reads as fully applied and the gap is
@@ -535,6 +593,10 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                                 # Group 51 review (engine-4): whether the spool was
                                 # stock before the attempt (the write archives it at 0 g).
                                 "attempt_was_archived": bool(spool_data.get('archived')),
+                                # Group 64 fix review (FS4): when the write was sent, so a
+                                # later Apply that finds it landed notes it as FCC's own
+                                # charge from then (weigh_stamps.note_charge).
+                                "attempt_sent_at": sent_at,
                                 "remaining_before": None if remaining is None else round(remaining, 1),
                                 "remaining_after": None if new_remaining is None else round(new_remaining, 1),
                                 "display": disp.get('text', f"#{sid}"), "color": disp.get('color', '888888'),
@@ -570,7 +632,7 @@ def _toolheads_charged(details):
 def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                            usage_map, known_positions=None, confirmed=False,
                            fb_url=None, active_locs=None, failed=None, read_heads=False,
-                           heads=None, heads_source=None, heads_read_at=None):
+                           heads=None, heads_source=None, heads_read_at=None, held=None):
     """Single source of truth for the tail of an auto-applied deduct: record the
     ACTUALLY-applied grams in the exactly-once ledger, then surface any shortfall
     (requested-but-not-applied grams) as a 2dp WARNING so it's never silently lost.
@@ -605,6 +667,13 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
     job gets no card (its key couldn't be told apart from the next id-less one),
     only the WARNING.
 
+    `held` (Group 64, Decision 1; _weighed_since_end's {position: info}): heads whose
+    spool changed weight after the print ended and that the apply left uncharged.
+    Their grams always open the card (whatever `shortfall_review_min_g` says: a
+    held head is a question, not a rounding), each line filled in with 0 g when
+    FCC weighed the spool after the end, else with the print's grams, and each held
+    head gets its own loud WARNING line.
+
     NOT for the api_cancel_deduct_confirm per-sid loop — that deducts user-chosen
     grams (no requested/usage_map concept), so a shortfall is meaningless there."""
     applied = round(sum(d['grams'] for d in details), 2)
@@ -615,7 +684,7 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                               if t in known_positions), 2)
     shortfall = round(max(0.0, requested - applied), 2)
     card = None
-    if shortfall > 0.05 and shortfall >= _shortfall_review_min_g() \
+    if shortfall > 0.05 and (held or shortfall >= _shortfall_review_min_g()) \
             and not print_deduct_ledger._is_blank_job(job_id):
         uncharged = _uncharged_by_position(usage_map, details, known_positions)
         if uncharged:
@@ -624,7 +693,8 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                     printer_name, job_id, filename=filename, scale=scale, uncharged=uncharged,
                     details=details, failed=failed, fb_url=fb_url, active_locs=active_locs,
                     read_heads=read_heads,
-                    **_given(heads=heads, heads_source=heads_source, heads_read_at=heads_read_at))
+                    **_given(heads=heads, heads_source=heads_source, heads_read_at=heads_read_at,
+                             held=held or None))
             except Exception as e:
                 # The spools are already charged: the ledger write below must still
                 # happen, or the job is deducted again on the next retry.
@@ -638,12 +708,33 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
     print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                       scale=scale, grams=applied, **extra)
     if card is not None:
-        state.add_log_entry(
-            f"⚠️ {printer_name}: {shortfall:.2f}g of '{_esc(filename)}' wasn't deducted "
-            f"({_shortfall_reasons(card)}) — pick the spool that took it in 🛑 Review, "
-            f"or Discard.", "WARNING", "ffaa00",
-            meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
-                  "job_id": card["job_id"]})
+        held_lines = {str(_norm_pos(p)) for p in (held or {})}
+        lines_now = card.get("unresolved_usage") or {}
+        for pos, info in sorted((held or {}).items(), key=lambda kv: str(kv[0])):
+            # Decision 1: each held head says it loudly, with what FCC filled in.
+            grams = float(lines_now.get(str(_norm_pos(pos))) or 0)
+            if info.get("stamp"):
+                tail = ("FCC charged nothing to it and put 0 g on its 🛑 Review card: type the "
+                        "grams there only if that weighing came before the print.")
+            else:
+                tail = ("FCC charged nothing to it yet: the grams wait on its 🛑 Review card, "
+                        "filled in. Check them before you Apply, or this print may be counted twice.")
+            state.add_log_entry(
+                f"⚠️ {printer_name}: {_weighed_words(info, grams)} ('{_esc(filename)}'). {tail}",
+                "WARNING", "ffaa00",
+                meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
+                      "job_id": card["job_id"]})
+        if any(line not in held_lines for line in lines_now) or card.get("spools"):
+            # Group 64 full review (WD5): the grams of the lines this line names; a held
+            # head's grams are said by its own line above, which says not to charge them.
+            held_g = sum(float(lines_now.get(line) or 0) for line in held_lines)
+            other_g = round(max(0.0, shortfall - held_g), 2)
+            state.add_log_entry(
+                f"⚠️ {printer_name}: {other_g:.2f}g of '{_esc(filename)}' wasn't deducted "
+                f"({_shortfall_reasons(card, skip=held_lines)}) — pick the spool that took it in "
+                f"🛑 Review, or Discard.", "WARNING", "ffaa00",
+                meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
+                      "job_id": card["job_id"]})
     elif shortfall > 0.05:
         state.add_log_entry(
             f"⚠️ {printer_name}: {shortfall:.2f}g of '{_esc(filename)}' wasn't deducted "
@@ -730,9 +821,11 @@ def _uncharged_by_position(usage_map, details, known_positions=None):
     return out
 
 
+@_sharing_one_list_read
 def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged, details=(),
                             failed=(), fb_url=None, active_locs=None, heads=None,
-                            read_heads=False, heads_source=None, heads_read_at=None):
+                            read_heads=False, heads_source=None, heads_read_at=None, held=None,
+                            picked=False):
     """Group 43.2 — stash a review card for grams a deduct couldn't charge (a
     spool's record ran out, a head had no spool or two, a write failed), so they
     can still be placed: job 1104's 27.12 g went to no spool after #99's record
@@ -750,6 +843,14 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     A head entry from the print-end read (hotfix 2026-11-11) carries `sids`, the
     spools it held then: a line's cause is read from them, with no read of the
     heads now, and `heads_source` / `heads_read_at` say where they were read.
+    `held` (Group 64, Decision 1): heads the deduct left uncharged because their
+    spool changed weight after the print ended. Each one's line has the cause
+    "weighed" (its spool pre-picked, the words in `words`) and a filled-in figure in
+    `shortfall_prefill`: 0 g when FCC weighed the spool after the end (the scale
+    counted the print already), else the print's grams.
+    `picked` (the card Apply's path): `details` are spools picked on a card, so a
+    spool the card doesn't list yet is offered as picked there, never as the spool
+    on the head (64.2 (7)).
     Returns the record, or None when the card exists, was settled, or would be
     empty."""
     key = _shortfall_key(job_id)
@@ -766,8 +867,6 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
         by_line.setdefault(str(_norm_pos(h.get('position'))), h)
 
     def _mark(line, toolhead, sid, archived):
-        entry = {"toolhead": toolhead, "position": _norm_pos(line), "sid": sid,
-                 "archived": bool(archived)}
         # Round 2 (R3): the entry that already names this spool on this head (a
         # card from the print-end read offers every spool the head had), so a
         # split's run-out spool never takes over the head's own entry: that hid
@@ -775,28 +874,35 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
         same = next((h for h in heads if sid is not None and str(h.get('sid')) == str(sid)
                      and str(_norm_pos(h.get('position'))) == line), None)
         if same is not None:
-            same.update(entry)
+            same["archived"] = bool(archived)
             return
         own = by_line.get(line)
-        if own is not None and isinstance(own.get('sids'), list):
-            # Round 2's review: the print-end read's own entry for the head (it
-            # carries `sids`) is what the head held when the print ended, and is
-            # never written over with another spool: one it names among several
-            # stays offered beside the others, and one picked from elsewhere (by its
-            # #) isn't called the spool on the head. The line's cause names it.
+        if own is not None and sid is not None and isinstance(own.get('sids'), list) \
+                and any(str(s) == str(sid) for s in own['sids']):
+            # 64.2 (8): a spool the head's entry names among several gets its own
+            # "ran out, archived" mark (`archived_sids`), never the whole entry's.
+            if archived:
+                marks = own.setdefault("archived_sids", [])
+                if not any(str(m) == str(sid) for m in marks):
+                    marks.append(sid)
             return
-        if own is not None:
-            own.update(entry)
-        else:
-            heads.append(entry)
+        # 64.2 (7): the head's own entry is never written over (an older card, the
+        # automatic path, a #id pick that ran short all overwrote it, and the spool
+        # on the head when the print ended went from the picker): the spool is
+        # offered beside it, as charged from the head (`when` "end") or as picked on
+        # a card ("picked"), whose words the picker reads.
+        entry = {"toolhead": toolhead, "position": _norm_pos(line), "sid": sid,
+                 "archived": bool(archived), "when": "picked" if picked else "end"}
+        heads.append(entry)
+        if own is None:
             by_line[line] = entry
 
     rows, unconfirmed = [], {}
     for f in failed or []:
         line = str(_norm_pos(f.get('position')))
         row = {k: f.get(k) for k in ("sid", "toolhead", "position", "grams", "attempt_used_before",
-                                     "attempt_used_after", "attempt_was_archived", "remaining_before",
-                                     "remaining_after", "display", "color")}
+                                     "attempt_used_after", "attempt_was_archived", "attempt_sent_at",
+                                     "remaining_before", "remaining_after", "display", "color")}
         row.update(ambiguous=False, unconfirmed_write=True)
         rows.append(row)
         unconfirmed[line] = f
@@ -818,7 +924,21 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     def _emptied(d):
         return d.get('remaining') is not None and float(d.get('remaining') or 0) <= 0.0
     causes = {}
+    held_by_line = {str(_norm_pos(p)): info for p, info in (held or {}).items()}
+    prefill = {}
     for line in lines:
+        info = held_by_line.get(line)
+        if info is not None:
+            stamp = info.get("stamp") or {}
+            causes[line] = {"why": "weighed", "sid": info.get("sid"), "toolhead": info.get("toolhead"),
+                            "archived": False, "then": info.get("then"), "now": info.get("now"),
+                            "ours": info.get("ours"),
+                            "ended": info.get("ended"), "weighed_at": stamp.get("at"),
+                            "weighed_on": stamp.get("how"), "known_order": bool(stamp),
+                            "words": _weighed_words(info, float(lines[line] or 0))}
+            prefill[line] = 0.0 if stamp else round(float(lines[line] or 0), 2)
+            _mark(line, info.get("toolhead"), info.get("sid"), False)
+            continue
         d = charged.get(line)
         if d is not None:
             # The head's spool took what its record had left: the record hit 0 g,
@@ -865,6 +985,8 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
                 if at_end is not None:
                     # Its entry already names both, which the card's picker offers.
                     cause["sids"] = [int(s) for s in at_end]
+                    if head.get('mmu_shared'):
+                        cause["mmu_shared"] = list(head['mmu_shared'])     # Group 64.6
                 else:
                     try:
                         loaded, _amb = spoolman_api.select_deduct_targets(head['toolhead'])
@@ -895,28 +1017,37 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
         "shortfall_causes": causes,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if prefill:
+        record["shortfall_prefill"] = prefill
     if heads_source:
         _say_where_heads_were_read(record, heads_source, heads_read_at)
     cancel_review_store.add_pending(record)
     return record
 
 
-def _shortfall_reasons(card):
+def _shortfall_reasons(card, skip=()):
     """Group 43.2 — the causes on a shortfall card, for its log line:
-    "#99's record hit 0 g on RCOI-1; no spool on RCOI-2"."""
+    "#99's record hit 0 g on RCOI-1; no spool on RCOI-2". `skip`: lines whose cause
+    a line of their own says (Decision 1's held heads)."""
     parts = [f"Spoolman didn't confirm #{r.get('sid')}'s write on {r.get('toolhead')}"
              for r in card.get("spools") or [] if r.get("unconfirmed_write")]
     for line, c in sorted((card.get("shortfall_causes") or {}).items(),
                           key=lambda kv: (0, int(kv[0])) if str(kv[0]).isdigit() else (1, str(kv[0]))):
+        if str(line) in {str(x) for x in skip}:
+            continue
         head = c.get("toolhead") or f"T{line}"
         sid = c.get("sid")
-        if c.get("why") == "ran_out":
+        if c.get("why") == "weighed":
+            parts.append(f"#{sid} on {head} changed weight after the print ended")
+        elif c.get("why") == "ran_out":
             # Round 2 (R3): every spool of the head whose record hit 0 g.
             ids = c.get("sids") if isinstance(c.get("sids"), list) and len(c.get("sids")) > 1 else None
             parts.append(f"the records of {_and_list(f'#{s}' for s in ids)} hit 0 g on {head}" if ids
                          else f"#{sid}'s record hit 0 g on {head}")
         elif c.get("why") == "no_spool":
             parts.append(f"no spool on {head}")
+        elif c.get("why") == "two_spools" and c.get("mmu_shared"):
+            parts.append(f"MMU slots {_and_list(c['mmu_shared'])} share one Position")
         elif c.get("why") == "two_spools":
             ids = c.get("sids") or []
             both = ", ".join(f"#{s}" for s in ids)
@@ -928,6 +1059,7 @@ def _shortfall_reasons(card):
     return "; ".join(parts) or "no spool took it"
 
 
+@_sharing_one_list_read
 def _snapshot_active_spools(printer_name, fb_url, active_locs=None):
     """Resolve {toolhead_position: the single loaded sid, or None} for `printer_name`,
     using the SAME per-position alias-fallthrough + ghost-vs-current pick as
@@ -964,6 +1096,7 @@ def _snapshot_active_spools(printer_name, fb_url, active_locs=None):
     return snap
 
 
+@_sharing_one_list_read
 def _heads_snapshot(printer_name, fb_url, active_locs=None):
     """Group 43.3 — every head of `printer_name` with the spool on it now:
     [{toolhead, position, sid}], `sid` None when the head is empty or ambiguous.
@@ -1018,6 +1151,9 @@ _HEADS_WORDS = {
     "restart": "when FCC restarted after the print",
     "job_change": "when the next print started",
     "late": "when FCC logged the print",
+    # Group 64.3 (4): an end straight from an ATTENTION park (a cancel from the
+    # printer's prompt) names the spools read when it first parked.
+    "park": "when the printer paused",
     "start": "when the print started",
     "during": "during the print",
 }
@@ -1044,6 +1180,88 @@ def _say_where_heads_were_read(record, source, read_at):
         record["heads_read_at"] = read_at
 
 
+def _mmu_slot_ids():
+    """Group 64.6: the LocationIDs (upper case) whose Type is "MMU Slot"; an empty
+    set when the locations can't be read (then no MMU guard applies)."""
+    try:
+        return {str(r.get('LocationID', '')).strip().upper()
+                for r in locations_db.load_locations_list() or []
+                if isinstance(r, dict) and str(r.get('Type', '')).strip() == locations_db.MMU_SLOT_TYPE}
+    except Exception:
+        return set()
+
+
+def _mmu_slot_holders(active_locs, pos, mmu_ids):
+    """Group 64.6 (Derek, 2026-11-20: each MMU slot gets its own toolhead number):
+    [(slot id, its spools)] for each MMU slot at toolhead position `pos` holding a
+    spool now (the directly loaded one over a stale trail). Two or more mean the
+    printer's MMU slots share one toolhead number, so FCC can't tell which slot's
+    spool printed: the caller asks instead of charging the first slot's."""
+    out = []
+    for loc_id, p_info in active_locs or []:
+        if p_info.get('position', 0) != pos or str(loc_id).upper() not in mmu_ids:
+            continue
+        sids, _amb = spoolman_api.select_deduct_targets(loc_id)
+        if sids:
+            out.append((str(loc_id).upper(), list(sids)))
+    return out
+
+
+def _shared_mmu_head(loc_id, pos, holders):
+    """The head entry for MMU slots sharing one toolhead number, each holding a
+    spool: every spool they hold, no one spool named, the slots in `mmu_shared`."""
+    sids = []
+    for _slot, ss in holders:
+        for s in ss:
+            if s not in sids:
+                sids.append(s)
+    return {"toolhead": str(loc_id).upper(), "position": pos, "sid": None, "sids": sids,
+            "mmu_shared": [slot for slot, _ss in holders]}
+
+
+def _mmu_shared_note(holders):
+    """Group 64 full review (SP4): the card's note for MMU slots sharing one toolhead
+    number, each holding a spool now (no print-end read to name them), in the words
+    the print-end card uses (_explain_unresolved_lines)."""
+    slots = _and_list(slot for slot, _ss in holders)
+    sids = []
+    for _slot, ss in holders:
+        sids.extend(s for s in ss if s not in sids)
+    return (f"MMU slots {slots} share one Position and each holds a spool ({_and_list(f'#{s}' for s in sids)}), "
+            f"so FCC can't tell which slot printed. Pick the spool it used; giving each MMU slot its own "
+            f"Position in Settings (slot 1 = Position 0, slot 2 = Position 1, …) lets FCC tell next time.")
+
+
+def _note_mmu_lines(record, mmu, uncharged):
+    """Group 64 full review (SP4) / fix review 2 (CS2 / CX5): on a card built with no
+    print-end read, each MMU position of `mmu` ({position: holders}) left without a row
+    is a line saying the slots share one Position, its picker offering each slot's
+    spool, and the log line's tail says so. Returns the tail (`uncharged` unchanged
+    when there is nothing to say)."""
+    if not mmu or not record.get("unresolved_usage"):
+        return uncharged
+    record["heads_at_end"] = _with_mmu_heads(record.get("heads_at_end") or [], mmu)
+    notes = {str(p): _mmu_shared_note(h) for p, h in mmu.items() if str(p) in record["unresolved_usage"]}
+    if not notes:
+        return uncharged
+    record["unresolved_notes"] = dict(record.get("unresolved_notes") or {}, **notes)
+    return _uncharged_tail(
+        record["unresolved_usage"],
+        {str(p): f"whose MMU slots {_and_list(s for s, _ss in h)} share one Position"
+         for p, h in mmu.items() if str(p) in notes},
+        record["heads_at_end"])
+
+
+def _with_mmu_heads(heads, mmu):
+    """A card's heads with each MMU position of `mmu` ({position: holders}) as one
+    entry naming every spool its slots hold (_shared_mmu_head), so the picker offers
+    each slot's spool, not only the first slot's (Group 64 full review, SP4)."""
+    out = [h for h in heads or [] if _norm_pos(h.get('position')) not in {_norm_pos(p) for p in mmu}]
+    for pos, holders in mmu.items():
+        out.append(_shared_mmu_head(holders[0][0], pos, holders))
+    return sorted(out, key=lambda h: _pos_order(h.get('position')))
+
+
 def _capture_print_heads(printer_name, fb_url):
     """The spool on each of `printer_name`'s heads now, picked exactly as the
     deduct picks (_apply_usage_to_printer): the printer's aliases in
@@ -1054,26 +1272,61 @@ def _capture_print_heads(printer_name, fb_url):
     (select_deduct_targets). Returns [{toolhead, position, sid, sids}] sorted by
     position, every position of the printer, an empty one named by its first
     alias: `sid` is the head's one spool, None when it is empty (`sids` []) or holds
-    two (`sids` [a, b]). Reads only. None on any failure."""
+    two (`sids` [a, b]). Reads only. None on any failure.
+
+    Group 64.3 (1): every head is read from ONE read of the spool list
+    (spoolman_api.one_spool_list_read), where each head was a whole-list GET of
+    its own, and a list FCC couldn't read is no read (None, one hub.log line), never
+    every head empty. Each head entry also keeps `used`, {sid: used_weight} of its
+    spools as the read had them, for Decision 1's check of a spool weighed between
+    the print's end and its charge (a stand-in for the per-location read gives no
+    records, and no `used`).
+
+    Group 64.6: an MMU's slots that share one toolhead number and each hold a spool
+    are one head holding all of those spools (`mmu_shared` names the slots), which
+    every caller asks about (two spools on a head), never the first slot's spool
+    charged: FCC can't tell which slot printed. Each slot with its own number is a
+    head of its own, as a toolchanger's are."""
     try:
-        printer_map = locations_db.get_active_printer_map()
-        active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
-        by_pos, decided = {}, set()
-        for loc_id, p_info in active_locs:
-            pos = p_info.get('position', 0)
-            if pos in decided:
-                continue
-            sids = spoolman_api.get_spools_at_location(loc_id)
-            if pos not in by_pos:
-                by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos, "sid": None, "sids": []}
-            if not sids:
-                continue  # the next alias for this position may hold it
-            decided.add(pos)
-            if len(sids) > 1:
-                sids, _amb = spoolman_api.select_deduct_targets(loc_id)
-            sids = list(sids or [])
-            by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos,
-                           "sid": sids[0] if len(sids) == 1 else None, "sids": sids}
+        with spoolman_api.one_spool_list_read() as read:
+            printer_map = locations_db.get_active_printer_map()
+            active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+            mmu_ids = _mmu_slot_ids()
+            by_pos, decided = {}, set()
+            for loc_id, p_info in active_locs:
+                pos = p_info.get('position', 0)
+                if pos in decided:
+                    continue
+                sids = spoolman_api.get_spools_at_location(loc_id)
+                if pos not in by_pos:
+                    by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos, "sid": None, "sids": []}
+                if not sids:
+                    continue  # the next alias for this position may hold it
+                decided.add(pos)
+                if len(sids) > 1:
+                    sids, _amb = spoolman_api.select_deduct_targets(loc_id)
+                sids = list(sids or [])
+                by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos,
+                               "sid": sids[0] if len(sids) == 1 else None, "sids": sids}
+                if str(loc_id).upper() in mmu_ids:
+                    holders = _mmu_slot_holders(active_locs, pos, mmu_ids)
+                    if len(holders) > 1:
+                        by_pos[pos] = _shared_mmu_head(loc_id, pos, holders)
+            if read.why:
+                state.logger.warning(f"🔎 {printer_name}: couldn't read the spool list for its heads "
+                                     f"({read.why}); this read of the heads isn't used.")
+                return None
+            for head in by_pos.values():
+                used = {}
+                for sid in head["sids"]:
+                    rec = read.record(sid)
+                    if isinstance(rec, dict) and rec.get('used_weight') is not None:
+                        try:
+                            used[str(sid)] = float(rec['used_weight'])
+                        except (TypeError, ValueError):
+                            continue
+                if used:
+                    head["used"] = used
         return [by_pos[p] for p in sorted(by_pos, key=lambda p: (0, p) if isinstance(p, int) else (1, str(p)))]
     except Exception:
         return None
@@ -1102,8 +1355,13 @@ def _usable_heads(end_heads):
         if not isinstance(h, dict) or not h.get('toolhead'):
             continue
         sids = _head_sids(h)
-        heads.append({"toolhead": str(h['toolhead']).upper(), "position": _norm_pos(h.get('position')),
-                      "sid": sids[0] if len(sids) == 1 else None, "sids": sids})
+        entry = {"toolhead": str(h['toolhead']).upper(), "position": _norm_pos(h.get('position')),
+                 "sid": sids[0] if len(sids) == 1 else None, "sids": sids}
+        if isinstance(h.get('used'), dict):
+            entry["used"] = dict(h['used'])   # each spool's used weight at the read (64.3 (1))
+        if isinstance(h.get('mmu_shared'), list) and h['mmu_shared']:
+            entry["mmu_shared"] = list(h['mmu_shared'])   # MMU slots sharing its number (64.6)
+        heads.append(entry)
     if not any(h['sids'] for h in heads):
         return None
     return heads, str(end_heads.get('source') or 'print_end'), end_heads.get('at')
@@ -1138,6 +1396,30 @@ def _swap_points(swap_log):
     at the swaps (_compute_cancel_usage's `swap_points`). [] when there is none."""
     events = swap_log if isinstance(swap_log, list) else []
     return sorted({p for p in (_swap_point(ev) for ev in events if isinstance(ev, dict)) if p is not None})
+
+
+def _reached_at_least(progress, swap_log=None, pause_progress=None):
+    """How far a print got, at least (Group 64.2 (10)): its latched `progress`, and
+    no less than the frozen progress of a park it was in (`pause_progress`, sampled
+    at ATTENTION) or the point of its last recorded swap: the print reached both.
+    The latch's progress is the high-water of the job samples, which can lag them
+    by a poll (an ATTENTION park freezes the job past the last PRINTING sample), so
+    a cancel during the pause was computed short of the park, and a swap recorded
+    past it was refused as a split (its figure ran past the cancel's partial) and
+    held as a set to split by hand."""
+    try:
+        reached = float(progress or 0.0)
+    except (TypeError, ValueError):
+        reached = 0.0
+    try:
+        if pause_progress is not None:
+            reached = max(reached, float(pause_progress))
+    except (TypeError, ValueError):
+        pass
+    points = _swap_points(swap_log)
+    if points:
+        reached = max(reached, points[-1])
+    return max(0.0, min(1.0, reached))
 
 
 def _swaps_by_position(swap_log):
@@ -1193,8 +1475,14 @@ def _held_heads(heads, start_spools, swap_log, usage_map):
         head = by_pos.get(pos) or {}
         sids = _head_sids(head)
         info = {"toolhead": head.get('toolhead') or f"T{pos}", "sids": sids, "start": start.get(pos)}
+        if head.get('mmu_shared'):
+            info["mmu_shared"] = list(head['mmu_shared'])      # Group 64.6
         if swaps.get(pos):
             held[pos] = dict(info, why="swapped", events=swaps[pos])
+            if _split_start_check(start.get(pos), swaps[pos]):
+                # Group 64 full review (SP1): a swap that took off a spool FCC didn't see
+                # go on is no split; the head is a set of every spool it had.
+                held[pos]["split"] = "start_differs"
         elif len(sids) > 1:
             held[pos] = dict(info, why="two_spools")
         elif len(sids) == 1 and _is_sid_swap(running.get(pos), sids[0]):
@@ -1281,7 +1569,9 @@ def _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_c
     stays held, its `split` saying why: the print-end read names another spool
     than the last swap loaded ("end_differs"), no spool ("end_empty") or two
     ("end_two"); else the walk gave no figures for its swaps, or figures that go
-    backwards or past the cancel ("unmeasured")."""
+    backwards or past the cancel ("unmeasured"). A head whose swaps don't follow on
+    from the spool FCC saw before each ("start_differs", put on `held` by _held_heads)
+    is never split (Group 64 full review, SP1)."""
     out = {}
     swapped = {p: i for p, i in held.items() if i.get('why') == 'swapped'}
     if not swapped:
@@ -1291,14 +1581,11 @@ def _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_c
     path_g = _path_filament_g(printer_name)
     for pos, info in swapped.items():
         events = info.get('events') or []
-        sids = _head_sids(by_pos.get(pos))
-        last = events[-1].get('to_sid') if events else None
-        if not sids:
-            info['split'] = 'end_empty'
-        elif len(sids) > 1:
-            info['split'] = 'end_two'
-        elif str(sids[0]) != str(last):
-            info['split'] = 'end_differs'
+        if info.get('split') == 'start_differs':
+            continue
+        refused = _split_end_check(by_pos.get(pos), events)
+        if refused:
+            info['split'] = refused
         else:
             try:
                 segs = _compute_swap_split(usage_map, events, start_spools, swap_cums or {},
@@ -1311,6 +1598,56 @@ def _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_c
             else:
                 info['split'] = 'unmeasured'
     return out
+
+
+def _split_end_check(head, events):
+    """Why the print-end read refuses a head's split at its recorded swaps, or None
+    (Group 64.2 (9): one rule for a cancel's split, _split_held_swaps, and a
+    completion's, _route_completion_to_review). "end_differs": the read names
+    another spool than the last swap loaded, one FCC never saw loaded during the
+    print, so part of the last segment may be that spool's; "end_empty": no spool;
+    "end_two": two or more. A refused head is held as a set of every spool it had,
+    nothing pre-filled (a change during the print always asks)."""
+    sids = _head_sids(head)
+    last = events[-1].get('to_sid') if events else None
+    if not sids:
+        return 'end_empty'
+    if len(sids) > 1:
+        return 'end_two'
+    if str(sids[0]) != str(last):
+        return 'end_differs'
+    return None
+
+
+def _chain_break(start, events):
+    """(k, before) for the first recorded swap at a head whose `from_sid` isn't the
+    spool FCC saw feeding the head before it (`before`: the start snapshot's spool for
+    the first swap, the swap before's `to_sid` after that), else None. A swap recorded
+    against the park read (64.3 (4)) takes off the spool that read named, which can be
+    one moved onto the head while it printed: a change FCC saw but can't place (Group
+    64 full review, SP1). With no start spool, the first swap's `from_sid` is the
+    start, as the split takes it. `events` in the order they were recorded."""
+    try:
+        evs = [e for e in events or [] if isinstance(e, dict)]
+        if not evs:
+            return None
+        before = start if start is not None else evs[0].get('from_sid')
+        for k, ev in enumerate(evs):
+            if str(ev.get('from_sid')) != str(before):
+                return k, before
+            before = ev.get('to_sid')
+    except Exception:
+        return None
+    return None
+
+
+def _split_start_check(start, events):
+    """"start_differs" when a head's recorded swaps don't follow on from the spool FCC
+    saw before each (_chain_break), else None. A split there pre-filled the spool before
+    the break with the stretch the spool taken off ran, and gave the spool taken off
+    nothing (Group 64 full review, SP1). The head is held as a set of every spool it had
+    (_set_spools), nothing pre-filled: a change during the print always asks."""
+    return 'start_differs' if _chain_break(start, events) is not None else None
 
 
 def _accept_splits(printer_name, job_id, split, rows, held, heads):
@@ -1373,8 +1710,8 @@ def _splits_sharing_a_row(split, rows):
 
 def _set_spools(info, head):
     """[(sid, when)]: the spools a held head had during the print, in the order FCC
-    saw them (the start spool, each recorded swap's, then the print-end read's;
-    `when` start / during / end). Only a head whose spool changed during the print
+    saw them (the start spool, each recorded swap's, the spool it took off and the one
+    it put on, then the print-end read's; `when` start / during / end). Only a head whose spool changed during the print
     (`why` swapped or changed) is a set; [] for any other."""
     if (info or {}).get('why') not in ('swapped', 'changed'):
         return []
@@ -1389,6 +1726,9 @@ def _set_spools(info, head):
         first = events[0].get('from_sid')
     _add(first, 'start')
     for ev in events:
+        # Group 64 full review (SP1): a swap that took off a spool FCC didn't see go on
+        # (recorded against the park read) names it, and the set offers it.
+        _add(ev.get('from_sid'), 'during')
         _add(ev.get('to_sid'), 'during')
     for sid in _head_sids(head):
         _add(sid, 'end')
@@ -1477,7 +1817,15 @@ def _explain_unresolved_lines(unresolved, heads, held, start_spools, unread, wor
                                    for ev in info['events'])
             phrases[line] = f"whose spool was swapped during the print ({steps})"
             split = info.get('split')
-            if split == "end_differs":
+            brk = _chain_break(info.get('start'), info.get('events')) if split == "start_differs" else None
+            if brk is not None:
+                # Group 64 full review (SP1).
+                k, before = brk
+                evs = info.get('events') or []
+                seen = (f"#{before} was on it {words['start']}" if k == 0 else
+                        f"#{before} went on at ~{_pct(evs[k - 1].get('progress'))}%")
+                why_not = f", but {seen}, and FCC didn't see when #{evs[k].get('from_sid')} took over"
+            elif split == "end_differs":
                 why_not = f", but #{sids[0]} was on it {words['end']}"
             elif split == "end_empty":
                 why_not = f", but no spool was on it {words['end']}"
@@ -1502,6 +1850,15 @@ def _explain_unresolved_lines(unresolved, heads, held, start_spools, unread, wor
             phrases[line] = f"which had #{info['start']} {words['start']} and #{sids[0]} {words['end']}"
             notes[line] = (f"FCC saw #{info['start']} {words['start']} and #{sids[0]} {words['end']}, "
                            f"but not when it changed{tail}")
+        elif why == "two_spools" and info.get('mmu_shared'):
+            # Group 64.6: MMU slots sharing one Position, each holding a spool.
+            slots = _and_list(info['mmu_shared'])
+            both = _and_list(f"#{s}" for s in sids)
+            notes[line] = (f"MMU slots {slots} share one Position and each held a spool {words['end']} "
+                           f"({both}), so FCC can't tell which slot printed. Pick the spool it used; giving "
+                           f"each MMU slot its own Position in Settings (slot 1 = Position 0, slot 2 = "
+                           f"Position 1, …) lets FCC tell next time.")
+            phrases[line] = f"whose MMU slots {slots} share one Position ({both})"
         elif why == "two_spools":
             # Round 2 (R3): FCC's record can put more than two spools on a head.
             both = _and_list(f"#{s}" for s in sids)
@@ -1538,6 +1895,7 @@ def _uncharged_tail(unresolved, phrases=None, heads=None):
     return " — " + "; ".join(parts) + " (pick it in the review)"
 
 
+@_sharing_one_list_read
 def _changed_since_end(printer_name, fb_url, heads):
     """D1: the heads whose spool changed after the print-end read, [(head,
     sid now)] for each head that held one spool then and holds another now. One
@@ -1560,6 +1918,404 @@ def _changed_since_end(printer_name, fb_url, heads):
         return []
 
 
+def _end_epoch(end_heads):
+    """The print-end read's moment in epoch seconds (`at_s`, Group 64), else its `at`
+    words read back in this machine's time, else None (then no order can be told)."""
+    if not isinstance(end_heads, dict):
+        return None
+    try:
+        if end_heads.get('at_s') is not None:
+            return float(end_heads['at_s'])
+    except (TypeError, ValueError):
+        pass
+    try:
+        return time.mktime(time.strptime(str(end_heads.get('at')), "%Y-%m-%d %H:%M:%S"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _clock(t):
+    """A moment as the log's words: "14:05", or "Nov 19 14:05" on another day."""
+    try:
+        at = time.localtime(float(t))
+    except (TypeError, ValueError, OverflowError):
+        return "?"
+    same_day = time.strftime("%Y-%m-%d", at) == time.strftime("%Y-%m-%d", time.localtime())
+    return time.strftime("%H:%M" if same_day else "%b %d %H:%M", at)
+
+
+def _weighed_info(sid, then, now, end_at, source=None):
+    """Decision 1's verdict on one head spool: None when its used weight `now` is
+    the print-end read's `then` plus FCC's own charges since (Group 64 review, S1:
+    another print's charge, landed after this print's end read, is no weighing;
+    weigh_stamps.charged_after), else {sid, then, now, ours, stamp, ended, source},
+    `ours` being those charges' grams and `source` where the heads were read
+    (print_end, park, restart, …), which the words name (Group 64 full review, WD2)."""
+    if abs(now - then) <= _WRITE_EPS:
+        return None
+    ours = weigh_stamps.charged_after(sid, end_at)
+    if abs(now - then - ours) <= _WRITE_EPS:
+        return None
+    return {"sid": sid, "then": round(then, 2), "now": round(now, 2), "ours": round(ours, 2),
+            "stamp": weigh_stamps.weighed_after(sid, end_at), "ended": end_at, "source": source}
+
+
+def _swap_left_at(swap_log):
+    """Group 64 full review (OR2 / SP2): {str(sid): when its share ended} for each spool
+    that left its head at a recorded swap and didn't come back to a head later in the
+    print: the swap's `at` (when the printer stopped for it). An event recorded before
+    swaps had a moment gives nothing."""
+    out = {}
+    try:
+        events = sorted((e for e in swap_log or [] if isinstance(e, dict)), key=lambda e: int(e.get('seq') or 0))
+        for ev in events:
+            out.pop(str(ev.get('to_sid')), None)      # on a head again: its share goes on
+            if ev.get('at') is not None and ev.get('from_sid') is not None:
+                out[str(ev['from_sid'])] = float(ev['at'])
+    except (TypeError, ValueError):
+        return {}
+    return out
+
+
+def _swap_back_spans(swap_log):
+    """Group 64 full review (FX5): {str(sid): [(left_at, back_at, back_cut)]} for each
+    time a spool left its head at a recorded swap and went back on at a later one:
+    when the printer stopped for the swap that took it off, when the print resumed
+    with it back on (the event's `back_at`, else, for an event recorded before it had
+    one, when the printer stopped for that swap: Group 64 fix review 2, CS1, a weighing
+    at that pause's prompt was missed), and where in the print the swap that put it
+    back cuts (_swap_point). A swap with no moment (recorded before swaps had one)
+    gives none."""
+    out = {}
+    try:
+        events = sorted((e for e in swap_log or [] if isinstance(e, dict)), key=lambda e: int(e.get('seq') or 0))
+        off = {}
+        for ev in events:
+            back = str(ev.get('to_sid'))
+            on_again = ev.get('back_at') if ev.get('back_at') is not None else ev.get('at')
+            if back in off and on_again is not None and _swap_point(ev) is not None:
+                out.setdefault(back, []).append((off.pop(back), float(on_again), _swap_point(ev)))
+            else:
+                off.pop(back, None)
+            if ev.get('at') is not None and ev.get('from_sid') is not None:
+                off[str(ev['from_sid'])] = float(ev['at'])
+    except (TypeError, ValueError):
+        return {}
+    return out
+
+
+def _back_weighed_words(info, grams, after):
+    """Decision 1's words for a spool weighed on FCC while it was off its head between
+    two swaps of the same print (Group 64 full review, FX5)."""
+    stamp = info.get('stamp') or {}
+    return (f"#{info.get('sid')} left {info.get('toolhead') or 'its head'} at a swap (at {_clock(info.get('left'))}) "
+            f"and was weighed on {stamp.get('how')} at {_clock(stamp.get('at'))}, before it went back on (at "
+            f"{_clock(info.get('back'))}): the scale already counted its {grams - after:.2f} g before that swap, "
+            f"so only the {after:.2f} g it printed after going back on is filled in")
+
+
+def _left_weighed_words(info, grams):
+    """Decision 1's words for a spool that left its head at a swap and was weighed on
+    FCC after that (Group 64 full review, OR2 / SP2)."""
+    stamp = info.get('stamp') or {}
+    return (f"#{info.get('sid')} left {info.get('toolhead') or 'its head'} at a swap (at {_clock(info.get('ended'))}) "
+            f"and was weighed on {stamp.get('how')} at {_clock(stamp.get('at'))}, after its share of this print "
+            f"ended, so the scale already counted its {grams:.2f} g")
+
+
+def _card_end_at(rec):
+    """A card's print-end moment in epoch seconds (`end_at_s`), else its
+    `heads_read_at` words read back (a card from before the full review), else None."""
+    try:
+        if rec.get("end_at_s") is not None:
+            return float(rec["end_at_s"])
+    except (TypeError, ValueError):
+        pass
+    return _end_epoch({"at": rec.get("heads_read_at")}) if rec.get("heads_read_at") else None
+
+
+def _card_end_used(rec, sid):
+    """The used weight the print-end read kept for spool `sid` on a card (its
+    heads_at_end entries' `used`, 64.3 (1)), else None."""
+    for h in rec.get("heads_at_end") or []:
+        used = h.get("used") if isinstance(h, dict) else None
+        if isinstance(used, dict) and str(sid) in used:
+            try:
+                return float(used[str(sid)])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _seen_mark(rec, row):
+    """The Decision 1 mark the card showed for a row's spool: the row's `weighed`, or
+    its shortfall line's cause when that line was a weighed one; None when the card
+    showed none."""
+    mark = row.get("weighed")
+    if isinstance(mark, dict):
+        return mark
+    cause = (rec.get("shortfall_causes") or {}).get(str(_norm_pos(row.get("position"))))
+    if isinstance(cause, dict) and cause.get("why") == "weighed" and str(cause.get("sid")) == str(row.get("sid")):
+        return dict(cause, stamp_at=cause.get("weighed_at"))
+    return None
+
+
+def _card_head_of(rec, sid):
+    """The toolhead a card's heads name spool `sid` on (the print-end read's entries
+    come before its offers), else None (Group 64 full review, FX6: a pick on an
+    uncharged-grams line was named on the line's head, "#300 on XL-1", for a spool
+    that was on XL-2)."""
+    for h in rec.get("heads_at_end") or []:
+        if not isinstance(h, dict):
+            continue
+        sids = h.get("sids") if isinstance(h.get("sids"), list) else [h.get("sid")]
+        if any(s is not None and str(s) == str(sid) for s in sids):
+            return h.get("toolhead")
+    return None
+
+
+def _hold_head(rec, row, sid):
+    """The head a hold's words name for spool `sid` on `row`: the row's own toolhead
+    when it names the spool's head (a row one spool's two heads merged into names them
+    both, "XL-4, XL-5"), else the head the card's heads name the spool on (a pick on
+    another head's line, Group 64 full review FX6), else the row's."""
+    own = _card_head_of(rec, sid)
+    th = row.get("toolhead")
+    if not own or own in [t.strip() for t in str(th or '').split(',')]:
+        return th or own
+    return own
+
+
+def _held_at_apply(rec, row, sid, used_now, shown=None):
+    """Decision 1 at a card's Apply, under the spool's lock (Group 64 full review: RW1 /
+    OR1 / SP3 / PR1, and OR2 / SP2 for a spool that left its head at a swap): the info
+    to hold row `row` with when spool `sid` changed after its print ended (or, having
+    left its head at a swap, was weighed on FCC after that) and the card didn't show
+    that change; else None. A change the card marked (_seen_mark) is one the person saw,
+    so their figure stands until the spool changes again. A card waits for its person,
+    and a spool weighed meanwhile was charged the card's grams on top of the scale.
+    `shown`: the spool's mark on the card's rows as they were before the picks rebuilt
+    them (Group 64 full review, FX1: a redirect, or any pick, sends the rows as picks,
+    which carry no mark, and a change the card showed was held again)."""
+    end_at = _card_end_at(rec)
+    then = _card_end_used(rec, sid)
+    mark = _seen_mark(rec, row) or (shown if isinstance(shown, dict) else None)
+    if then is not None and end_at is not None:
+        info = _weighed_info(sid, then, used_now, end_at, rec.get("heads_source"))
+        if info is None:
+            return None
+        if mark is not None and mark.get("then") is not None:
+            try:
+                if "ours" in mark:
+                    was = float(mark["now"]) - float(mark["then"]) - float(mark.get("ours") or 0)
+                    seen = info["now"] - info["then"] - info["ours"]
+                else:
+                    # Group 64 full review (FX4): a mark from before the full review keeps
+                    # no `ours`; it showed the change up to its `now`, FCC's charges in it.
+                    was = float(mark["now"]) - float(mark["then"])
+                    seen = info["now"] - info["then"]
+            except (TypeError, ValueError):
+                was = None
+            if was is not None and abs(seen - was) <= 0.02:
+                return None
+        return dict(info, toolhead=_hold_head(rec, row, sid))
+    left = (rec.get("swap_left_at") or {}).get(str(sid))
+    if left is None:
+        return None
+    stamp = weigh_stamps.weighed_after(sid, left)
+    if not stamp:
+        return None
+    try:
+        if mark is not None and mark.get("stamp_at") is not None and stamp["at"] <= float(mark["stamp_at"]) + 0.001:
+            return None
+    except (TypeError, ValueError):
+        pass
+    return {"sid": sid, "toolhead": _hold_head(rec, row, sid), "then": None,
+            "now": round(used_now, 2), "ours": 0.0, "stamp": stamp, "ended": float(left), "left": True}
+
+
+def _held_mark(late, grams):
+    """The row's new Decision 1 mark and its grams box's figure after a hold at Apply."""
+    words = _left_weighed_words(late, grams) if late.get("left") else _weighed_words(late, grams)
+    stamp = late.get("stamp") or {}
+    return {"weighed": {"words": words, "known_order": bool(stamp), "then": late.get("then"),
+                        "now": late.get("now"), "ours": late.get("ours"), "stamp_at": stamp.get("at"),
+                        "left": bool(late.get("left"))},
+            "prefill": 0.0 if stamp else round(float(grams or 0), 2)}
+
+
+def _end_watch(heads, end_heads):
+    """The print-end read's used weights for the apply's own check (Group 64 review,
+    S4): {"used": {sid: grams}, "end_at": epoch}, or None (no print-end read, no
+    moment, or no used weight kept)."""
+    end_at = _end_epoch(end_heads) if heads is not None else None
+    if end_at is None:
+        return None
+    used = {}
+    for h in heads or []:
+        if isinstance(h, dict) and isinstance(h.get('used'), dict):
+            for k, v in h['used'].items():
+                used[str(k)] = v
+    return {"used": used, "end_at": end_at, "source": (end_heads or {}).get('source')} if used else None
+
+
+def _changed_since_check(watch, sid, used):
+    """Group 64 review (S4): _weighed_info for spool `sid` as the apply reads it
+    under its lock (`used`), against the print-end read (`watch`, _end_watch). None
+    when there is nothing to compare or nothing changed."""
+    if not watch:
+        return None
+    then = (watch.get("used") or {}).get(str(sid))
+    if then is None or watch.get("end_at") is None:
+        return None
+    try:
+        return _weighed_info(sid, float(then), float(used), watch["end_at"], watch.get("source"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _weighed_since_end(heads, end_at, source=None):
+    """Decision 1 (Group 64; Derek, 2026-11-20): {position: info} for each head
+    spool whose used weight changed between the print-end read (which kept it,
+    `used`, 64.3 (1)) and now: FCC charges a print on top of the used weight as
+    Spoolman has it at the charge, so a spool weighed after the print ended would
+    count the print twice. FCC's own charges since the end read are no weighing:
+    they come off the change (_weighed_info; Group 64 review, S1). info is
+    {sid, toolhead, then, now, ours, stamp, ended}:
+    `stamp` is FCC's own weighing of the spool after the print ended
+    (weigh_stamps.weighed_after: then its grams default to 0, the scale having
+    counted them), or None when FCC can't tell the change's order (a weight typed
+    in Spoolman's own page, an edit FCC didn't stamp: the grams default to the
+    print's). One read of the spool list, a spool archived since read on its own;
+    a head whose end read kept no used weight, or a list FCC can't read, is not
+    checked (charged as before). Never raises."""
+    out = {}
+    if end_at is None:
+        return out          # no print-end moment (a read after the download): nothing to compare
+    try:
+        checked = [h for h in heads or [] if isinstance(h, dict) and isinstance(h.get('used'), dict)
+                   and h.get('sid') is not None and str(h.get('sid')) in h['used']]
+        if not checked:
+            return out
+        with spoolman_api.one_spool_list_read() as read:
+            if read.spools() is None:
+                return out
+            for h in checked:
+                sid = h['sid']
+                rec = read.record(sid)
+                if not isinstance(rec, dict):
+                    rec = spoolman_api.get_spool(sid)     # archived since: not in the list
+                if not (isinstance(rec, dict) and str(rec.get('id')) == str(sid)) \
+                        or rec.get('used_weight') is None:
+                    continue
+                try:
+                    then = float(h['used'][str(sid)])
+                    now = float(rec['used_weight'])
+                except (TypeError, ValueError):
+                    continue
+                info = _weighed_info(sid, then, now, end_at, source)
+                if info is not None:
+                    out[_norm_pos(h.get('position'))] = dict(info, toolhead=h.get('toolhead'))
+    except Exception as e:
+        state.logger.debug(f"Decision 1's check of the heads skipped: {e}")
+        return {}
+    return out
+
+
+def _after_words(source):
+    """Decision 1's "after ..." for the moment the heads were read (Group 64 full
+    review, WD2): "after this print ended" for a print-end read, else the card's own
+    words for where they were read ("after the printer paused" for a park read, which
+    a cancel from the printer's prompt takes: the print ended later, and a weighing
+    during the pause was said to be after it)."""
+    if source in (None, "print_end"):
+        return "after this print ended"
+    when = _HEADS_WORDS.get(source) or _HEADS_WORDS["late"]
+    return "after " + when[len("when "):] if when.startswith("when ") else f"after FCC read the heads {when}"
+
+
+def _weighed_words(info, grams):
+    """What a held spool's line and log line say (Decision 1), the person's words."""
+    sid, head = info.get('sid'), info.get('toolhead') or "its head"
+    ended = f" (at {_clock(info['ended'])})" if info.get('ended') else ""
+    after = _after_words(info.get('source'))
+    stamp = info.get('stamp')
+    if stamp:
+        return (f"#{sid} on {head} was weighed on {stamp.get('how')} at {_clock(stamp.get('at'))}, "
+                f"{after}{ended}, so the scale already counted its {grams:.2f} g")
+    try:
+        ours = float(info.get('ours') or 0)
+    except (TypeError, ValueError):
+        ours = 0.0
+    by_fcc = f", {ours:.2f} g of it charged by FCC since" if ours > _WRITE_EPS else ""
+    return (f"#{sid} on {head} changed weight {after}{ended} ({info.get('then'):.2f} g "
+            f"used then, {info.get('now'):.2f} g now{by_fcc}), and FCC can't tell whether the scale "
+            f"counted this print's {grams:.2f} g")
+
+
+def _mark_weighed_rows(rows, heads, end_at, left_at=None, source=None, back_spans=None):
+    """Decision 1 on a review card (Group 64): each row whose spool changed weight
+    since the print-end read (_weighed_since_end) carries `weighed` (the words, and
+    whether FCC knows the weighing came after the print) and `prefill`, what its
+    grams box is filled in with: 0 g when FCC weighed it after the end (the scale
+    counted the print), else the row's grams. The row's own `grams` stay the print's,
+    so the card's total and its shortfall still count them. Returns the rows."""
+    weighed = _weighed_since_end(heads, end_at, source) if rows else {}
+    for r in rows or []:
+        info = weighed.get(_norm_pos(r.get('position')))
+        if not info or str(info.get('sid')) != str(r.get('sid')):
+            continue
+        grams = round(float(r.get('grams') or 0), 2)
+        r["weighed"] = {"words": _weighed_words(info, grams), "known_order": bool(info.get("stamp")),
+                        "then": info.get("then"), "now": info.get("now"), "ours": info.get("ours"),
+                        "stamp_at": (info.get("stamp") or {}).get("at")}
+        r["prefill"] = 0.0 if info.get("stamp") else grams
+    # Group 64 full review (OR2 / SP2): a row whose spool left its head at a swap
+    # (`left_at`, _swap_left_at) and was weighed on FCC after that: the scale counted
+    # its share. A change with no stamp can't be told (no read of it was kept then).
+    for r in rows or []:
+        at = (left_at or {}).get(str(r.get('sid')))
+        if r.get("weighed") or at is None:
+            continue
+        stamp = weigh_stamps.weighed_after(r.get('sid'), at)
+        if not stamp:
+            continue
+        grams = round(float(r.get('grams') or 0), 2)
+        info = {"sid": r.get('sid'), "toolhead": r.get('toolhead'), "stamp": stamp, "ended": at}
+        r["weighed"] = {"words": _left_weighed_words(info, grams), "known_order": True, "left": True,
+                        "stamp_at": stamp.get("at")}
+        r["prefill"] = 0.0
+    # Group 64 full review (FX5): a row whose spool left its head at a swap, was
+    # weighed on FCC while it was off, and went back on later in the print (`back_spans`,
+    # _swap_back_spans): the scale counted every stretch before it left, so only the
+    # stretches after it went back on are filled in. Its row had no mark, and the
+    # stretch before was charged on top of the scale.
+    for r in rows or []:
+        spans = (back_spans or {}).get(str(r.get('sid')))
+        if r.get("weighed") or not spans:
+            continue
+        segs = r.get('segments') if isinstance(r.get('segments'), list) else []
+        if not segs or any(not isinstance(s, dict) or s.get('grams') is None for s in segs):
+            continue
+        for left_t, back_t, cut in reversed(spans):
+            stamp = weigh_stamps.weighed_after(r.get('sid'), left_t)
+            if not stamp or float(stamp.get("at") or 0) > back_t:
+                continue
+            after = round(sum(float(s['grams']) for s in segs
+                              if s.get('from') is not None and float(s['from']) >= cut - 1e-6), 2)
+            grams = round(float(r.get('grams') or 0), 2)
+            info = {"sid": r.get('sid'), "toolhead": r.get('toolhead'), "stamp": stamp, "left": left_t,
+                    "back": back_t}
+            # `back` (Group 64 fix review 2, CX4): the page words this mark as its own
+            # kind; what it fills in is the stretch the scale didn't count, never 0 g.
+            r["weighed"] = {"words": _back_weighed_words(info, grams, after), "known_order": True, "left": True,
+                            "back": True, "stamp_at": stamp.get("at")}
+            r["prefill"] = after
+            break
+    return rows
+
+
+@_sharing_one_list_read
 def _row_notes_after_end(printer_name, fb_url, heads, rows, words):
     """D1 on a card: {sid: note} for each row whose head holds another spool now
     than the one the print-end read named. The row keeps the print-end spool."""
@@ -1570,31 +2326,6 @@ def _row_notes_after_end(printer_name, fb_url, heads, rows, words):
             notes.setdefault(str(head['sid']), []).append(
                 f"#{now} is on {head.get('toolhead')} now; #{head['sid']} was on it {words['end']}.")
     return {k: " ".join(v) for k, v in notes.items()}
-
-
-def _split_disagreements(split, heads, swap_log, words):
-    """{sid: note} for a split head whose print-end read names another spool than
-    the last one FCC saw loaded there during the print (critique hole 1). The split
-    stands, since the start snapshot and the recorded swaps say which spools
-    printed it; the note goes under the last segment's row. Best-effort."""
-    notes = {}
-    try:
-        end = {_norm_pos(h.get('position')): h for h in heads}
-        swaps = _swaps_by_position(swap_log)
-        for pos in split or {}:
-            events = swaps.get(_norm_pos(pos)) or []
-            head = end.get(_norm_pos(pos)) or {}
-            sids = _head_sids(head)
-            if not events or len(sids) != 1:
-                continue
-            last = events[-1].get('to_sid')
-            if _is_sid_swap(last, sids[0]):
-                notes[str(last)] = (f"{head.get('toolhead')} had #{sids[0]} {words['end']}, but the last swap "
-                                    f"FCC recorded there loaded #{last}. The split charges the spools FCC saw "
-                                    f"printing: check it before you confirm.")
-    except Exception as e:
-        state.logger.debug(f"split notes skipped: {e}")
-    return notes
 
 
 def _merge_notes(*maps):
@@ -1663,7 +2394,23 @@ def _is_sid_swap(before, after):
     return before is not None and after is not None and str(before) != str(after)
 
 
-def _record_swap_events(entry, end_snap, progress, runout=False):
+def _park_mapping(park_heads):
+    """Group 64.3 (4): {position(str): the one spool on it, or None} from a park read
+    (`park_heads['heads']`), for the resume's swap check; None when it holds none."""
+    heads = (park_heads or {}).get("heads") if isinstance(park_heads, dict) else None
+    if not isinstance(heads, list) or not heads:
+        return None
+    out = {}
+    for h in heads:
+        if not isinstance(h, dict) or h.get("position") is None:
+            continue
+        sids = _head_sids(h)
+        pos = str(_norm_pos(h.get("position")))
+        out[pos] = sids[0] if len(sids) == 1 and pos not in out else None
+    return out or None
+
+
+def _record_swap_events(entry, end_snap, progress, runout=False, before=None, at=None):
     """22.3(b): append ordered mid-print spool-swap events to entry['swap_log'] by
     diffing a resume-time snapshot (`end_snap` = {position: loaded sid or None}) against
     the mapping in effect for the segment just printed — start_spools advanced by the
@@ -1677,7 +2424,19 @@ def _record_swap_events(entry, end_snap, progress, runout=False):
     append order so a downstream apportionment can align segment k → the spool loaded
     after the k-th resume. Detection only fires when the spool MAPPING changes — i.e.
     an FCC eject/load at the pause updates Spoolman `location`; a purely physical roll
-    swap with no FCC action is invisible (documented limitation, same as 22.3(c))."""
+    swap with no FCC action is invisible (documented limitation, same as 22.3(c)).
+
+    `before` (Group 64.3 (4)): the mapping read when the printer first parked at
+    ATTENTION (_park_mapping), the spools that were feeding the segment when it
+    stopped; it stands for the start mapping advanced by the swaps, position by
+    position, where it names one.
+
+    `at` (Group 64 full review, OR2 / SP2): when the printer stopped printing for this
+    pause (print_monitor's `paused_at`), kept on each event as `at`: the end of the
+    share of the spool the swap took off, so a weighing of it after that moment is one
+    the scale counted its share in (Decision 1, _swap_left_at). `back_at` (Group 64 fix
+    review 2, CS1): when the print resumed, the event's own recording moment, which
+    ends the time the spool it put on was off a head (_swap_back_spans)."""
     start = entry.get('start_spools') or {}
     log = list(entry.get('swap_log') or [])
     # Reconstruct what the just-printed segment was feeding from: the start mapping,
@@ -1685,6 +2444,9 @@ def _record_swap_events(entry, end_snap, progress, runout=False):
     running = {str(k): v for k, v in start.items()}
     for ev in log:
         running[str(ev.get('position'))] = ev.get('to_sid')
+    for pos, sid in (before or {}).items():
+        if sid is not None:
+            running[str(pos)] = sid
     added = 0
     for pos, to_sid in end_snap.items():
         from_sid = running.get(str(pos))
@@ -1701,13 +2463,20 @@ def _record_swap_events(entry, end_snap, progress, runout=False):
             # spool the sensor→nozzle `path_filament_g` remnant only on a runout.
             "runout": bool(runout),
         })
+        if at is not None:
+            log[-1]["at"] = float(at)
+        # Group 64 fix review 2 (CS1): when the print resumed (this runs at the resume),
+        # the end of the time the spool this swap put on was off a head: a weighing at
+        # the pause's prompt, before it went back on, is a weighing made while it was off.
+        log[-1]["back_at"] = time.time()
         added += 1
     if added:
         entry['swap_log'] = log
     return added
 
 
-def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content, reason=None):
+def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content, reason=None,
+                             cut_fraction=None):
     """Operator-facing log for a cancel whose partial we couldn't compute,
     distinguishing the reasons so a cancel never goes SILENTLY
     un-deducted. Returns the status string the caller should surface.
@@ -1742,7 +2511,18 @@ def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content, 
             "WARNING", "ffaa00")
         return "no_usage"
     has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
-    if has_footer and reason in (None, "nothing_reached"):
+    if (has_footer and reason in (None, "nothing_reached") and cut_fraction is not None
+            and prusalink_api._mmu_rule(content) and prusalink_api.pushed_before(content, cut_fraction)):
+        # Group 64 review (W1): an MMU print's count leaves out its first load, as the
+        # slicer's does (64.6), and that load can run into a purge line that printed.
+        # Only when E moved before the cut (`cut_fraction`, the decoded file's): a
+        # cancel during preheat keeps "before any extrusion" (fix review, FW1).
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
+            f"no partial usage to deduct: it was cancelled within the MMU's first load, "
+            f"which the slicer counts as no filament used (a purge line may have printed).",
+            "INFO")
+    elif has_footer and reason in (None, "nothing_reached"):
         state.add_log_entry(
             f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
             f"no partial usage to deduct (cancelled before any extrusion).",
@@ -1801,6 +2581,12 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
     extra = {"extra_fractions": list(swap_points)} if swap_points else {}
     prepared = prusalink_api.fetch_cancel_gcode(
         ip_address, api_key, filename, reached_fraction, **extra)
+    if isinstance(prepared, dict) and not prepared.get("gcode") and prepared.get("decode_error"):
+        # Group 64.4: the file downloaded, and FCC couldn't read it. Retryable, but
+        # not for 72 hours: the queue counts these on the print's record and gives
+        # the print up after a few (_enqueue_cancel_fetch's `decode_error`).
+        return None, {"status": "error", "reason": "undecodable", "job_id": job_id,
+                      "decode_error": str(prepared.get("decode_error"))}
     if not prepared or not prepared.get("gcode"):
         # Download failed. The dominant cause is NOT a permanent error: PrusaLink
         # 404s the raw-file download while the file is the SELECTED/active print
@@ -1853,7 +2639,7 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
             if not (ambiguous and reason != "nothing_reached"):
                 # Cancel-specific "weigh the spool" log.
                 _log_cancel_uncomputable(printer_name, filename, reached_fraction, content,
-                                         reason=reason)
+                                         reason=reason, cut_fraction=prepared.get("fraction"))
         return None, terminal
 
     # Single-toolhead printer + single-material print (Derek's Core One: one
@@ -1866,36 +2652,33 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
     # genuinely-ambiguous case falls through to the orphan warning instead.
     # Multi-head printers (XL / future INDX toolchanger) keep their per-tool map
     # untouched — there the tool index IS the toolhead position (1:1).
-    sole = None
-    try:
-        if len(usage_map) == 1:
-            pm = locations_db.get_active_printer_map()
-            positions = {info.get('position', 0) for info in pm.values()
-                         if info.get('printer_name') == printer_name}
-            if len(positions) == 1:
-                sole = next(iter(positions))
-                grams = next(iter(usage_map.values()))
-                usage_map = {sole: grams}
-    except Exception:
-        sole = None
+    # Group 64.1: the figures at the swaps are folded with the usage, onto the same
+    # position and read by the same tool (_fold_sole_tool), so a split charges the
+    # grams where the usage says they are, once.
+    figures = ({point: dict(cum) for point, cum in zip(swap_points, cums)}
+               if swap_points and len(cums) == len(swap_points) else None)
+    usage_map, figures, sole = _fold_sole_tool(printer_name, usage_map, figures)
 
     if measured:
         _warn_parse_gap(printer_name, filename, measured, sole_position=sole)
-    if cums_out is not None and swap_points and len(cums) == len(swap_points):
-        cums_out.update({point: dict(cum) for point, cum in zip(swap_points, cums)})
+    if cums_out is not None and figures:
+        cums_out.update(figures)
     return usage_map, None
 
 
 # Group 56.2 — how far a cancel's whole-file G-code walk may drift from the
-# slicer's footer, per head, before FCC says so. Arcs counted, real files land
-# within ~1.4% (the Core One fixture), ~0.01% (the raccoon INDX print) or ~0.9%
-# (the flexi-fox INDX print, its ;EXCLUDE_E moves left out as the slicer leaves
-# them out: counted, they walked to ~2.5x its footer; hotfix 2026-11-02; what is
-# left is each tool's last retract, which the slicer counts and the walk nets).
+# slicer's footer, per head, before FCC says so. Since Group 64.5 / 64.6 the walk is
+# the slicer's own count (its high-water rule, the ;EXCLUDE_E and ;FLUSH tags, one E
+# axis, an MMU print's parking rule): every capture here lands within 0.005 mm per
+# tool (the raccoon and flexi-fox INDX prints, the Core One MMU3 fixture, a
+# three-filament MMU3 slice, absolute-E slices). A head past 2% is a file FCC reads
+# differently from the slicer (a new tag, a firmware command it doesn't know).
 _PARSE_GAP_PCT = 2.0
-# ... and by at least this many grams: a Core One MMU3-profile file's start G-code
-# walks a fixed ~29 mm (~0.09 g) the slicer doesn't count, which is over 2% of any
-# print under ~4.4 g although nothing is misread (Group 56 review, round 2).
+# ... and by at least this many grams. Group 56 review, round 2, set it for a start
+# G-code the walk then counted and the slicer didn't, which 64.6 now counts as the
+# slicer does, so no capture needs it today (the check compares the walk's mm with
+# the footer's mm: the grams' rounding cancels out). It stays as a margin: a gap
+# under 0.1 g is too small to weigh a spool over, so the WARNING keeps quiet for it.
 _PARSE_GAP_MIN_G = 0.1
 
 
@@ -1911,6 +2694,47 @@ def _sole_position(printer_name, tools):
         return next(iter(positions)) if len(positions) == 1 else None
     except Exception:
         return None
+
+
+def _grams_at(cum, key):
+    """The grams a per-tool or per-position dict holds for `key` (an int or a
+    string, compared as one form), 0.0 when it holds none. Never another key's."""
+    want = _norm_pos(key)
+    for k, v in (cum or {}).items():
+        if _norm_pos(k) == want:
+            try:
+                return float(v or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def _fold_sole_tool(printer_name, usage_map, swap_cums=None):
+    """Put a one-position printer's sole-tool usage on its position (Group 64.1).
+
+    An MMU-profile file can mark tool 1 on a printer with one head, so its usage
+    is {1: g}, and the figures at its swaps, measured in the same walk, are keyed
+    by tool 1 too. Re-keyed together here, the usage {P: g} and each swap's figure
+    {P: that tool's own figure} (absent = 0, never another tool's), every later
+    step reads one key: the split at the swaps used to charge the grams at P while
+    _uncharged_usage left the same grams on a T1 line, so an Apply recorded a false
+    shortfall and a spool picked on that line was charged them twice.
+
+    Unchanged when the printer has several positions or its map can't be read
+    (_sole_position fails closed), and when the usage names no tool or several (a
+    multi-material print through one head is never summed onto one spool).
+    Returns (usage_map, swap_cums, the position folded onto or None)."""
+    tools = [t for t, g in (usage_map or {}).items() if (g or 0) > 0]
+    if len(tools) != 1:
+        return usage_map, swap_cums, None
+    sole = _sole_position(printer_name, tools)
+    if sole is None:
+        return usage_map, swap_cums, None
+    tool = tools[0]
+    usage = {sole: usage_map[tool]}
+    if swap_cums:
+        swap_cums = {point: {sole: _grams_at(cum, tool)} for point, cum in swap_cums.items()}
+    return usage, swap_cums, sole
 
 
 def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charged=True):
@@ -1964,7 +2788,8 @@ def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charge
 
 
 def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
-                           fb_url=None, ip_address=None, api_key=None):
+                           fb_url=None, ip_address=None, api_key=None, start_spools=None,
+                           swap_log=None, end_heads=None):
     """Compute + AUTO-APPLY the PARTIAL filament deduct for a CANCELLED print
     (FilaBridge absorption design §9). Exactly-once via the (printer, job_id)
     ledger; NEVER deducts the full estimate (that's the ~10x over-charge a
@@ -1981,6 +2806,16 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
     remains the canonical "compute-and-apply-in-one-shot" primitive (a future
     opt-in auto-mode / recompute action can call it) and shares its compute half
     with the preview path via _compute_cancel_usage.
+
+    The heads (Group 64.3 (8), before anything calls it: the job-1141 bug, where a
+    read made after the 20-minute download named a spool loaded meanwhile): with a
+    usable print-end read (`end_heads`, {heads, source, at}) it charges those
+    heads, never a read after its download, as the completion does. A head FCC
+    can't vouch for there (a swap recorded or a change seen during the print, from
+    `start_spools` / `swap_log`, or two spools at the end; _held_heads) sends the
+    whole print to the review instead, built from this same download and its
+    figures at the swaps: a one-shot can't ask. Without a usable read it reads the
+    heads after the download, as before.
     """
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
@@ -1989,6 +2824,10 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
         return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
     if _shortfall_card_exists(printer_name, job_id, filename, reached_fraction):
         return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
+    if not print_deduct_ledger._is_blank_job(job_id) and \
+            cancel_review_store.has_pending(printer_name, job_id):
+        # A review already holds this job: never charge it behind the card.
+        return {"status": "skipped", "reason": "already pending", "job_id": job_id}
 
     if not (ip_address and api_key):
         creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
@@ -1996,8 +2835,12 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
             return {"status": "error", "reason": "no credentials", "job_id": job_id}
         ip_address, api_key = creds.get('ip_address'), creds.get('api_key')
 
+    reached_fraction = _reached_at_least(reached_fraction, swap_log)
+    points = _swap_points(swap_log)
+    swap_cums = {}
     usage_map, terminal = _compute_cancel_usage(
-        printer_name, filename, job_id, reached_fraction, ip_address, api_key)
+        printer_name, filename, job_id, reached_fraction, ip_address, api_key,
+        **({"swap_points": points, "cums_out": swap_cums} if points else {}))
     if terminal is not None:
         if terminal["status"] == "no_usage":
             print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
@@ -2008,10 +2851,28 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
             _log_cancel_uncomputable(printer_name, filename, reached_fraction, None)
         return terminal
 
+    mapping = _usable_heads(end_heads)
+    heads = source = read_at = None
+    if mapping is not None:
+        heads, source, read_at = mapping
+        if _held_heads(heads, start_spools, swap_log, usage_map):
+            # A head FCC can't vouch for: the review asks about it, its rows and lines
+            # from the print-end read; nothing is charged here.
+            return _stash_cancel_review_from_heads(
+                printer_name, filename, job_id, reached_fraction, fb_url, False, usage_map,
+                mapping, start_spools, swap_log, swap_cums=swap_cums, end_at=_end_epoch(end_heads))
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
+    changes = _changed_since_end(printer_name, fb_url, heads) if heads is not None else []
     failed = []
     spools_updated, details, known = _apply_usage_to_printer(
-        printer_name, usage_map, fb_url, strategy_label="Cancel", failed_out=failed)
+        printer_name, usage_map, fb_url, strategy_label="Cancel", failed_out=failed,
+        **_given(heads=heads))
+    if spools_updated == 0 and not failed and heads is not None:
+        # Nothing charged from the print-end read (every used head empty, or naming
+        # a spool FCC can't read now): the card from the same read says which.
+        return _stash_cancel_review_from_heads(
+            printer_name, filename, job_id, reached_fraction, fb_url, False, usage_map,
+            mapping, start_spools, swap_log, swap_cums=swap_cums, end_at=_end_epoch(end_heads))
     if spools_updated == 0 and not failed:
         # Usage WAS computed but no spool is bound to the toolhead — don't burn a
         # terminal grams=0 ledger entry (it permanently blocks recovery). Stash a
@@ -2029,13 +2890,20 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
         f"🛑 Cancelled-print partial deduct on {printer_name}{_toolheads_charged(details)}: {total:.1f}g across "
         f"{spools_updated} spool(s) at ~{pct:.0f}% progress ('{_esc(filename)}').",
         "WARNING")
+    card = {}
+    if heads is not None:
+        # As the completion: say which spool changed since the print ended (it was
+        # charged nothing), and an uncharged-grams card's heads are the end read's.
+        _say_changed_since_end(printer_name, changes, details, _heads_words(source))
+        card = _given(heads=_card_heads(heads, start_spools, swap_log, usage_map),
+                      heads_source=source, heads_read_at=read_at)
     # Record the APPLIED grams (was sum(usage_map) = the full requested — the drift
     # the completed/cancel-review paths didn't have; 22.4(2)) + surface any shortfall
     # over known positions (22.4(3)).
     _record_applied_deduct(
         printer_name, job_id, filename=filename, scale=reached_fraction,
         details=details, usage_map=usage_map, known_positions=known, fb_url=fb_url,
-        failed=failed, read_heads=True)
+        failed=failed, read_heads=True, **card)
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
@@ -2154,10 +3022,12 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             # retries once the printer leaves FINISHED (→ IDLE, file unlocked).
             # Carry start_spools + swap_log so the retry still detects a mid-print
             # spool swap (the live latch is gone by then; 22.3 deferred-completion fix),
-            # and the print-end read, so the retry charges the spools it named.
+            # and the print-end read, so the retry charges the spools it named. A file
+            # that downloaded and couldn't be read is counted (Group 64.4).
             _enqueue_cancel_fetch(printer_name, filename, job_id, 1.0, kind="complete",
                                   start_spools=start_spools, swap_log=swap_log,
-                                  **_given(end_heads=end_heads))
+                                  **_given(end_heads=end_heads,
+                                           decode_error=terminal.get("decode_error")))
             return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
                     "job_id": job_id}
         return terminal
@@ -2218,30 +3088,45 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             printer_name, filename, job_id, usage_map, fb_url, sorted(changed),
             active_locs=active_locs, swap_log=swap_log, start_spools=start_spools,
             **_given(heads=heads, heads_source=source, heads_read_at=read_at,
-                     swap_cums=swap_cums or None))
+                     swap_cums=swap_cums or None,
+                     end_at=_end_epoch(end_heads) if heads is not None else None))
 
     # D1: one read of the heads right before the apply, to say which spool changed
     # since the print ended. It never changes what is charged.
     changes = _changed_since_end(printer_name, fb_url, heads) if heads is not None else []
+    # Decision 1 (Group 64; Derek, 2026-11-20): a head spool whose used weight
+    # changed since the print ended is not charged now (the scale may have counted
+    # this print already): its grams wait on the uncharged-grams card, filled in
+    # with 0 g when FCC weighed it after the end, else with the print's grams, and
+    # loudly noted. The print's other heads charge as usual.
+    weighed = _weighed_since_end(heads, _end_epoch(end_heads), source) if heads is not None else {}
+    charge_now = ({p: g for p, g in usage_map.items() if _norm_pos(p) not in weighed}
+                  if weighed else usage_map)
     if before_charge is not None:
         # The deferred-fetch loop's persistent claim (Group 56 review, round 4):
         # stamps its queue entry right before the first spool write. If the stamp
         # can't be written, this raises before anything is charged.
         before_charge()
     failed = []
+    watch = _end_watch(heads, end_heads)
+    late = {}
     try:
         spools_updated, details, known = _apply_usage_to_printer(
-            printer_name, usage_map, fb_url, strategy_label="Complete", active_locs=active_locs,
-            failed_out=failed, **_given(heads=heads))
+            printer_name, charge_now, fb_url, strategy_label="Complete", active_locs=active_locs,
+            failed_out=failed, **_given(heads=heads, watch=watch,
+                                        held_out=late if watch is not None else None))
     except Exception as e:
         raise CompletionMayHaveCharged(
             f"{e} (raised while charging the spools: some may already be charged)") from e
+    if late:
+        # Group 64 review (S4): a head the apply's own check held, as the one above.
+        weighed = {**weighed, **late}
     card = {}
     if heads is not None:
         _say_changed_since_end(printer_name, changes, details, _heads_words(source))
         card = _given(heads=_card_heads(heads, start_spools, swap_log, usage_map),
                       heads_source=source, heads_read_at=read_at)
-    if spools_updated == 0 and not failed and heads is not None:
+    if spools_updated == 0 and not failed and heads is not None and not weighed:
         # Nothing charged from the print-end read: every used head was empty, held
         # two spools, or names a spool FCC can't read now. The card says which.
         by_pos = {h['position']: h for h in heads}
@@ -2253,8 +3138,10 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
         sets = _held_sets(unresolved, heads, held)
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0, usage_map=usage_map,
                                         no_spool=True, notes=notes, phrases=phrases,
-                                        **dict(card, **_given(sets=sets or None)))
-    if spools_updated == 0 and not failed:
+                                        **dict(card, **_given(sets=sets or None,
+                                                              swap_left_at=_swap_left_at(swap_log) or None,
+                                                              end_at_s=_end_epoch(end_heads))))
+    if spools_updated == 0 and not failed and not weighed:
         # Footer had usage but NO spool is bound at the active toolhead(s). Don't
         # burn a terminal grams=0 ledger entry (it permanently blocks recovery —
         # the 2026-06-13 silent-loss bug); stash a RECOVERABLE review carrying the
@@ -2275,13 +3162,18 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     # to avoid a double-warn — 22.4(2)/(3)).
     try:
         applied = round(sum(d["grams"] for d in details), 2)
-        state.add_log_entry(
-            f"✅ Completed-print deduct on {printer_name}{_toolheads_charged(details)}: {applied:.1f}g across "
-            f"{spools_updated} spool(s) ('{_esc(filename)}').", "SUCCESS")
+        if spools_updated or not weighed:
+            state.add_log_entry(
+                f"✅ Completed-print deduct on {printer_name}{_toolheads_charged(details)}: {applied:.1f}g across "
+                f"{spools_updated} spool(s) ('{_esc(filename)}').", "SUCCESS")
         _record_applied_deduct(
             printer_name, job_id, filename=filename, scale=1.0, details=details,
-            usage_map=usage_map, known_positions=known, fb_url=fb_url, active_locs=active_locs,
-            failed=failed, read_heads=True, **card)
+            usage_map=usage_map,
+            # Decision 1: `known` is every real head of the printer (a held one too),
+            # so a held head's grams are counted, and go on the card.
+            known_positions=known,
+            fb_url=fb_url, active_locs=active_locs,
+            failed=failed, read_heads=True, **dict(card, **_given(held=weighed or None)))
     except Exception as e:
         raise CompletionMayHaveCharged(
             f"{e} (raised after the spools were charged, before the job was recorded)") from e
@@ -2325,6 +3217,12 @@ def _tool_grams(cum, pos, allow_fold=True):
     you asked about" — folding there charges every position the one used tool's
     full grams. Mirrors the `len(positions) == 1` guard `_compute_cancel_usage`
     already applies to the same fold.
+
+    Group 64.1: nothing in the app calls this any more. The split reads each
+    figure by the one tool a one-position printer's usage names (_grams_at), the
+    usage and its figures folded onto the position together (_fold_sole_tool):
+    "any sole entry" read another tool's figure as this one's. Kept for its tests,
+    which pin the rule it describes.
     """
     if not cum:
         return 0.0
@@ -2361,7 +3259,18 @@ def _compute_swap_split(usage_map, swap_log, start_spools, swap_cums, path_filam
     `swap_cums` ({swap point: {tool: grams}}, _swap_point's keys) are the
     cumulative grams at each swap, measured in the same download and walk as the
     print's usage (_compute_cancel_usage's `cums_out`; hotfix 2026-11-11, D5): this
-    function downloads nothing. A swap with no figure there is no split."""
+    function downloads nothing. A swap with no figure there is no split.
+
+    `single_position` (a printer with one head; Group 64.1): the head stands for the
+    ONE tool its usage names, and the total and every swap's figure are read by
+    that tool (a figure it lacks is 0 g, never another tool's). The usage arrives
+    folded onto the position (_fold_sole_tool), its figures with it, so the split
+    charges the grams under the key the uncharged lines read. A usage naming
+    several tools (a multi-material print through one head), or swaps recorded at
+    several positions, can't be split: None, so the head asks. Before, any sole
+    entry was folded onto the position asked about, so a figure of another tool
+    could stand for this one's (the swap before T0 first printed, whose figure was
+    T1's)."""
     if not swap_log or not swap_cums:
         return None
     by_pos = {}
@@ -2371,6 +3280,12 @@ def _compute_swap_split(usage_map, swap_log, start_spools, swap_cums, path_filam
         by_pos.setdefault(_norm_pos(ev.get('position', 0)), []).append(ev)
 
     start_spools = start_spools or {}
+    sole_tool = None
+    if single_position:
+        tools = [t for t, g in (usage_map or {}).items() if (g or 0) > 0]
+        if len(tools) != 1 or len(by_pos) != 1:
+            return None
+        sole_tool = tools[0]
     result = {}
     for pos, evs in by_pos.items():
         points = [_swap_point(ev) for ev in evs]
@@ -2378,7 +3293,8 @@ def _compute_swap_split(usage_map, swap_log, start_spools, swap_cums, path_filam
             return None
         order = sorted(range(len(evs)), key=lambda i: points[i])
         evs, points = [evs[i] for i in order], [points[i] for i in order]
-        total = _tool_grams(usage_map, pos, allow_fold=single_position)
+        key = pos if sole_tool is None else sole_tool
+        total = _grams_at(usage_map, key)
         if total <= 0:
             return None  # no grams for a swapped position → don't guess
         seg_grams, prev = [], 0.0
@@ -2386,14 +3302,13 @@ def _compute_swap_split(usage_map, swap_log, start_spools, swap_cums, path_filam
             cum = swap_cums.get(point)
             if cum is None:
                 return None  # the walk didn't measure this swap
-            c = _tool_grams(cum, pos, allow_fold=single_position)
+            c = _grams_at(cum, key)
             # Cumulative must be monotonic and within the total; a bad remap/parse
             # that regresses or overshoots means we can't trust the split. Since
             # Group 56.2 each cumulative is the share of the tool's own walk reached,
             # times its footer, and never past it, so against a completion's footer
-            # an overshoot can only come from the single-position fold (another
-            # tool's figure); against a cancel's partial, from a swap recorded past
-            # the cancel. A swap captured late now splits as given instead of
+            # it can't overshoot; against a cancel's partial, a swap recorded past
+            # the cancel can. A swap captured late now splits as given instead of
             # falling back because the raw walk ran over its footer (the review
             # still shows both spools' grams before anything is charged).
             if c < prev - 0.01 or c > total + 0.01:
@@ -2458,7 +3373,7 @@ def _split_to_review_rows(split, active_locs=None):
     confirm's log line (43.5) when its position is one of the printer's.
 
     Each row carries its `segments` (hotfix 2026-11-11, scope B): [{from, to,
-    runout}] for each stretch of the print its spool fed, which the card shows
+    runout, grams}] for each stretch of the print its spool fed, which the card shows
     beside it ("start → 19%, ran out"). Spools are read through _spool_read, so
     one Spoolman no longer has (its 404 body) is no row: the split is refused."""
     head_of = {}
@@ -2472,8 +3387,11 @@ def _split_to_review_rows(split, active_locs=None):
             agg['grams'] += float(r.get('grams', 0) or 0)
             agg['runout'] = agg['runout'] or bool(r.get('runout'))
             if 'from' in r or 'to' in r:
+                # `grams` (Group 64 full review, FX5): the stretch's own grams, so a spool
+                # weighed while it was off its head is filled in only after it came back.
                 agg['segments'].append({'from': r.get('from'), 'to': r.get('to'),
-                                        'runout': bool(r.get('runout'))})
+                                        'runout': bool(r.get('runout')),
+                                        'grams': round(float(r.get('grams', 0) or 0), 2)})
     rows = []
     for sid, agg in by_sid.items():
         spool = _spool_read(sid)
@@ -2552,7 +3470,7 @@ def _carry_uncharged(record, unresolved, printer_name, fb_url, active_locs=None,
 def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_url,
                                changed_positions, active_locs=None, swap_log=None,
                                start_spools=None, heads=None, heads_source=None,
-                               heads_read_at=None, swap_cums=None):
+                               heads_read_at=None, swap_cums=None, end_at=None):
     """22.3 minimum-viable: a COMPLETED print where a used toolhead's mapped spool
     CHANGED mid-print is NOT auto-applied (the full footer would dump the whole
     tool's usage on the replacement spool, zeroing the run-out spool). Stash a
@@ -2589,6 +3507,11 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         return {"status": "skipped", "reason": "already processed", "job_id": job_id}
     if cancel_review_store.has_pending(printer_name, job_id):
         return {"status": "skipped", "reason": "already pending", "job_id": job_id}
+    # Group 64.1: a one-position printer's sole-tool usage and its swaps' figures on
+    # the position, together (a no-op when _compute_cancel_usage already folded
+    # them), so the split and the uncharged lines read one key and no gram is on
+    # a row and a line at once.
+    usage_map, swap_cums, _ = _fold_sole_tool(printer_name, usage_map, swap_cums)
     # 22.3(b) AUTO-SPLIT: when the print's download measured its swaps, charge EACH
     # spool that fed the toolhead only its OWN segment's grams (run-out spool
     # 0->swap, replacement swap->end) so both are shown + settled together. Degrades
@@ -2619,10 +3542,22 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 path_filament_g=_path_filament_g(printer_name),
                 single_position=single_pos)
             if split:
+                # Group 64 full review (SP1): a head whose swaps don't follow on from the
+                # spool FCC saw before each is no split. With the print-end read it is held
+                # as a set (_held_heads says why); without, it gets the full-footer row to
+                # split by hand, as a swap the walk didn't measure does.
+                chain = _swaps_by_position(live_swaps)
+                first = _start_map(start_spools)
+                split = {p: segs for p, segs in split.items()
+                         if not _split_start_check(first.get(_norm_pos(p)), chain.get(_norm_pos(p)) or [])} or None
+            if split:
                 split_rows = _split_to_review_rows(split, active_locs)
     # Every position a row charges (the split's own, and whatever the resolver
     # finds), so a used head with no spool rides along as unresolved (43.4).
     charged = set()
+    # Group 64 fix review 2 (CS2 / CX5): with no print-end read, MMU slots sharing one
+    # Position give no row (SP4); their line says so here too, as on a cancel's card.
+    mmu = {}
     held = {}
     unread = set()
     row_notes = {}
@@ -2634,6 +3569,31 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         covered = {_norm_pos(p) for p in (split or {})} if split_rows else set()
         all_held = _held_heads(heads, start_spools, swap_log, usage_map)
         held = {p: info for p, info in all_held.items() if p not in covered}
+        # Group 64.2 (9): one rule with the cancel's split (_split_held_swaps): a split
+        # head whose print-end read names another spool than its last recorded swap
+        # loaded (or no spool, or two) is held as a set, nothing pre-filled. The read
+        # names a spool FCC never saw loaded, so part of the last segment may be that
+        # spool's; the split used to stand with a note under its last row.
+        if covered:
+            by_pos = {_norm_pos(h.get('position')): h for h in heads}
+            swaps = _swaps_by_position(swap_log)
+            refused = {p: why for p, why in
+                       ((p, _split_end_check(by_pos.get(p), swaps.get(p) or [])) for p in covered)
+                       if why}
+            if refused:
+                for p, why in refused.items():
+                    covered.discard(p)
+                    held[p] = dict(all_held.get(p) or {"toolhead": f"T{p}", "sids": [], "start": None,
+                                                       "why": "swapped", "events": swaps.get(p) or []},
+                                   split=why)
+                split = {p: segs for p, segs in split.items() if _norm_pos(p) in covered} or None
+                split_rows = _split_to_review_rows(split, active_locs) if split else None
+                if split and not split_rows:
+                    # A spool of the rest of the split can't be read now: every swapped
+                    # head the split covered is asked about instead.
+                    for p in covered:
+                        held[p] = dict(all_held.get(p) or {}, split="unmeasured")
+                    covered, split = set(), None
         rest_usage = {p: g for p, g in (usage_map or {}).items()
                       if _norm_pos(p) not in covered and _norm_pos(p) not in held and (g or 0) > 0}
         rest_rows = _resolve_usage_to_spools(
@@ -2662,7 +3622,6 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 covered, split = set(), None
         charged.update(covered)
         rows = list(split_rows or []) + list(rest_rows or [])
-        row_notes = _split_disagreements(split if split_rows else None, heads, swap_log, words)
     elif split_rows:
         # The split only covers the positions that were SWAPPED. Every other
         # position still printed and still has to be charged — short-circuiting
@@ -2674,7 +3633,7 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                           if _norm_pos(p) not in covered and (g or 0) > 0}
             rest_rows = _resolve_usage_to_spools(
                 printer_name, rest_usage, fb_url, active_locs=active_locs,
-                charged_out=charged) if rest_usage else []
+                charged_out=charged, mmu_out=mmu) if rest_usage else []
             # Review fix: a split head one of whose spools also has a plain row gets
             # the plain rows instead (the review's rows from before the split), so
             # every spool has one row; its grams are then split by hand.
@@ -2691,12 +3650,13 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 # gets the plain rows, as when the split can't be built at all.
                 covered, split = set(), None
                 rest_rows = _resolve_usage_to_spools(
-                    printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged)
+                    printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged,
+                    mmu_out=mmu)
         charged.update(covered)
         rows = list(split_rows or []) + list(rest_rows or [])
     else:
         rows = _resolve_usage_to_spools(
-            printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged)
+            printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged, mmu_out=mmu)
     # 22.3(b): True when the rows charge each swapped head's spools their own
     # segments (taken after the review fix above, which can refuse a split).
     auto_split = bool(split_rows)
@@ -2718,9 +3678,16 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 printer_name, filename, job_id, 1.0, usage_map=usage_map, no_spool=True,
                 heads=card["heads"], heads_source=heads_source, notes=card["notes"],
                 phrases=card["phrases"],
-                **_given(heads_read_at=heads_read_at, sets=card["sets"] or None))
+                **_given(heads_read_at=heads_read_at, sets=card["sets"] or None,
+                         swap_left_at=_swap_left_at(swap_log) or None, end_at_s=end_at))
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
-                                        usage_map=usage_map, no_spool=True)
+                                        usage_map=usage_map, no_spool=True,
+                                        **_given(notes={str(p): _mmu_shared_note(h) for p, h in mmu.items()} or None,
+                                                 mmu_shared=mmu or None))
+    left_at = _swap_left_at(swap_log)
+    if heads is not None:
+        # Decision 1 (Group 64): as a cancel's card.
+        _mark_weighed_rows(rows, heads, end_at, left_at, heads_source, _swap_back_spans(swap_log))
     total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
         "printer_name": printer_name,
@@ -2741,6 +3708,11 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         "swap_log": list(swap_log) if swap_log else [],
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    # Group 64 full review: what the Apply checks Decision 1 against again.
+    if left_at:
+        record["swap_left_at"] = left_at
+    if end_at is not None and heads is not None:
+        record["end_at_s"] = end_at
     if heads is not None:
         # D1: one read of the heads right before the stash; a row whose head holds
         # another spool now keeps its print-end spool and says so.
@@ -2751,7 +3723,8 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                                      source=heads_source, read_at=heads_read_at,
                                      notes=card["notes"], phrases=card["phrases"], sets=card["sets"])
     else:
-        uncharged = _carry_uncharged(record, unresolved, printer_name, fb_url, active_locs=active_locs)
+        uncharged = _note_mmu_lines(record, mmu, _carry_uncharged(record, unresolved, printer_name, fb_url,
+                                                                  active_locs=active_locs))
     cancel_review_store.add_pending(record)
     # Then claim the deferred-fetch slot too, so a queued kind='complete' retry (a
     # prior finish-screen lock) can't later auto-apply the full footer behind this
@@ -2803,8 +3776,9 @@ def _preview_row(sid, spool, toolhead, pos, grams, ambiguous):
     }
 
 
+@_sharing_one_list_read
 def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None, charged_out=None,
-                             heads=None, unread_out=None):
+                             heads=None, unread_out=None, mmu_out=None):
     """Read-only resolution of {toolhead_position: grams} → the per-spool rows a
     deduct WOULD touch — the cancel-review PREVIEW (no write). Mirrors
     _apply_usage_to_printer's MMU-alias/dedup AND ghost-vs-current resolution
@@ -2827,6 +3801,11 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None, 
     spool is read through _spool_read: one Spoolman no longer has (or can't
     answer for) gets no row, like an empty head, and its position goes into
     `unread_out` (a set) so the card can say why.
+
+    `mmu_out` (Group 64 full review, SP4): with no print-end read, MMU slots sharing
+    one toolhead number and each holding a spool give no row (the first slot's spool
+    used to take the head's whole grams), as the apply's own check charges none; the
+    position goes into `mmu_out` ({position: holders}) for the card's note.
     """
     rows = []
     if heads is not None:
@@ -2853,6 +3832,7 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None, 
             printer_map = locations_db.get_active_printer_map()
             active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
         processed_positions = set()
+        mmu_ids = None
         for loc_id, p_info in active_locs:
             pos = p_info.get('position', 0)
             if pos in processed_positions:
@@ -2866,6 +3846,14 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None, 
             if not loc_spools:
                 continue  # try the next alias for this position
             processed_positions.add(pos)
+            if mmu_ids is None:
+                mmu_ids = _mmu_slot_ids()
+            if str(loc_id).upper() in mmu_ids:
+                holders = _mmu_slot_holders(active_locs, pos, mmu_ids)
+                if len(holders) > 1:
+                    if mmu_out is not None:
+                        mmu_out[pos] = holders
+                    continue
             # Mirror the apply loop's ghost-vs-current resolution (22.4(1)); only the
             # rare >1 case fetches the detailed/ghost info, so the single-spool path is
             # unchanged. Preview keeps an ambiguous toolhead's rows (flagged) rather
@@ -2916,6 +3904,9 @@ _UNMEASURED_WHY = {
     "empty_footer": "its file's filament footer lists no filament",
     "unreadable_moves": "FCC couldn't read its file's moves",
     "no_download": "FCC couldn't download or read its file",
+    # Group 64.2 (3): the queue gave the print up at the end of its 72-hour window
+    # after its compute kept raising (print_monitor._give_up_fetch).
+    "compute_failed": "FCC's deduct of it kept failing",
 }
 
 
@@ -2923,7 +3914,8 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                              usage_map=None, *, no_spool=False,
                              progress_unknown=False, ambiguous=False, reason=None,
                              heads=None, heads_source=None, heads_read_at=None,
-                             notes=None, phrases=None, sets=None):
+                             notes=None, phrases=None, sets=None, swap_left_at=None, end_at_s=None,
+                             mmu_shared=None):
     """Stash a persistent, RECOVERABLE review for a print whose usage couldn't be
     finalized — INSTEAD of writing a destructive terminal grams=0 ledger entry that
     would permanently block recovery (the 2026-06-13 silent-loss bug). Two kinds:
@@ -2953,6 +3945,13 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
     whose spool changed during the print, shown as a set of every spool they had.
     Its Apply then needs a pick per line (api_cancel_deduct_confirm refuses one
     without; a set's line takes one per spool): it never re-reads the heads.
+    `mmu_shared` (Group 64 full review, SP4; no print-end read): {position: holders}
+    for MMU slots sharing one toolhead number, each holding a spool: the card's heads
+    name each slot's spool there, and `notes` (no_spool only) say why under its line.
+    `swap_left_at` and `end_at_s` (Group 64 full review, FX2): what its Apply checks
+    Decision 1 against, as a card with rows keeps them (_swap_left_at, the print-end
+    read's moment): a set's spool that left its head at a swap and was weighed on FCC
+    after that is held at the Apply, not charged its share on top.
 
     Writes NO ledger entry — the review stays recoverable until confirm/dismiss.
     Idempotent: no-ops if a review is already pending or the job was already settled.
@@ -2974,6 +3973,23 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
         lines = {str(k): round(float(v), 2) for k, v in usage_map.items() if (v or 0) > 0}
         msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{_esc(filename)}') but no spool "
                f"was charged{_uncharged_tail(lines, phrases, heads)}.")
+    elif no_spool and mmu_shared:
+        # Group 64 fix review 2 (CS2 / CX5): a spool is bound; the slots share a Position.
+        # Fix review 3 (TS4): each Position's slots on their own ("MMU-1 and MMU-2 share
+        # one Position, and MMU-3 and MMU-4 another"), never all four run together.
+        groups = [_and_list(s for s, _ss in h) for h in mmu_shared.values()]
+        lead = f"MMU slots {groups[0]} share one Position" + "".join(f", and {g} another" for g in groups[1:])
+        # Fix review 4 (US4): the card's other lines (a head that had no spool) are said
+        # too, and every line asked for.
+        shared = {str(_norm_pos(p)) for p in mmu_shared}
+        others = [f"T{_norm_pos(p)}'s" for p, g in sorted((usage_map or {}).items(), key=lambda kv: str(kv[0]))
+                  if str(_norm_pos(p)) not in shared and (g or 0) > 0]
+        rest = (f"; {_and_list(others)} head{'s' if len(others) > 1 else ''} had no spool"
+                if others else "")
+        many = len(groups) + len(others) > 1
+        msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{_esc(filename)}') but no spool was "
+               f"charged: {lead}, each slot holding a spool, so FCC can't tell which slot printed{rest} — "
+               f"pick the spool {'each line' if many else 'it'} used in 🛑 Review, or Discard.")
     elif no_spool:
         msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{_esc(filename)}') but it "
                f"couldn't be deducted (no spool bound to the toolhead, or the write was "
@@ -3012,12 +4028,21 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
         in_sets = {k: v for k, v in (sets or {}).items() if k in (record["usage_map"] or {})}
         if in_sets:
             record["unresolved_sets"] = in_sets
+        if swap_left_at:
+            record["swap_left_at"] = swap_left_at
+        if end_at_s is not None:
+            record["end_at_s"] = end_at_s
     elif no_spool:
         # 43.3 — the heads at PRINT END: what the card's picker can name as "the
         # spool that was there", so Apply never silently charges a spool loaded
         # afterwards (and a print sliced for T0 but run on T1 shows T1's spool).
         _, fb_url = config_loader.get_api_urls()
         record["heads_at_end"] = _heads_snapshot(printer_name, fb_url)
+        if mmu_shared:
+            record["heads_at_end"] = _with_mmu_heads(record["heads_at_end"], mmu_shared)
+        kept = {k: v for k, v in (notes or {}).items() if k in (record["usage_map"] or {})}
+        if kept:
+            record["unresolved_notes"] = kept
     cancel_review_store.add_pending(record)
     state.add_log_entry(msg, "WARNING", "ffaa00",
                         meta={"type": "cancel_deduct_pending",
@@ -3088,8 +4113,65 @@ def _hold_fetch_in_flight(printer_name, filename, job_id, reached_fraction, kind
     return held[0] if held else None
 
 
+# Group 64.4 / 64.2 (3), as Derek revised it on 2026-11-20 ("I'd rather do that than
+# just stop because something isn't working"): a print whose file downloads and
+# can't be read (`decode_failures` on its record), or whose compute raises
+# (`raises`), is never given up before the 72-hour window. Its first
+# _FETCH_FAST_TRIES tries come at the queue's normal pace (each idle tick); after
+# that it waits _FETCH_SLOW_FIRST_S, doubling each time to at most _FETCH_SLOW_MAX_S
+# (`next_try_at`), so an 11 MB file isn't pulled off the printer's USB stick every
+# 30 seconds for 72 hours, and the printer's other queued prints go ahead between
+# tries (one download per printer at a time). A plain failed download (the file
+# locked behind the printer's screen) keeps the 30-second pace for the whole window,
+# so clearing the screen gets it at the next tick. The warning line's "Try again
+# now" button (retry_fetch_now) ends a wait at once.
+_FETCH_FAST_TRIES = 3
+_FETCH_SLOW_FIRST_S = 300
+_FETCH_SLOW_MAX_S = 3600
+
+
+def _fetch_next_try_at(count, now):
+    """When the queue may try a record again after its `count`-th failure of one kind
+    (a file that couldn't be read, or a compute that raised): None (the next idle
+    tick) for the first _FETCH_FAST_TRIES, then _FETCH_SLOW_FIRST_S later, doubling
+    each time, never more than _FETCH_SLOW_MAX_S."""
+    if count < _FETCH_FAST_TRIES:
+        return None
+    wait = _FETCH_SLOW_FIRST_S * (2 ** min(count - _FETCH_FAST_TRIES, 16))
+    return now + min(_FETCH_SLOW_MAX_S, wait)
+
+
+def _fetch_retry_button(printer_name, job_id):
+    """The "↻ Try again now" button a fetch's warning line carries (Group 64.4,
+    Derek: a way to recover once the cause is fixed): one delegated click in
+    cancel_review.js posts /api/cancel_deduct/retry_fetch with the print it names."""
+    return (' <button type="button" class="btn btn-sm btn-outline-warning ms-2 py-0 px-1 '
+            'fcc-fetch-retry-btn" '
+            f'data-fetch-printer="{html.escape(str(printer_name), quote=True)}" '
+            f'data-fetch-job="{html.escape(str(job_id), quote=True)}">↻ Try again now</button>')
+
+
+def _fetch_schedule_words(hours=72, who="It"):
+    """How the queue keeps trying, in the warning lines' words, said after the first
+    failure (so the quick tries left are one fewer than _FETCH_FAST_TRIES). `hours`
+    is print_monitor._CANCEL_FETCH_MAX_AGE_S's (print_monitor passes it; this module
+    never imports print_monitor, the import runs one way); `who` starts the
+    sentence."""
+    more = _FETCH_FAST_TRIES - 1
+    times = "once more" if more == 1 else ("twice more" if more == 2 else f"{more} more times")
+    # Group 64 full review (WD4): the bound the back-off keeps is the longest wait
+    # between tries; "at most once an hour" said the other bound, while the first
+    # waits are 5, 10, 20 and 40 minutes.
+    first = f"{_FETCH_SLOW_FIRST_S // 60} minutes"
+    most = "an hour" if _FETCH_SLOW_MAX_S == 3600 else f"{_FETCH_SLOW_MAX_S // 60} minutes"
+    return (f"{who} tries again when the printer is idle, {times} right away, "
+            f"then less often, waiting longer each time ({first} at first, up to {most} between tries), "
+            f"for up to {int(hours)} hours.")
+
+
 def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
-                          ambiguous=False, start_spools=None, swap_log=None, end_heads=None):
+                          ambiguous=False, start_spools=None, swap_log=None, end_heads=None,
+                          decode_error=None):
     """Queue a print whose gcode couldn't be fetched yet (the selected-file
     download LOCK, §9.10) for the monitor to retry. `kind` is 'cancel' (default)
     or 'complete' — a COMPLETED Connect-started print locks behind the FINISH
@@ -3117,8 +4199,18 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
     "in_flight", which logs nothing). The read and the write are one locked store
     step (cancel_fetch_store.update_pending), so two writers of one record never
     lose a bump. Returns True if newly queued (nudged), False if it was already
-    queued."""
+    queued.
+
+    `decode_error` (Group 64.4): the file downloaded and FCC couldn't read it
+    (_compute_cancel_usage's "undecodable"). The record counts it in
+    `decode_failures` and, after _FETCH_FAST_TRIES of them, waits longer each time
+    (`next_try_at`, _fetch_next_try_at) for the rest of the 72-hour window; the
+    first is said in one WARNING line, with a "Try again now" button, instead of the
+    "clear the screen" nudge, since the file wasn't locked. A plain failed download
+    (`last_failure` "download") ends any such wait: a locked file keeps the
+    queue's normal pace."""
     nudge = []
+    decodes = []
 
     def _queue(rec):
         if not isinstance(rec, dict) or not rec:
@@ -3132,6 +4224,11 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
             }
             if end_heads:
                 fresh["end_heads"] = end_heads
+            if decode_error:
+                fresh["decode_failures"] = 1
+                fresh["last_error"] = str(decode_error)
+                decodes.append(1)
+            fresh["last_failure"] = "decode" if decode_error else "download"
             return fresh
         if rec.get("last_status") == FETCH_IN_FLIGHT:
             nudge.append(True)          # the first download of it that really failed
@@ -3148,9 +4245,38 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
             first_read = end_heads      # a stored read FCC can't use is no first read
         if first_read:
             rec["end_heads"] = first_read
+        if decode_error:
+            try:
+                count = int(rec.get("decode_failures", 0) or 0) + 1
+            except (TypeError, ValueError):
+                count = 1
+            rec["decode_failures"] = count
+            rec["last_error"] = str(decode_error)
+            rec["last_failure"] = "decode"
+            due = _fetch_next_try_at(count, time.time())
+            if due is None:
+                rec.pop("next_try_at", None)
+            else:
+                rec["next_try_at"] = due
+            decodes.append(count)
+        else:
+            # A plain failed download (a locked file): the queue's normal pace.
+            rec["last_failure"] = "download"
+            rec.pop("next_try_at", None)
         return rec
 
     cancel_fetch_store.update_pending(printer_name, job_id, _queue)
+    if decodes:
+        # The file downloaded and couldn't be read: no "clear the screen" nudge (the
+        # file wasn't locked); its first failure is said once, with the button.
+        if decodes[0] == 1:
+            state.add_log_entry(
+                f"⚠️ {printer_name}: FCC downloaded the file of job {_esc(job_id)} "
+                f"('{_esc(filename)}') but couldn't read it ({_esc(decode_error)}). "
+                f"{_fetch_schedule_words()}{_fetch_retry_button(printer_name, job_id)}",
+                "WARNING", "ffaa00",
+                meta={"type": "fetch_retry", "printer_name": printer_name, "job_id": str(job_id)})
+        return bool(nudge)
     if not nudge:
         return False
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
@@ -3181,6 +4307,58 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
             meta={"type": "cancel_deduct_awaiting",
                   "printer_name": printer_name, "job_id": str(job_id)})
     return True
+
+
+def retry_fetch_now(printer_name, job_id):
+    """The warning line's "↻ Try again now" (Group 64.4; Derek, 2026-11-20: a way to
+    recover once he has fixed what kept the file from being read or the deduct from
+    working). Ends the record's wait and gives it _FETCH_FAST_TRIES quick tries
+    again: the queue tries it at the next tick the printer is idle. Writes nothing
+    to Spoolman. Returns (ok, msg) in words for the toast."""
+    printer_name = str(printer_name or "").strip()
+    job_id = str(job_id or "").strip()
+    if not printer_name or print_deduct_ledger._is_blank_job(job_id):
+        return False, "That line names no print FCC can look up."
+    if print_deduct_ledger.was_deducted(printer_name, job_id) or \
+            cancel_review_store.has_pending(printer_name, job_id):
+        return False, (f"Job {job_id} on {printer_name} is settled already: its deduct is "
+                       f"recorded, or its review is waiting in 🛑 Review.")
+    found = []
+
+    def _reset(rec):
+        if not isinstance(rec, dict) or not rec:
+            return None
+        kept = dict(rec)
+        kept.pop("next_try_at", None)
+        kept["decode_failures"] = 0
+        kept["raises"] = 0
+        found.append(kept)
+        return kept
+
+    cancel_fetch_store.update_pending(printer_name, job_id, _reset)
+    if not found:
+        return False, (f"Nothing is waiting for job {job_id} on {printer_name} any more: "
+                       f"FCC has finished with it.")
+    state.add_log_entry(
+        f"🔁 {printer_name}: job {_esc(job_id)} ('{_esc(found[0].get('filename'))}') will be "
+        f"tried again as soon as the printer is idle (Try again now).", "INFO")
+    return True, f"FCC tries job {job_id} on {printer_name} again as soon as the printer is idle."
+
+
+@app.route('/api/cancel_deduct/retry_fetch', methods=['POST'])
+def api_cancel_deduct_retry_fetch():
+    """POST {printer_name, job_id}: the warning line's "↻ Try again now"
+    (retry_fetch_now). Answers {success, msg}."""
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        ok, msg = retry_fetch_now(data.get("printer_name"), data.get("job_id"))
+    except Exception as e:
+        state.logger.warning(f"retry_fetch failed for {data!r}: {e}")
+        return jsonify({"success": False,
+                        "msg": "FCC couldn't reach its queue just now. Try again in a moment."}), 500
+    return jsonify({"success": bool(ok), "msg": msg})
 
 
 def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
@@ -3248,6 +4426,11 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
                                         progress_unknown=True, ambiguous=ambiguous,
                                         reason=unmeasured_reason)
 
+    # Group 64.2 (10): the print reached its last recorded swap, so the partial is
+    # computed at least that far (a fetch record queued before the live edge did
+    # this, and every other caller, get it here too).
+    reached_fraction = _reached_at_least(reached_fraction, swap_log)
+
     creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
     if not creds:
         # No creds right now (FilaBridge blip / printer briefly unreachable) —
@@ -3292,9 +4475,11 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
             # leaves STOPPED, then computes + pops the 🛑 Review automatically.
             # (For the ambiguous edge the file is already unlocked at IDLE, so
             # this is just a transient-blip safety net — but carry the flag so a
-            # retried review stays flagged "couldn't confirm".)
+            # retried review stays flagged "couldn't confirm".) A file that
+            # downloaded and couldn't be read is counted (Group 64.4).
             _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction,
-                                  ambiguous=ambiguous, **fetch_kw)
+                                  ambiguous=ambiguous, **fetch_kw,
+                                  **_given(decode_error=terminal.get("decode_error")))
             return {"status": "awaiting_fetch", "reason": terminal.get("reason"),
                     "job_id": job_id}
         return terminal
@@ -3311,10 +4496,16 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     if mapping is not None:
         return _stash_cancel_review_from_heads(
             printer_name, filename, job_id, reached_fraction, fb_url, ambiguous, usage_map,
-            mapping, start_spools, swap_log, swap_cums=swap_cums)
+            mapping, start_spools, swap_log, swap_cums=swap_cums,
+            # Decision 1: only a print-end read says how much each spool had used then.
+            end_at=_end_epoch(end_heads) if mapping[1] != "late" else None)
 
     charged = set()
-    rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url, charged_out=charged)
+    mmu = {}
+    rows = _resolve_usage_to_spools(printer_name, usage_map, fb_url, charged_out=charged, mmu_out=mmu)
+    # Group 64 full review (SP4): MMU slots sharing one Position, each holding a spool,
+    # gave no row; the line says why, and its picker offers each slot's spool.
+    mmu_notes = {str(p): _mmu_shared_note(h) for p, h in mmu.items()}
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
     lead = ("❓ Print on {p} reached idle (~{pct:.0f}%, couldn't confirm cancel vs "
             "complete)").format(p=printer_name, pct=pct) if ambiguous else \
@@ -3328,7 +4519,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         # toolhead.
         return _stash_unresolved_review(printer_name, filename, job_id,
                                         reached_fraction, usage_map=usage_map,
-                                        no_spool=True, ambiguous=ambiguous)
+                                        no_spool=True, ambiguous=ambiguous,
+                                        **_given(notes=mmu_notes or None, mmu_shared=mmu or None))
 
     # Re-check after the (slow) gcode download+parse — if the job was processed
     # in the meantime, don't stash a stale pending.
@@ -3352,7 +4544,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         "ambiguous": bool(ambiguous),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    uncharged = _carry_uncharged(record, unresolved, printer_name, fb_url)
+    uncharged = _note_mmu_lines(record, mmu,
+                                _carry_uncharged(record, unresolved, printer_name, fb_url))
     cancel_review_store.add_pending(record)
     state.add_log_entry(
         f"{lead} — review {'computed' if ambiguous else 'partial'} "
@@ -3366,7 +4559,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
 
 def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_fraction, fb_url,
                                     ambiguous, usage_map, mapping, start_spools, swap_log,
-                                    swap_cums=None):
+                                    swap_cums=None, end_at=None):
     """The cancel (or ambiguous) review from a read of the heads: the print-end
     read, or after a failed one the `late` read the start snapshot is checked
     against. Rows are the spools it names; each head FCC can't vouch for is a held
@@ -3382,6 +4575,9 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
     grams box and nothing pre-filled (`unresolved_sets`)."""
     heads, source, read_at = mapping
     words = _heads_words(source)
+    # Group 64.1: as the completion's review (a no-op after _compute_cancel_usage's
+    # own fold), so a split head's grams are never also an uncharged line.
+    usage_map, swap_cums, _ = _fold_sole_tool(printer_name, usage_map, swap_cums)
     held = _held_heads(heads, start_spools, swap_log, usage_map)
     split = _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_cums,
                               reached_fraction)
@@ -3403,11 +4599,17 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
         return _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                                         usage_map=usage_map, no_spool=True, ambiguous=ambiguous,
                                         heads=card_heads, heads_source=source, notes=notes,
-                                        phrases=phrases, **_given(heads_read_at=read_at, sets=sets or None))
+                                        phrases=phrases, **_given(heads_read_at=read_at, sets=sets or None,
+                                                                  swap_left_at=_swap_left_at(swap_log) or None,
+                                                                  end_at_s=end_at))
     # Re-check after the (slow) gcode download+parse — if the job was processed
     # in the meantime, don't stash a stale pending.
     if print_deduct_ledger.was_deducted(printer_name, job_id):
         return {"status": "skipped", "reason": "already processed", "job_id": job_id}
+    # Decision 1 (Group 64): a row whose spool changed weight after the print ended
+    # says so loudly, its grams filled in with 0 g when FCC weighed it after the end.
+    left_at = _swap_left_at(swap_log)
+    _mark_weighed_rows(rows, heads, end_at, left_at, source, _swap_back_spans(swap_log))
     total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
         "printer_name": printer_name,
@@ -3419,6 +4621,11 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
         "ambiguous": bool(ambiguous),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    # Group 64 full review: what the Apply checks Decision 1 against again.
+    if left_at:
+        record["swap_left_at"] = left_at
+    if end_at is not None:
+        record["end_at_s"] = end_at
     if source != "late":
         # D1: the late read IS a read now; any other is checked once more here.
         row_notes = _row_notes_after_end(printer_name, fb_url, heads, rows, words)
@@ -3580,7 +4787,7 @@ def _rows_from_charges(rec, kind, charges):
                "remaining_before": before,
                "remaining_after": None if before is None else round(max(0.0, before - grams), 1)}
         if kept and stamped:
-            for key in ("attempt_used_before", "attempt_used_after", "attempt_was_archived"):
+            for key in ("attempt_used_before", "attempt_used_after", "attempt_was_archived", "attempt_sent_at"):
                 if key in original:
                     row[key] = original[key]
         rows[sid] = row
@@ -3669,6 +4876,69 @@ def _lines_left_unplaced(rec, kind, charges):
         elif d < -0.005 and fixed:
             over[str(line)] = round(-d, 2)
     return under, over, {k: v for k, v in picked.items() if k in under or k in over}
+
+
+def _rows_left_off(rec, charges, updates):
+    """Group 64.2 (5): on an Apply whose ask is fixed (`requested_total` on the
+    record: a retry after a failed write, an uncharged-grams card kept by an earlier
+    Apply), what each of the card's rows was charged less, or more, than the card
+    showed for it, as the ledger's shortfall counts it: ([{sid, line, toolhead,
+    grams}] short, [same] over). A row's grams come from its pick (`charges`' `row`,
+    kept or moved to another spool) or, from an older page, its `updates` entry;
+    a row the Apply leaves out is short all of its grams. On any other Apply the ask
+    is what was typed, so nothing is returned."""
+    if rec.get("requested_total") is None:
+        return [], []
+    typed = {}
+    if isinstance(charges, list):
+        for c in charges:
+            if isinstance(c, dict) and c.get("row") is not None:
+                try:
+                    typed[str(c.get("row"))] = typed.get(str(c.get("row")), 0.0) + float(c.get("grams") or 0)
+                except (TypeError, ValueError):
+                    continue
+    elif isinstance(updates, dict):
+        for k, v in updates.items():
+            try:
+                typed[str(k)] = float(v or 0)
+            except (TypeError, ValueError):
+                continue
+    short, over = [], []
+    for r in rec.get("spools") or []:
+        if not isinstance(r, dict) or r.get("sid") is None:
+            continue
+        try:
+            d = round(float(r.get("grams") or 0) - typed.get(str(r.get("sid")), 0.0), 2)
+        except (TypeError, ValueError):
+            continue
+        entry = {"sid": r.get("sid"), "toolhead": r.get("toolhead"),
+                 "line": None if r.get("position") is None else str(_norm_pos(r.get("position")))}
+        if d > 0.005:
+            short.append(dict(entry, grams=d))
+        elif d < -0.005:
+            over.append(dict(entry, grams=-d))
+    return short, over
+
+
+def _join_row_grams(*lists):
+    """Row entries ({sid, line, toolhead, grams}) joined across `lists`, a spool's
+    grams on one line added up, in the order each was first named."""
+    out = []
+    for lst in lists:
+        for e in lst if isinstance(lst, list) else []:
+            if not isinstance(e, dict):
+                continue
+            have = next((o for o in out if str(o.get("sid")) == str(e.get("sid"))
+                         and o.get("line") == e.get("line")), None)
+            try:
+                g = float(e.get("grams") or 0)
+            except (TypeError, ValueError):
+                continue
+            if have is None:
+                out.append(dict(e, grams=round(g, 2)))
+            else:
+                have["grams"] = round(float(have["grams"]) + g, 2)
+    return out
 
 
 def _add_grams(*maps):
@@ -3788,6 +5058,41 @@ def _uncharged_parts(rec):
     return parts, named, round(listed, 2)
 
 
+def _row_where(rec, entry):
+    """Where a row entry's head is, as the line names a head: "T6 · RCOI-7"."""
+    if entry.get("line") is not None:
+        return _esc(_line_where(rec, entry["line"]))
+    return _esc(entry.get("toolhead") or "its head")
+
+
+def _row_parts(rec):
+    """Group 64.2 (5): ([short words], [over words], [spools named], grams short,
+    grams over) for the card rows an Apply with a fixed ask charged less or more
+    than the card showed (`rows_short` / `rows_over`, _rows_left_off): "25.32 g
+    more on T6 · RCOI-7 left off #243's row", "24.68 g more than the card showed
+    were typed for #243's row on T6 · RCOI-7"."""
+    shorts, overs, named = [], [], []
+    short_g = over_g = 0.0
+    for key, words, out in (("rows_short", "{g} g more on {where} left off #{sid}'s row", shorts),
+                            ("rows_over", "{g} g more than the card showed were typed for #{sid}'s row "
+                                          "on {where}", overs)):
+        for e in rec.get(key) if isinstance(rec.get(key), list) else []:
+            try:
+                g = float(e.get("grams") or 0)
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if g <= 0.05:
+                continue
+            out.append(words.format(g=_g_words(g), where=_row_where(rec, e), sid=_esc(e.get("sid"))))
+            if str(e.get("sid")) not in named:
+                named.append(str(e.get("sid")))
+            if key == "rows_short":
+                short_g += g
+            else:
+                over_g += g
+    return shorts, overs, named, round(short_g, 2), round(over_g, 2)
+
+
 def _overplaced_parts(rec):
     """([part words], [spools named], grams) for the lines whose picks were typed
     beyond what FCC worked out where the ledger's ask is a total (a no_spool card,
@@ -3826,7 +5131,10 @@ def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
     another's are said ("but ... were typed for ..."). "Said above" counts only
     the grams a picked spool couldn't take, as the Apply loop logged them
     (`clamped`, with an earlier Apply's on a retry); anything else no spool took is
-    said without a reason ("more that went to no spool")."""
+    said without a reason ("more that went to no spool"). Group 64.2 (5): grams a
+    card row was charged less or more than the card showed, on an Apply whose ask
+    was fixed (a retry, a kept card), are named with the row's spool and head
+    (`_row_parts`); "no spool" is left only for grams nothing on record explains."""
     file = _esc(rec.get('filename'))
     try:
         on_card = float(residue_card.get("total_grams") or 0) if residue_card else 0.0
@@ -3840,6 +5148,7 @@ def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
     try:
         parts, named, listed = _uncharged_parts(rec)
         overs, over_named, over_g = _overplaced_parts(rec)
+        row_short, row_over, row_named, row_short_g, row_over_g = _row_parts(rec)
         said = round(max(0.0, float(clamped or 0) - on_card), 2)
     except Exception as e:
         state.logger.debug(f"uncharged heads unnamed for {printer}: {e}")
@@ -3851,78 +5160,85 @@ def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
     clauses = []
     if said > 0.05:
         clauses.append(f"and {_g_words(said)} g the picked spools couldn't take (said above)")
-    rest = round(total - listed - (said if said > 0.05 else 0.0) + over_g, 2)
+    clauses.extend(f"and {w}" for w in row_short)
+    overs = overs + row_over
+    rest = round(total - listed - (said if said > 0.05 else 0.0) - row_short_g + over_g + row_over_g, 2)
     if rest > 0.05:
         clauses.append(f"and {_g_words(rest)} g more that went to no spool")
     elif rest < -0.05:
         overs = overs + [f"{_g_words(-rest)} g more than the card asked were typed for other spools"]
     if overs:
         clauses.append("but " + ", and ".join(overs))
-    named.extend(s for s in over_named if s not in named)
+    named.extend(s for s in over_named + row_named if s not in named)
     who = "the spools" if not named else ("it" if len(named) == 1 and not clauses else "them")
     state.add_log_entry(
         f"⚠️ {_esc(printer)}: {total:.2f}g of '{file}' wasn't charged to any spool: "
         f"{'; '.join(parts + clauses)} — weigh {who} to true up.", "WARNING", "ffaa00")
 
 
-def _confirm_no_spool_review(printer, job_id, rec):
-    """Apply a `no_spool` review (the record was already popped = the claim). The
-    usage was computed when the print ended but no spool was bound; RE-RESOLVE the
-    stored usage_map against whatever spool is bound to the toolhead NOW and apply
-    it additively (ONLY {used_weight}, archive-on-empty discipline, via the canonical
-    _apply_usage_to_printer loop). If still unbound, RE-STASH the record so it stays
-    recoverable and report `still_no_spool` — never a terminal 0g."""
-    _, fb_url = config_loader.get_api_urls()
-    # Resolve the printer's active toolheads ONCE and thread it to BOTH the preview
-    # resolve and the apply, so an MMU printer's info.mmu ordering probe runs once,
-    # not twice (22.4(5)). The apply returns the real toolhead positions (`known`)
-    # so the shortfall excludes orphan tool indices (22.4(3)).
-    printer_map = locations_db.get_active_printer_map()
-    active_locs = _resolve_active_locs_for_printer(printer_map, printer, fb_url)
-    # JSON stringified the int positions on save — coerce back so the resolve (which
-    # keys on int positions from printer_map) matches. Without this the re-resolve
-    # silently finds nothing and always says "still no spool".
-    umap = {}
-    for k, v in (rec.get("usage_map") or {}).items():
+def _cents(grams):
+    """Grams as whole cents, rounded as the page's Math.round rounds them; None for a
+    figure no card holds (not a number, not finite, or past a billion grams), never a
+    raise: the Apply has already taken its card off the store (Group 64 fix review,
+    FS1: 1e307 overflowed, NaN raised, and the card was lost with a 500)."""
+    try:
+        g = float(grams)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(g) or abs(g) > 1e9:
+        return None
+    return int(math.floor(g * 100 + 0.5))
+
+
+def _set_check_refusal(rec, kind, charges, data):
+    """Group 64.2 (2): the server's own check of a card's sets (a head held as a set
+    of the spools it had, `unresolved_sets`), which only the page made before: a
+    card from another tab, or from a page loaded before the check, posted a set's
+    grams placed short or over with no question asked. A set line whose picks don't
+    add up to its grams (to 0.05 g) goes ahead only when the post says the person
+    saw the question (`set_ack`: {line: grams placed}, today's page's second press);
+    a post with no `set_ack` key at all is a page from before it, told to reload.
+    Plain rows keep taking an over-allocation, as before. Returns (msg, stale_page)
+    or None."""
+    sets = rec.get("unresolved_sets") or {}
+    if not isinstance(sets, dict) or not sets:
+        return None
+    lines = (rec.get("usage_map") if kind == "no_spool" else rec.get("unresolved_usage")) or {}
+    acks = data.get("set_ack")
+    heads = {str(_norm_pos(h.get('position'))): h.get('toolhead')
+             for h in rec.get("heads_at_end") or [] if isinstance(h, dict) and h.get('toolhead')}
+    changed = []
+    for line in sets:
         try:
-            umap[int(k)] = float(v)
+            total = float(lines.get(str(line)) or 0)
         except (TypeError, ValueError):
             continue
-    rows = _resolve_usage_to_spools(printer, umap, fb_url, active_locs=active_locs) if umap else []
-    if not rows:
-        cancel_review_store.add_pending(rec)  # re-stash UNCHANGED — still recoverable
-        return jsonify({"status": "still_no_spool",
-                        "msg": "No spool is bound to this printer's toolhead yet — "
-                               "bind it in the Location Manager, then Apply."})
-    # A monitor retry could have settled this job between the pop and now.
-    if print_deduct_ledger.was_deducted(printer, job_id):
-        return jsonify({"status": "already_handled"})
-    failed = []
-    spools_updated, details, known = _apply_usage_to_printer(
-        printer, umap, fb_url, strategy_label="Cancel-review", active_locs=active_locs,
-        failed_out=failed)
-    if spools_updated == 0 and not failed:
-        cancel_review_store.add_pending(rec)
-        return jsonify({"status": "still_no_spool",
-                        "msg": "No spool is bound to this printer's toolhead yet."})
-    # (A write that reported failure goes on to the uncharged-grams card below,
-    # 43.2: it may have landed, so re-stashing this review to re-resolve on the
-    # next Apply could charge it twice.)
-    total = round(sum(d["grams"] for d in details), 2)
-    state.add_log_entry(
-        f"✔️ Cancel-review deduct {total:.2f}g across {spools_updated} spool(s) on "
-        f"{printer}{_toolheads_charged(details)} (toolhead now bound).", "SUCCESS")
-    # Record applied + surface any shortfall via the shared helper (records confirmed,
-    # 2dp warn matching the shortfall_g field, orphan-excluded — 22.4(2)/(3)/(4)). A
-    # shortfall of at least the threshold leaves an uncharged-grams card (43.2).
-    _, shortfall = _record_applied_deduct(
-        printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
-        details=details, usage_map=umap, known_positions=known, confirmed=True,
-        fb_url=fb_url, active_locs=active_locs, failed=failed, read_heads=True)
-    resp = {"status": "confirmed", "applied": details, "shortfall_g": shortfall}
-    if cancel_review_store.has_pending(printer, _shortfall_key(job_id)):
-        resp["shortfall_card"] = _shortfall_key(job_id)
-    return jsonify(resp)
+        placed = 0.0
+        for c in charges or []:
+            if isinstance(c, dict) and c.get("row") is None and str(c.get("position")) == str(line):
+                try:
+                    placed += float(c.get("grams") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        # Group 64 review (Y1): whole cents, as the page rounds the card's figure and
+        # its boxes (Math.round): 9.95 against 10 was 0.0500000000000007 here, and a
+        # set the page passed was refused as a page out of date.
+        placed_c, total_c = _cents(placed), _cents(total)
+        if placed_c is None:
+            return (f"The grams typed for {heads.get(str(line)) or f'T{line}'} aren't a figure FCC can "
+                    f"use: check them and Apply again.", False)
+        if total_c is not None and abs(placed_c - total_c) <= 5:
+            continue
+        if not isinstance(acks, dict):
+            return ("This page is out of date, so it can't check the grams of a head with several "
+                    "spools: reload it (Ctrl+F5), then Apply again.", True)
+        seen_c = _cents(acks.get(str(line)))
+        if seen_c is None or abs(seen_c - placed_c) > 5:
+            changed.append(heads.get(str(line)) or f"T{line}")
+    if changed:
+        return (f"The grams typed for {_and_list(changed)} changed since FCC asked about them: "
+                f"check them and Apply again.", False)
+    return None
 
 
 def _card_leftover(rec, applied, asked=None):
@@ -4000,6 +5316,17 @@ def api_cancel_deduct_confirm():
     rec = cancel_review_store.pop_pending(printer, job_id)
     if rec is None:
         return jsonify({"status": "already_handled"})
+    # Group 64 fix review 5 (VS4): the card as it came off the store, for a refusal that
+    # puts it back (what this Apply would have changed on it, its rows_short, isn't).
+    popped = rec
+    # Group 64 review (O4): a cancel's or an ambiguous end's rows marked weighed
+    # (Decision 1), before the picks replace the rows.
+    weighed_rows = [r for r in rec.get("spools") or []
+                    if isinstance(r, dict) and r.get("weighed") and rec.get("kind") != "shortfall"]
+    # Group 64 full review (FX1): each spool's mark as the card showed it, before the
+    # picks rebuild the rows without their marks, for the Apply's Decision 1 check.
+    shown_marks = {str(r.get("sid")): r["weighed"] for r in rec.get("spools") or []
+                   if isinstance(r, dict) and isinstance(r.get("weighed"), dict)}
 
     kind = rec.get("kind", "partial")
     if kind == "shortfall" and str(data.get("rev")) != str(rec.get("rev", 0)):
@@ -4009,24 +5336,86 @@ def api_cancel_deduct_confirm():
         cancel_review_store.add_pending(rec)
         return jsonify({"status": "error", "stale": True,
                         "msg": "This card changed since you opened it — reopen the review."})
+    if kind != "shortfall" and rec.get("rev") is not None and str(data.get("rev")) != str(rec.get("rev")):
+        # Group 64 full review (FX7): a card an Apply kept with a spool held has a
+        # revision too. An Apply from a view drawn before the hold (another window)
+        # charged what that view showed: the held row's old grams on top of the
+        # weighing. A page from before the revision sends none, and is told to reload.
+        cancel_review_store.add_pending(rec)
+        if data.get("rev") is None:
+            return jsonify({"status": "error", "stale_page": True,
+                            "msg": "This card changed since this page drew it (another window applied "
+                                   "part of it). Reload the page (Ctrl+F5) to see it as it is now."})
+        return jsonify({"status": "error", "stale": True,
+                        "msg": "This card changed since it was drawn (another window applied part of "
+                               "it). It's drawn again as it is now: check it, then Apply."})
     # What this job asked for, so the grams no spool took are reported (a tool
     # left unpicked, or a clamp). A retry re-stashed by an earlier Apply carries
     # it, with the grams that Apply already charged; otherwise this Apply sets it.
     requested_total = rec.get("requested_total")
+    # Group 64 fix review 3 (TS1 / TP1) and 4 (US2 / US5): what that ask counts, as
+    # "<line>:<spool>" for each row the Apply that set it posted and "<line>:*" for each
+    # line it held (any spool picked for that line later is in it). A weighed row left at
+    # its 0 g (never posted) is not in it, so its grams are never taken off the shortfall
+    # the uncharged line says: they hid an unpicked head's grams, said nowhere. Keyed by
+    # spool alone, a weighed row whose spool was picked for another head's line counted,
+    # and a line picked after the ask was set didn't. None: everything (a no_spool card's
+    # whole usage, or a record from before these were kept).
+    requested_keys = rec.get("requested_keys") if requested_total is not None else None
+    # Group 64.2 (5): what this Apply charges each of the card's rows short of, or
+    # beyond, what the card showed, where the ask is fixed; read before the picks
+    # replace the rows, and kept on the record (a retry carries it) for the line.
+    rows_short, rows_over = _rows_left_off(rec, data.get('charges'), updates)
     # 43.3 — explicit picks from the card's spool picker. They become this
     # review's rows and run through the same clamped, idempotent per-spool loop
     # below. Without `charges` the old behaviour stands (a cached page, the
     # no_spool re-check against whatever is on the head now).
     charges = data.get('charges')
     set_left = 0.0
-    if kind == "no_spool" and charges is None and (rec.get("heads_source") or rec.get("unresolved_notes")):
-        # Hotfix 2026-11-11: a no_spool card built from the print-end read names
-        # its heads as they were then. The old Apply without picks re-reads the
-        # heads and charges whatever is loaded NOW: the spool loaded after the
-        # print, which this card exists to keep from being charged.
+    held_beside = []
+    if kind == "no_spool" and charges is None:
+        # A no_spool Apply names the spool each head used (`charges`): today's page
+        # always sends its picks on such a card. The old Apply without them re-read
+        # the heads and charged whatever was loaded NOW, the spool loaded after the
+        # print (prod job 1141's mistake); the hotfix refused it on a card built from
+        # the print-end read, and Group 64.3 (5) retires it for every card: a request
+        # without picks is a page from before the 43.3 picker, told to reload. The
+        # card is kept (the pop was the claim).
         cancel_review_store.add_pending(rec)
+        return jsonify({"status": "error", "stale_page": True,
+                        "msg": "Pick the spool each head used on the card, then Apply. If the "
+                               "card shows no spool picker, this page is out of date: reload "
+                               "it (Ctrl+F5) first."})
+    if kind == "shortfall" and not charges and data.get("settle_held") is True:
+        # Decision 1 (Group 64; Derek, 2026-11-20): every line on the card is a spool
+        # that changed weight after its print ended, and the person left each at the
+        # 0 g FCC filled in (or typed 0): nothing is charged, and the card settles as a
+        # Discard would. Any other line still needs its pick (refused below).
+        causes = rec.get("shortfall_causes") or {}
+        lines = [str(l) for l in (rec.get("unresolved_usage") or {})]
+        # Group 64 full review (FX6): a pick an earlier Apply held stays on the card as
+        # a row marked weighed (never a failed write's retry row, which 43.6 judges);
+        # left at the 0 g filled in, it settles as such a line does. The page refused
+        # it ("Pick the spool that took these grams"), and the only ways out were a
+        # Discard or grams charged on top of the weighing.
+        rows = [r for r in rec.get("spools") or [] if isinstance(r, dict)]
+        rows_held = all(isinstance(r.get("weighed"), dict) and r.get("attempt_used_before") is None
+                        for r in rows)
+        if (lines or rows) and rows_held and all(
+                (causes.get(l) or {}).get("why") == "weighed" for l in lines):
+            print_deduct_ledger.record_deduct(
+                printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
+                grams=round(float(rec.get('applied_g') or 0), 2), dismissed=True)
+            left = (_weighed_lines_left(rec, rec.get("unresolved_usage") or {})
+                    + _weighed_rows_left(rows, {}, {}))
+            _say_left_weighed(printer, rec.get('filename'), rec.get('shortfall_of'), left)
+            return jsonify({"status": "confirmed", "applied": [], "settled_held": True,
+                            "shortfall_g": round(float(rec.get('total_grams') or 0), 2),
+                            "left_weighed": left,
+                            "settled_unsure": any(not l["known_order"] for l in left)})
+        cancel_review_store.add_pending(rec)    # the pop was the claim: keep the card
         return jsonify({"status": "error",
-                        "msg": "Pick the spool each head used on the card, then Apply."})
+                        "msg": "Pick the spool that took each other line's grams, or Discard the review."})
     if kind == "shortfall" and charges is None and not rec.get("spools"):
         # 43.2 — a shortfall card names no spool of its own, so an Apply has to
         # pick one (a retry row left by a failed write is the exception). Without
@@ -4053,6 +5442,22 @@ def api_cancel_deduct_confirm():
             cancel_review_store.add_pending(rec)   # the pop was the claim: keep the review
             state.add_log_entry(f"⚠️ {printer}: review Apply refused — {_esc(why)}.", "WARNING", "ffaa00")
             return jsonify({"status": "error", "msg": why})
+        try:
+            set_refusal = _set_check_refusal(rec, kind, charges, data)
+        except Exception as e:
+            # The pop was the claim: an unexpected raise must not lose the review
+            # (Group 64 fix review, FS1).
+            cancel_review_store.add_pending(rec)
+            state.add_log_entry(
+                f"❌ {printer}: review Apply failed (job {job_id}): {_esc(e)} — review kept for retry.",
+                "ERROR", "ff4444")
+            return jsonify({"status": "error", "msg": "FCC couldn't check the grams typed: check them "
+                                                       "and Apply again."}), 500
+        if set_refusal:
+            cancel_review_store.add_pending(rec)   # the pop was the claim: keep the review
+            msg, stale = set_refusal
+            state.add_log_entry(f"⚠️ {printer}: review Apply refused — {_esc(msg)}", "WARNING", "ffaa00")
+            return jsonify(dict({"status": "error", "msg": msg}, **({"stale_page": True} if stale else {})))
         if requested_total is None and kind == "no_spool":
             try:
                 requested_total = round(sum(float(v) for v in (rec.get("usage_map") or {}).values()), 2)
@@ -4068,6 +5473,16 @@ def api_cancel_deduct_confirm():
         # failed write's retry (_say_uncharged). Round 2's review: as the ledger
         # counts it, with what was typed beyond a line and the spools picked.
         left_lines, over_lines, picked_for = _lines_left_unplaced(rec, kind, charges)
+        if kind == "shortfall":
+            # Group 64 fix review 2 (CS3 / CX1): a pick an earlier Apply held stays on the
+            # card as a row marked weighed. One no pick of this Apply names (left at its
+            # 0 g) is settled with the card's other weighed lines when the page sent
+            # settle_held, and kept on the card otherwise; the picks replacing the rows
+            # used to drop it, and its grams were said as no spool's.
+            named = {str(c.get("row")) for c in charges if isinstance(c, dict) and c.get("row") is not None}
+            held_beside = [r for r in rec.get("spools") or []
+                           if isinstance(r, dict) and isinstance(r.get("weighed"), dict)
+                           and r.get("attempt_used_before") is None and str(r.get("sid")) not in named]
         rec = dict(rec)
         if left_lines:
             rec["unplaced"] = _add_grams(rec.get("unplaced"), left_lines)
@@ -4089,22 +5504,20 @@ def api_cancel_deduct_confirm():
                                        if str(k) not in picked_tools}
         updates = {str(r["sid"]): r["grams"] for r in picked}
         kind = "partial"
-    if kind == "no_spool":
-        # Usage was computed earlier but no spool was bound. RE-RESOLVE the stored
-        # usage_map against whatever's bound NOW (Derek just bound the toolhead) and
-        # apply. The pop above is the claim; _confirm_no_spool_review re-stashes if
-        # still unbound so the review is never lost (no terminal 0g). Guard the whole
-        # call: an UNEXPECTED raise (corrupt local JSON, a probe error) between the
-        # pop and its controlled re-stash points would otherwise lose the popped
-        # review with no ledger entry — a silent loss. Re-stash + surface on any raise.
-        try:
-            return _confirm_no_spool_review(printer, job_id, rec)
-        except Exception as e:
-            cancel_review_store.add_pending(rec)
-            state.add_log_entry(
-                f"❌ Cancel-review apply failed for {printer} (job {job_id}): {_esc(e)} — "
-                f"review kept for retry.", "ERROR", "ff4444")
-            return jsonify({"status": "error", "msg": str(e)}), 500
+    if rec.get("kind") == "shortfall" and charges is None:
+        # Group 64 fix review 3 (TS3): an Apply that posts `updates` (a retry of a
+        # failed write) leaves the card's held rows it doesn't post where they are: the
+        # same rule as beside picks (CS3 / CX1), settled or kept, never dropped.
+        posted = set()
+        for k, v in updates.items():
+            try:
+                if math.isfinite(float(v)) and float(v) > 0:
+                    posted.add(str(int(k)))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        held_beside = [r for r in rec.get("spools") or []
+                       if isinstance(r, dict) and isinstance(r.get("weighed"), dict)
+                       and r.get("attempt_used_before") is None and str(r.get("sid")) not in posted]
     if kind == "progress_unknown":
         # No measured usage + no preview spools — nothing to auto-apply. Don't let
         # the partial loop below 0g-"confirm" it (that would re-lose it). Re-stash
@@ -4114,6 +5527,12 @@ def api_cancel_deduct_confirm():
                         "msg": "Usage couldn't be measured — weigh the spool and "
                                "adjust it directly, or Discard this review."})
 
+    if rows_short or rows_over:
+        rec = dict(rec)
+        if rows_short:
+            rec["rows_short"] = _join_row_grams(rec.get("rows_short"), rows_short)
+        if rows_over:
+            rec["rows_over"] = _join_row_grams(rec.get("rows_over"), rows_over)
     # Only spools that were in the reviewed preview may be deducted — a stray /
     # crafted update for an out-of-scope sid must never touch a different spool.
     rec_rows = {r["sid"]: r for r in rec.get("spools", [])}
@@ -4143,6 +5562,8 @@ def api_cancel_deduct_confirm():
                 continue
         requested_total = round(sum(g for s, g in (_grams_of(k, v) for k, v in updates.items())
                                     if s in rec_rows) + uncharged + set_left, 2)
+        requested_keys = sorted({f"{_norm_pos(rec_rows[s].get('position'))}:{s}" for s in asked if s in rec_rows}
+                                | {f"{_norm_pos(l)}:*" for l in (rec.get("unresolved_usage") or {})})
     prior_g = float(rec.get("applied_g") or 0)
 
     applied, errors = [], []
@@ -4157,6 +5578,8 @@ def api_cancel_deduct_confirm():
     # slowly reads as a rejection; the retry used to re-read the CURRENT
     # used_weight (already including that write) and add the grams again.
     attempts = {}
+    # Group 64 full review: {sid: its new Decision 1 mark} for a row held at this Apply.
+    held_rows = {}
     eps = _WRITE_EPS
     for sid_raw, grams_raw in updates.items():
         sid, grams = _grams_of(sid_raw, grams_raw)
@@ -4187,6 +5610,25 @@ def api_cancel_deduct_confirm():
             th = str(rec_rows[sid].get('toolhead') or '').upper()
             where = f"{printer} {th}" if th else str(printer)
             info = spoolman_api.format_spool_display(spool)
+            if rec_rows[sid].get('attempt_used_before') is None:
+                # Group 64 full review (RW1 / OR1 / SP3 / PR1, OR2 / SP2): Decision 1
+                # again, under the lock. A spool that changed after its print ended,
+                # in a way the card didn't show, is charged nothing: the card waits,
+                # its line marked, for the person to look again (a 43.6 retry row is
+                # judged by its attempt, below).
+                late = _held_at_apply(rec, rec_rows[sid], sid, used, shown=shown_marks.get(str(sid)))
+                if late is not None:
+                    mark = _held_mark(late, grams)
+                    held_rows[sid] = mark
+                    words = mark["weighed"]["words"]
+                    errors.append({"sid": sid, "error": f"{words}. Nothing was charged to it: check its "
+                                                        f"line and Apply again."})
+                    failed_sids.add(sid)
+                    state.add_log_entry(
+                        f"⚠️ {where}: {words} ('{_esc(rec.get('filename'))}'). Nothing was charged to it: its "
+                        f"card waits with the line marked.", "WARNING", "ffaa00",
+                        meta={"type": "cancel_deduct_pending", "printer_name": printer, "job_id": str(job_id)})
+                    continue
             # 43.6 — a retry of a write that reported failure: judge it by the attempt
             # recorded on the review row, not by the spool's current weight alone.
             before = rec_rows[sid].get('attempt_used_before')
@@ -4208,6 +5650,11 @@ def api_cancel_deduct_confirm():
                     # landed attempt archived a spool it emptied, so the record read
                     # now says archived, and its filament's "is out" was never said.
                     was = rec_rows[sid].get('attempt_was_archived')
+                    # Group 64 fix review (FS4): the landed attempt is FCC's own charge,
+                    # noted from when it was sent (never on a guess: only here, where
+                    # it is proven), so a print ended before it isn't held over it.
+                    if rec_rows[sid].get('attempt_sent_at') is not None:
+                        weigh_stamps.note_charge(sid, done_g, at=rec_rows[sid]['attempt_sent_at'])
                     applied.append({"sid": sid, "grams": done_g,
                                     "remaining": None if remaining is None else round(remaining, 1),
                                     "was_archived": bool(spool.get('archived') if was is None else was)})
@@ -4240,6 +5687,7 @@ def api_cancel_deduct_confirm():
                                 "was_archived": bool(spool.get('archived'))})
                 continue
             new_used = used + grams
+            sent_at = time.time()
             ok = bool(spoolman_api.update_spool(sid, _deduct_payload(spool, new_used)))
             if not ok:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
@@ -4256,14 +5704,18 @@ def api_cancel_deduct_confirm():
                         f"⚠️ {where}: Spoolman reported an error for Spool #{sid} ({_esc(err)}), but the "
                         f"write landed — counted once.", "WARNING", "ffaa00")
                 else:
-                    errors.append({"sid": sid, "error": err})
+                    # Group 64 fix review 4 (UP1): the page shows `words`, never Spoolman's raw
+                    # answer (its JSON, or requests' text with Spoolman's address).
+                    errors.append({"sid": sid, "error": err, "words": spoolman_api.refusal_words(err)})
                     failed_sids.add(sid)
                     # Stamped even when the re-read shows the old weight: the retry
                     # then also catches a weigh-out made before it ("changed" below).
-                    attempts[sid] = (used, new_used, bool(spool.get('archived')))
+                    attempts[sid] = (used, new_used, bool(spool.get('archived')), sent_at)
                     state.add_log_entry(
                         f"❌ {where}: cancel-deduct failed for Spool #{sid}: {_esc(err)}", "ERROR", "ff4444")
                     continue
+            # Group 64 review (S1): noted, so a print ended before it isn't held as weighed.
+            weigh_stamps.note_charge(sid, grams, at=sent_at)
             remaining = None if capacity is None else max(0.0, capacity - new_used)
             tail = "[no known capacity]" if remaining is None else f"[➔ {remaining:.1f}g remaining]"
             state.add_log_entry(
@@ -4283,8 +5735,9 @@ def api_cancel_deduct_confirm():
         if not applied and not leftover:
             # Nothing was charged and no row of this review failed: every update
             # named a spool outside it (a stale card). Keep the review as it was,
-            # or it is gone with no ledger entry and no log line.
-            cancel_review_store.add_pending(rec)
+            # or it is gone with no ledger entry and no log line. As it was popped
+            # (VS4): the rows this refused post left out are no rows left short.
+            cancel_review_store.add_pending(popped)
             why = "; ".join(f"#{e_['sid']}: {e_['error']}" for e_ in errors)
             state.add_log_entry(f"⚠️ {printer}: review Apply refused — {_esc(why)}. Review kept.",
                                 "WARNING", "ffaa00")
@@ -4303,19 +5756,71 @@ def api_cancel_deduct_confirm():
                     row.pop('attempt_used_before', None)
                     row.pop('attempt_used_after', None)
                     row.pop('attempt_was_archived', None)
+                    row.pop('attempt_sent_at', None)
                     if attempts[sid_] is not None:
                         # 43.6 — the attempt the retry judges by, and the grams it
                         # was for (so the card shows what was really confirmed).
-                        before_, after_, was_ = attempts[sid_]
+                        before_, after_, was_, at_ = attempts[sid_]
                         row['attempt_used_before'] = round(before_, 2)
                         row['attempt_used_after'] = round(after_, 2)
                         row['attempt_was_archived'] = was_
+                        row['attempt_sent_at'] = at_
                         row['grams'] = round(after_ - before_, 2)
+                        # Group 64 fix review 2 (CP4): the person chose to charge this
+                        # row (its write was sent), so it is no hold any more: its mark
+                        # and its 0 g would redraw it as one, and an Apply as drawn
+                        # would leave the grams the person decided to charge.
+                        row.pop('weighed', None)
+                        row.pop('prefill', None)
+                if sid_ in held_rows:
+                    row.update(held_rows[sid_])
+                    # Group 64 fix review 5 (VS1): at the grams this Apply asked of it (a
+                    # box nudged from the card's figure), which the ask counts: left at 0 g
+                    # later, the card's figure came off the shortfall and hid other grams.
+                    if sid_ in asked:
+                        row['grams'] = round(asked[sid_], 2)
                 retry_rows.append(row)
+            # Group 64 fix review 3 (TS3 / TS5) and 4 (US1 / US3 / US6): a weighed row this
+            # Apply left at its 0 g was dropped with the retry card and never named. On a
+            # cancel's card it is settled here, named once as left uncharged as the Apply's
+            # success does (kept on the retry card, it sat outside the fixed ask, so
+            # charging it at the retry hid a line no spool took, and a view drawn before the
+            # Apply, which no revision guarded, charged its old figure on top). An
+            # uncharged-grams card's held pick stays a row of the retry card, at the 0 g the
+            # person left it at (its line's grams are in the ask; the card's revision moves).
+            on_card = {str(r.get("sid")) for r in retry_rows}
+            left_now = []
+            if rec.get("kind") == "shortfall":
+                for r in held_beside:
+                    if str(r.get("sid")) not in on_card and r.get("sid") not in failed_sids:
+                        retry_rows.append(dict(r, prefill=0.0))
+                        on_card.add(str(r.get("sid")))
+            else:
+                # (A cancel's marked row redirected to another spool was charged on its
+                # head: _weighed_rows_left judges by the head, as the Apply's success does.)
+                # Fix review 5 (VS3): a row is a line and a spool; one whose spool failed
+                # or was held on ANOTHER line is still left here, and named.
+                on_retry = {(str(_norm_pos((rec_rows.get(s) or {}).get('position'))), str(s))
+                            for s in set(failed_sids) | set(held_rows) if s in rec_rows}
+                left_now = [l for l in _weighed_rows_left(weighed_rows, rec_rows, asked)
+                            if (str(l.get("line")), str(l.get("sid"))) not in on_retry]
             retry_rec = dict(rec)
             retry_rec["spools"] = retry_rows
             # The retry reports the job's shortfall when it finally commits.
             retry_rec["requested_total"] = requested_total
+            if requested_keys is not None:
+                retry_rec["requested_keys"] = requested_keys
+            else:
+                retry_rec.pop("requested_keys", None)
+            if left_now:
+                _say_left_weighed(printer, rec.get('filename'), rec.get('shortfall_of') or job_id, left_now)
+                # What of them the ask counts is carried, for the retry's uncharged line;
+                # they are no row "left off" when it commits.
+                retry_rec["weighed_left_g"] = round(float(rec.get("weighed_left_g") or 0)
+                                                    + _left_in_ask(left_now, requested_keys), 2)
+                gone = {str(l.get("sid")) for l in left_now}
+                retry_rec["rows_short"] = [e for e in (rec.get("rows_short") or [])
+                                           if str(e.get("sid")) not in gone]
             retry_rec["applied_g"] = round(prior_g + sum(a['grams'] for a in applied), 2)
             if rec.get("kind") == "shortfall":
                 # 43.2 — what the rows that did apply couldn't take stays on the
@@ -4324,6 +5829,9 @@ def api_cancel_deduct_confirm():
                 done = dict(rec, spools=[r for r in rec.get("spools", []) if r["sid"] not in failed_sids])
                 left, drained = _card_leftover(done, applied, asked)
                 retry_rec["unresolved_usage"] = left
+                # Fix review 5 (VS2): a weighed line this Apply left unposted (its box at 0)
+                # stays at 0, as a held row does (US6).
+                retry_rec["shortfall_prefill"] = _weighed_lines_at_0(rec, left)
                 _note_drained(retry_rec, drained)
                 retry_rec["total_grams"] = round(
                     sum(float(r.get('grams') or 0) for r in retry_rows) + sum(left.values()), 2)
@@ -4336,18 +5844,33 @@ def api_cancel_deduct_confirm():
                 carried = round(float(rec.get("clamped_g") or 0) + clamp_g, 2)
                 if carried > 0.005:
                     retry_rec["clamped_g"] = carried
+                if held_rows:
+                    # Group 64 full review (FX7): a hold changed the card (its line now
+                    # marked, 0 g filled in), so a view drawn before this Apply is refused
+                    # (the check above), as a shortfall card's is. A failed write's retry
+                    # row needs none: 43.6 judges it by its attempt.
+                    retry_rec["rev"] = int(rec.get("rev") or 0) + 1
             cancel_review_store.add_pending(retry_rec)
             # Re-emit the Review affordance so the retry is discoverable even if
             # the original cancel log line has scrolled off.
+            held_only = all(s in held_rows for s in leftover)
             state.add_log_entry(
                 f"🛑 {len(leftover)} spool(s) still need a cancel-deduct review on "
-                f"{printer} (a deduct failed) — Review to retry.",
+                f"{printer} ({'weighed or changed after the print ended' if held_only else 'a deduct failed'})"
+                f" — Review to {'check them' if held_only else 'retry'}.",
                 "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending",
                       "printer_name": printer, "job_id": str(job_id)})
             status = "confirmed" if applied else "error"
             _low_stock_after_review(applied, printer, job_id)
-            return jsonify({"status": status, "applied": applied, "errors": errors})
+            answer = {"status": status, "applied": applied, "errors": errors}
+            if held_rows:
+                answer["held"] = [{"sid": s, "words": m["weighed"]["words"],
+                                   "known_order": m["weighed"]["known_order"]} for s, m in held_rows.items()]
+            if left_now:
+                answer["left_weighed"] = left_now
+                answer["settled_unsure"] = any(not l["known_order"] for l in left_now)
+            return jsonify(answer)
         # Every row of this review applied; the only errors name spools outside it
         # (a stale card). The job is done, so commit it below (Group 39 review,
         # deduct-and-tests-16): returning here dropped the review with no ledger
@@ -4358,6 +5881,8 @@ def api_cancel_deduct_confirm():
     applied_total = round(prior_g + sum(a['grams'] for a in applied), 2)
     charged_now = round(sum(a['grams'] for a in applied), 2)
     residue_card = None
+    settled = []
+    settled_rows = []
     if rec.get("kind") == "shortfall":
         # 43.2 — what a shortfall card's picks couldn't take stays on the card
         # (Derek: an archived run-out spool is charged what it has, 0 g for #99,
@@ -4365,22 +5890,56 @@ def api_cancel_deduct_confirm():
         # residue is reported like any other shortfall. The card keeps its ask and
         # the grams every Apply charged, for the ledger entry it ends with.
         left, drained = _card_leftover(rec, applied, asked)
-        if left and sum(left.values()) >= max(0.05, _shortfall_review_min_g()):
+        settled = _settle_with_picks(rec, left, drained, data)
+        if settled:
+            # Group 64 review (O3): every line this Apply left is a spool weighed after
+            # its print ended, left at the 0 g its card filled in (the page sent
+            # settle_held beside its picks): those grams settle here, as a Discard of
+            # them would, instead of a kept card telling the person to pick a spool
+            # for grams the scale already counted.
+            left = {}
+        held_kept = []
+        if held_beside:
+            if data.get("settle_held") is True and not left and not drained:
+                # CS3 / CX1: settled with the lines, named as left uncharged.
+                settled_rows = _weighed_rows_left(held_beside, {}, {})
+                settled = list(settled or []) + settled_rows
+            else:
+                held_kept = held_beside
+        if held_kept or (left and sum(left.values()) >= max(0.05, _shortfall_review_min_g())):
+            # CX1: a held row no pick named stays a row of the kept card, whatever the
+            # threshold says (a held head is a question, never a rounding).
             kept = dict(rec)
-            kept.update(spools=[], unresolved_usage=left, total_grams=round(sum(left.values()), 2),
+            # Group 64 fix review 4 (US6): at the 0 g the person left each at (a mark FCC
+            # can't place fills in the print's grams; redrawn so, an Apply as drawn charged
+            # them on top).
+            held_kept = [dict(r, prefill=0.0) for r in held_kept]
+            # Fix review 5 (VS2): and a weighed line it left unposted (its box at 0).
+            kept["shortfall_prefill"] = _weighed_lines_at_0(rec, left)
+            kept.update(spools=held_kept, unresolved_usage=left,
+                        total_grams=round(sum(left.values()) + sum(float(r.get('grams') or 0) for r in held_kept), 2),
                         rev=int(rec.get("rev") or 0) + 1, applied_g=applied_total)
             if requested_total is not None:
                 kept["requested_total"] = requested_total
+                if requested_keys is not None:
+                    kept["requested_keys"] = requested_keys
+                else:
+                    kept.pop("requested_keys", None)
             _note_drained(kept, drained)
             cancel_review_store.add_pending(kept)
+            # Group 64 fix review (FS2): the card's weighed lines are no grams with no
+            # spool: they wait at what the card filled in, and saying "pick another"
+            # for them sent the person to charge grams the scale had counted.
+            kept_weighed = _weighed_lines_left(kept, left) + _weighed_rows_left(held_kept, {}, {})
             state.add_log_entry(
                 f"⚠️ {printer}: charged {charged_now:.2f}g of the uncharged grams from "
-                f"'{_esc(rec.get('filename'))}'; {kept['total_grams']:.2f}g still have no spool — pick "
-                f"another in 🛑 Review, or Discard.", "WARNING", "ffaa00",
+                f"'{_esc(rec.get('filename'))}'; {_kept_card_words(kept['total_grams'], kept_weighed)}.",
+                "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending", "printer_name": printer, "job_id": str(job_id)})
             _low_stock_after_review(applied, printer, job_id)
             return jsonify({"status": "confirmed", "applied": applied, "errors": errors,
-                            "shortfall_g": kept['total_grams'], "kept": True, "rev": kept["rev"]})
+                            "shortfall_g": kept['total_grams'], "kept": True, "rev": kept["rev"],
+                            "kept_weighed": kept_weighed})
     elif not print_deduct_ledger._is_blank_job(job_id):
         # 43.2 — on any other review, grams the spools couldn't take (an empty or
         # near-empty pick, archived or not) go to a new uncharged-grams card, so
@@ -4395,6 +5954,7 @@ def api_cancel_deduct_confirm():
                 residue_card = _stash_shortfall_review(
                     printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
                     uncharged=residue, details=gone, heads=rec.get("heads_at_end") or [],
+                    picked=True,
                     **_given(heads_source=rec.get("heads_source"),
                              heads_read_at=rec.get("heads_read_at")))
             except Exception as e:
@@ -4412,10 +5972,32 @@ def api_cancel_deduct_confirm():
         grams=applied_total, confirmed=True, **extra)
     _low_stock_after_review(applied, printer, job_id)
     resp = {"status": "confirmed", "applied": applied, "errors": errors}
+    # Group 64 review (O3 / O4): the weighed lines and rows this Apply left
+    # uncharged, said once each, and handed to the page for its toast.
+    left_weighed = settled or _weighed_rows_left(weighed_rows, rec_rows, asked)
+    # Group 64 fix review 3 (TS1 / TP1) and 4 (US2 / US5): what of them the shortfall
+    # counts (_left_in_ask: a line or row whose grams the ask holds), plus what earlier
+    # Applies of this card named as left uncharged (`weighed_left_g`, carried).
+    left_row_sids = {str(l.get("sid")) for l in (settled_rows if settled else left_weighed)}
+    left_in_shortfall = round(float(rec.get("weighed_left_g") or 0)
+                              + _left_in_ask(left_weighed, requested_keys), 2)
+    if left_weighed:
+        _say_left_weighed(printer, rec.get('filename'), rec.get('shortfall_of') or job_id, left_weighed)
+        resp["left_weighed"] = left_weighed
+        resp["settled_unsure"] = any(not l["known_order"] for l in left_weighed)
+        if settled:
+            resp["settled_held"] = True
+    if left_weighed or left_in_shortfall > 0.005:
+        # The page takes these off the shortfall it says "couldn't be applied" for
+        # (an earlier Apply's too: they were said as left uncharged then; 0 when the
+        # ask never counted the ones named now).
+        resp["left_in_shortfall_g"] = left_in_shortfall
     if shortfall is not None:
         resp["shortfall_g"] = shortfall
         if residue_card is not None:
             resp["shortfall_card"] = residue_card["job_id"]
+            # Group 64 fix review 3 (TP8): the new card's own grams, for the page's words.
+            resp["shortfall_card_g"] = residue_card["total_grams"]
             state.add_log_entry(
                 f"⚠️ {printer}: {residue_card['total_grams']:.2f}g of '{_esc(rec.get('filename'))}' couldn't "
                 f"be charged to the spool(s) picked ({_shortfall_reasons(residue_card)}) — pick another "
@@ -4425,9 +6007,153 @@ def api_cancel_deduct_confirm():
         # Round 2 (R2): the grams no spool took, per head with the spools FCC saw
         # there (Derek: "a note about xx grams not being deducted from Spool X or
         # spool Y"); the heads nobody placed are said even beside a new card.
-        _say_uncharged(printer, rec, shortfall, residue_card,
+        say_rec, say_short = rec, shortfall
+        if settled:
+            # The settled lines' grams are said by their own line, above.
+            gone = {str(l["line"]) for l in settled}
+            say_rec = dict(rec, unresolved_usage={k: v for k, v in (rec.get("unresolved_usage") or {}).items()
+                                                  if str(k) not in gone})
+        if left_weighed or left_in_shortfall > 0.005:
+            # Group 64 fix review 2 (CS4): every weighed line and row this Apply left is
+            # said by _say_left_weighed's line, above, as uncharged on purpose; counted
+            # here too, they were said a second time as grams no spool took. Fix review 3
+            # (TS1 / TP1): only what the shortfall counts comes off it, and a row named
+            # there is no row "left off" (TS2: the line said it again, and its sum went
+            # wrong: "but 12.4 g more ... were typed for other spools").
+            say_short = round(max(0.0, shortfall - left_in_shortfall), 2)
+            say_rec = dict(say_rec, rows_short=[e for e in (say_rec.get("rows_short") or [])
+                                                if str(e.get("sid")) not in left_row_sids])
+        _say_uncharged(printer, say_rec, say_short, residue_card,
                        clamped=round(float(rec.get("clamped_g") or 0) + clamp_g, 2))
     return jsonify(resp)
+
+
+def _weighed_lines_at_0(rec, lines):
+    """Group 64 fix review 5 (VS2): an uncharged-grams card's figures once an Apply keeps
+    it: each weighed line (Decision 1's cause) among `lines` that the Apply left unposted
+    (the person's box at 0 g: a weighed line's spool is always picked, so only a 0 leaves
+    it unposted; still in `rec`'s unresolved_usage, which the picks reduced) is filled in
+    at 0 from now on. Redrawn at the print's grams, an unsure line's Apply as drawn charged
+    them on top of a change the person had judged at 0 g. The rest as the card had them."""
+    out = dict(rec.get("shortfall_prefill") or {})
+    causes = rec.get("shortfall_causes") or {}
+    unposted = {str(k) for k in (rec.get("unresolved_usage") or {})}
+    for line in lines or {}:
+        if str(line) in unposted and (causes.get(str(line)) or {}).get("why") == "weighed":
+            out[str(line)] = 0.0
+    return out
+
+
+def _left_in_ask(left, keys):
+    """Group 64 fix review 4 (US2 / US5): the grams of `left` (weighed lines and rows an
+    Apply left uncharged, {line, sid, grams}) that an ask counts: its `keys`
+    ("<line>:<spool>" for a row it posted, "<line>:*" for a line it held); every one when
+    the ask kept no keys (a no_spool card's whole usage, or a record from before)."""
+    total = 0.0
+    for l in left or []:
+        line, sid = str(l.get("line")), str(l.get("sid"))
+        if keys is None or f"{line}:{sid}" in keys or f"{line}:*" in keys:
+            try:
+                total += float(l.get("grams") or 0)
+            except (TypeError, ValueError):
+                continue
+    return round(total, 2)
+
+
+def _weighed_lines_left(rec, lines):
+    """[{line, sid, grams, known_order}] for a shortfall card's weighed lines among
+    `lines` ({line: grams}), from its causes (Decision 1)."""
+    causes = rec.get("shortfall_causes") or {}
+    out = []
+    for line, grams in sorted((lines or {}).items(), key=lambda kv: str(kv[0])):
+        cause = causes.get(str(line)) or {}
+        if cause.get("why") != "weighed":
+            continue
+        try:
+            g = round(float(grams or 0), 2)
+        except (TypeError, ValueError):
+            g = 0.0
+        out.append({"line": str(line), "sid": cause.get("sid"), "grams": g,
+                    "known_order": bool(cause.get("known_order"))})
+    return out
+
+
+def _kept_card_words(total, kept_weighed):
+    """Group 64 fix review (FS2): what a kept uncharged-grams card still holds, its
+    weighed lines (Decision 1's, from _weighed_lines_left) apart from the grams no
+    spool took: "2.00g still have no spool — pick another in 🛑 Review, or Discard;
+    12.40g on #200, weighed after the print ended, stay on the card: Apply again to
+    leave them uncharged, or Discard"."""
+    weighed_g = round(sum(float(l.get("grams") or 0) for l in kept_weighed or []), 2)
+    other_g = round(float(total or 0) - weighed_g, 2)
+    parts = []
+    if other_g > 0.05 or not kept_weighed:
+        parts.append(f"{other_g:.2f}g still have no spool — pick another in 🛑 Review, or Discard")
+    if kept_weighed:
+        who = _and_list(f"#{l.get('sid')}" for l in kept_weighed)
+        if all(l.get("known_order") for l in kept_weighed):
+            parts.append(f"{weighed_g:.2f}g on {who}, weighed after the print ended, stay on the card: "
+                         f"Apply again to leave them uncharged, or Discard")
+        else:
+            parts.append(f"{weighed_g:.2f}g on {who}, whose weight changed after the print ended, stay on "
+                         f"the card: check them, then Apply again or Discard")
+    return "; ".join(parts)
+
+
+def _settle_with_picks(rec, left, drained, data):
+    """Group 64 review (O3): the weighed lines an Apply with picks leaves, to settle,
+    when its page sent `settle_held` (every line it left without a pick is a weighed
+    line at 0 g) and every line left is one (no spool's clamp left grams on a picked
+    line). [] otherwise: the card is kept as before."""
+    if data.get("settle_held") is not True or not left or drained:
+        return []
+    out = _weighed_lines_left(rec, left)
+    return out if len(out) == len(left) else []
+
+
+def _weighed_rows_left(weighed_rows, rec_rows, asked):
+    """Group 64 review (O4): [{line, sid, grams, known_order}] for a cancel's or an
+    ambiguous end's rows marked weighed (Decision 1) that this Apply charged nothing
+    on their head: the box left at the 0 g filled in, or emptied."""
+    charged_at = {str(_norm_pos((rec_rows.get(s) or {}).get('position'))) for s in asked or {}}
+    out = []
+    for r in weighed_rows or []:
+        line = str(_norm_pos(r.get('position')))
+        if line in charged_at:
+            continue
+        w = r.get("weighed") or {}
+        try:
+            g = round(float(r.get('grams') or 0), 2)
+        except (TypeError, ValueError):
+            g = 0.0
+        out.append({"line": line, "sid": r.get('sid'), "grams": g,
+                    "known_order": bool(w.get("known_order"))})
+    return out
+
+
+def _say_left_weighed(printer, filename, job_ref, left):
+    """Decision 1: one Activity Log line for the weighed spools whose grams an Apply
+    left uncharged (Group 64 review, O3 / O4), worded by what FCC knows: weighed on
+    FCC after the print ended, or a change FCC couldn't place in time (left as the
+    person set it). Never raises."""
+    try:
+        known = [l for l in left or [] if l.get("known_order")]
+        unsure = [l for l in left or [] if not l.get("known_order")]
+        # FCC's own words, never outside text (`why` in this file is outside text,
+        # escaped: test_deduct_accuracy_56's canary).
+        for group, words in (
+                (known, "weighed after the print ended, the scale counted it"),
+                (unsure, "its weight changed after the print ended, and FCC couldn't tell whether the "
+                         "scale counted it: left as set on the card")):
+            if not group:
+                continue
+            grams = round(sum(float(l.get("grams") or 0) for l in group), 2)
+            who = _and_list(f"#{l.get('sid')}" for l in group)
+            state.add_log_entry(
+                f"✔️ {printer}: left {grams:.2f}g of '{_esc(filename)}' uncharged on {who} "
+                f"(job {_esc(job_ref)}): {words}.", "INFO")
+    except Exception as e:
+        state.logger.debug(f"left-weighed line skipped for {printer}: {e}")
 
 
 def _low_stock_after_review(applied, printer, job_id):

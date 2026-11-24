@@ -41,23 +41,30 @@ import print_deduct  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# Cancelled-print detection — rides the dashboard-pulse printer-state probe
-# (FilaBridge absorption design §9.3 / build slice 2a).
+# Print-end detection — a daemon of its own (_cancel_monitor_loop) polls every
+# printer's PrusaLink state, 10 s while one is busy and 30 s when all are idle
+# (FilaBridge absorption design §9.3; it rode the dashboard pulse until 2026-06).
 #
-# _pulse_section_printer_status already probes every printer's PrusaLink state
-# on each heartbeat. We piggyback on that probe: while a print is IN PROGRESS we
-# latch its filename / job_id / monotonic byte-progress (PrusaLink tears the job
-# block down the instant the print STOPS, so we MUST capture it beforehand),
-# and on the →STOPPED/ERROR edge we fire deduct_cancelled_print with the latched
-# values on a background thread. The persistent print_deduct_ledger keeps the
-# deduct exactly-once across ticks and restarts.
-#
-# First ship is cancel-only (STOPPED/ERROR). FINISHED stays with FilaBridge
-# until the Phase-2 atomic cutover — firing on FINISHED here would
-# double-deduct prints FilaBridge already deducts.
+# While a print is IN PROGRESS the tracker latches its filename / job_id /
+# monotonic byte-progress (PrusaLink tears the job block down the instant the
+# print STOPS, so it must be captured beforehand), its start-spool snapshot and
+# the swaps its resumes record. On an end edge it reads the heads first, before
+# any download (the print-end read, hotfix 2026-11-11), then on a thread of its
+# own: a →STOPPED/ERROR cancel opens the 🛑 review (preview and confirm,
+# print_deduct._create_pending_cancel_review); a →FINISHED completion is charged
+# from the slicer's footer (print_deduct.deduct_completed_print), only while
+# `fcc_owns_completion_deduct` is on (FilaBridge was decommissioned 2026-06-13);
+# an in-progress print that reaches IDLE with no end FCC saw, or that a new job
+# replaces, opens the ambiguous review. Nothing here calls the one-shot cancel
+# deduct, print_deduct.deduct_cancelled_print (kept for a future auto mode; it
+# takes the print-end read too, Group 64.3 (8)). The persistent
+# print_deduct_ledger keeps each deduct exactly-once across ticks and restarts.
 # ---------------------------------------------------------------------------
 
-# {printer_name: {"state": str, "job_id", "filename", "progress", "file_meta"}}
+# {printer_name: {"state": str, "job_id", "filename", "progress", "start_spools",
+#                  "snapshot_job", "swap_log", "pause_progress", "saw_attention",
+#                  "park_heads", "park_read", "paused_at"}}: the latch (each key is described where
+# it is set). Group 64.3 (4) dropped "file_meta", which nothing read.
 _PRINT_TRACKER = {}
 _PRINT_TRACKER_LOCK = threading.Lock()
 
@@ -321,7 +328,11 @@ def _try_again(printer, job_id):
     spool and then has the print charged on top. '' when nothing is queued for it,
     when the ledger or a review already holds the job (the queue then only drops
     its record: nothing is computed again), or when its record says a charge may
-    have begun (that one is given up, not retried)."""
+    have begun (that one is given up, not retried). The edge's own raise counts as
+    the first of the queue's quick tries (Group 64.2 (3)), and the queue's raises
+    after it say nothing (_note_compute_raise speaks at the first), so this line is
+    the one that says how the queue keeps trying and carries the "↻ Try again now"
+    button (Group 64 review, S5: it never appeared on this path)."""
     try:
         if print_deduct_ledger._is_blank_job(job_id):
             return ""
@@ -331,9 +342,62 @@ def _try_again(printer, job_id):
         rec = cancel_fetch_store.get_pending(printer, job_id)
         if not isinstance(rec, dict) or rec.get("charging_since"):
             return ""
-        return " — FCC will try again when the printer is idle."
+        return (f" — {print_deduct._fetch_schedule_words(_CANCEL_FETCH_MAX_AGE_S // 3600, who='FCC')}"
+                f"{print_deduct._fetch_retry_button(printer, job_id)}")
     except Exception:
         return ""
+
+
+def _note_compute_raise(printer, job_id, filename, error, say=True):
+    """Count a raise of a queued print's compute on its record (`raises`; Group
+    64.2 (3)), where it used to be retried on every idle tick for 72 hours with only
+    a debug line. After print_deduct._FETCH_FAST_TRIES raises the record waits
+    longer each time (`next_try_at`, print_deduct._fetch_next_try_at), never given
+    up before the 72-hour window (Derek, 2026-11-20). The first raise is said in one
+    WARNING line with a "Try again now" button (`say`; a live edge's raise says it
+    in its own ERROR line). A print with no record (no job id, or already settled)
+    counts nothing. Returns the new count, or 0. Never raises."""
+    try:
+        if print_deduct_ledger._is_blank_job(job_id):
+            return 0
+        counted = []
+        now = time.time()
+
+        def _bump(rec):
+            if not isinstance(rec, dict) or not rec:
+                return None
+            try:
+                count = int(rec.get("raises", 0) or 0) + 1
+            except (TypeError, ValueError):
+                count = 1
+            counted.append(count)
+            kept = dict(rec, raises=count, last_error=err, last_failure="raise")
+            due = print_deduct._fetch_next_try_at(count, now)
+            if due is None:
+                kept.pop("next_try_at", None)
+            else:
+                kept["next_try_at"] = due
+            return kept
+
+        # The exception's type too: a KeyError's own text is just the key.
+        err = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+        cancel_fetch_store.update_pending(printer, job_id, _bump)
+        count = counted[0] if counted else 0
+        if count == 1 and say:
+            state.add_log_entry(
+                f"⚠️ {printer}: FCC couldn't work out the deduct of job "
+                f"{print_deduct._esc(job_id)} ('{print_deduct._esc(filename)}'): "
+                f"{print_deduct._esc(err)}. "
+                f"{print_deduct._fetch_schedule_words(_CANCEL_FETCH_MAX_AGE_S // 3600)}"
+                f"{print_deduct._fetch_retry_button(printer, job_id)}", "WARNING", "ffaa00",
+                meta={"type": "fetch_retry", "printer_name": printer, "job_id": str(job_id)})
+        return count
+    except Exception as e:
+        try:
+            state.logger.debug(f"couldn't count a failed compute for {printer} job {job_id}: {e}")
+        except Exception:
+            pass
+        return 0
 
 
 def _capture_end_heads(printer_name, job_id, fb_url, heads_when=None):
@@ -372,13 +436,16 @@ def _capture_end_heads(printer_name, job_id, fb_url, heads_when=None):
             seen = "no spool on any head (a Spoolman blip?), so the read isn't used"
         else:
             seen = "couldn't read them"
-        state.logger.info(f"🔎 {printer_name}: heads at the end of job {job_id} ({source}, "
+        when = "at the park of" if source == "park" else "at the end of"
+        state.logger.info(f"🔎 {printer_name}: heads {when} job {job_id} ({source}, "
                           f"read in {time.time() - started:.1f}s): {seen}")
     except Exception:
         pass
     if not found:
         return None
-    return {"heads": heads, "source": source, "at": at}
+    # `at_s` (Group 64, Decision 1): the read's moment in epoch seconds, against which
+    # a spool weighed after the print ended is told apart (weigh_stamps).
+    return {"heads": heads, "source": source, "at": at, "at_s": started}
 
 
 def _edge_kwargs(start_spools=None, swap_log=None, heads_when=None, **more):
@@ -390,7 +457,7 @@ def _edge_kwargs(start_spools=None, swap_log=None, heads_when=None, **more):
 
 
 def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
-                    start_spools=None, swap_log=None, heads_when=None):
+                    start_spools=None, swap_log=None, heads_when=None, park_heads=None):
     """Action taken when a cancel edge is detected. SLICE 5: compute the partial
     and stash it for preview-and-confirm (§9.7) — Derek reviews/nudges before it
     writes (automating the manual Connect-reading he does today). The detector
@@ -404,7 +471,9 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
     download, so a restart in either loses nothing and no tick downloads it a
     second time; the record is dropped once the review is stashed. A review that
     fails stays queued. A record already there keeps its first heads read, and the
-    review is computed with that one (_hold_end_heads)."""
+    review is computed with that one (_hold_end_heads). Group 64.3 (4): a cancel with no
+    printing since an ATTENTION park (from the printer's prompt) takes the read made when
+    it first parked (`park_heads`), never one made after a spool was changed at the prompt."""
     # INSTANT ACK (2026-06-13): log the moment the STOPPED edge fires, BEFORE the
     # slow async gcode download+decode. On a slow XL .bgcode download the review
     # line is 30-60s out; without this the user faces silence and thinks nothing
@@ -427,7 +496,8 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
             if _charged_before(rec, printer_name, job_id, filename):
                 return
             try:
-                end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
+                end_heads = park_heads or _capture_end_heads(printer_name, job_id, fb_url,
+                                                             heads_when=heads_when)
             except Exception:
                 end_heads = None
             rec, start_spools, swap_log, end_heads = _hold_end_heads(
@@ -438,6 +508,8 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
                 **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
             _settle_fetch(printer_name, job_id, result)
         except Exception as e:
+            # Its record stays queued: the raise counts as its first try (64.2 (3)).
+            _note_compute_raise(printer_name, job_id, filename, e, say=False)
             try:
                 state.add_log_entry(
                     f"❌ Cancelled-print review failed for {printer_name} "
@@ -450,11 +522,11 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
 
 
 def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url,
-                          start_spools=None, swap_log=None, heads_when=None):
+                          start_spools=None, swap_log=None, heads_when=None, park_heads=None):
     """Run the cancel-edge action OFF the heartbeat thread, so a slow gcode
     download never stalls the pulse. Synchronous when _CANCEL_DEDUCT_RUN_ASYNC
     is False (tests)."""
-    extra = _edge_kwargs(start_spools, swap_log, heads_when)
+    extra = _edge_kwargs(start_spools, swap_log, heads_when, park_heads=park_heads)
     if _CANCEL_DEDUCT_RUN_ASYNC:
         threading.Thread(
             target=_on_cancel_edge,
@@ -518,6 +590,8 @@ def _on_completion_edge(printer_name, filename, job_id, fb_url, start_spools=Non
             except Exception:
                 pass
         except Exception as e:
+            # Its record stays queued: the raise counts as its first try (64.2 (3)).
+            _note_compute_raise(printer_name, job_id, filename, e, say=False)
             try:
                 state.add_log_entry(
                     f"❌ Completed-print deduct failed for {printer_name} "
@@ -548,7 +622,7 @@ def _dispatch_completion_edge(printer_name, filename, job_id, fb_url, start_spoo
 
 def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                        progress_unknown=False, unmeasured_reason="replaced",
-                       start_spools=None, swap_log=None, heads_when=None):
+                       start_spools=None, swap_log=None, heads_when=None, park_heads=None):
     """Action when a latched in-progress job reaches IDLE/READY WITHOUT our ever
     sampling the terminal STOPPED or FINISHED (2026-06-13): a fast cancel→restart
     that slipped the poll, or a PRINTING→offline→IDLE printer power-cycle. We
@@ -570,7 +644,8 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
     progress_unknown end: its card has no usage to charge). Scope C: as the cancel
     edge, the print is claimed and queued before its heads read and its download,
     and a record already there keeps its first heads read (not a progress_unknown
-    end, which reads and downloads nothing)."""
+    end, which reads and downloads nothing). Group 64.3 (4): an end with no printing
+    since an ATTENTION park (a hard reset out of the prompt) takes the park's read."""
     # Instant ack (the ambiguous analogue of the cancel instant-ack), so the user
     # isn't met with silence during the async download.
     try:
@@ -601,8 +676,8 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                 if _charged_before(rec, printer_name, job_id, filename):
                     return
                 try:
-                    end_heads = _capture_end_heads(printer_name, job_id, fb_url,
-                                                   heads_when=heads_when)
+                    end_heads = park_heads or _capture_end_heads(printer_name, job_id, fb_url,
+                                                                 heads_when=heads_when)
                 except Exception:
                     end_heads = None
                 rec, start_spools, swap_log, end_heads = _hold_end_heads(
@@ -615,6 +690,9 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
             if not progress_unknown:
                 _settle_fetch(printer_name, job_id, result)
         except Exception as e:
+            if not progress_unknown:
+                # Its record stays queued: the raise counts as its first try (64.2 (3)).
+                _note_compute_raise(printer_name, job_id, filename, e, say=False)
             try:
                 state.add_log_entry(
                     f"❌ Ambiguous-print review failed for {printer_name} "
@@ -629,12 +707,12 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
 
 def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                              progress_unknown=False, unmeasured_reason="replaced",
-                             start_spools=None, swap_log=None, heads_when=None):
+                             start_spools=None, swap_log=None, heads_when=None, park_heads=None):
     """Run the ambiguous-edge action OFF the heartbeat thread (mirrors
     _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
     (tests)."""
     kwargs = {"progress_unknown": progress_unknown, "unmeasured_reason": unmeasured_reason}
-    kwargs.update(_edge_kwargs(start_spools, swap_log, heads_when))
+    kwargs.update(_edge_kwargs(start_spools, swap_log, heads_when, park_heads=park_heads))
     if _CANCEL_DEDUCT_RUN_ASYNC:
         threading.Thread(
             target=_on_ambiguous_edge,
@@ -679,6 +757,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
         need_snapshot = False  # 22.3: flag a once-per-job start-spool snapshot
         snap_jid = None
         need_swap_snapshot = False  # 22.3(b): flag a resume-edge mid-print swap capture
+        park_was = None  # Group 64.3 (4): the park's read, spent at a PRINTING tick
+        paused_was = None  # Group 64 full review: when the print stopped for this pause
         swap_jid = None
         swap_progress = None
         swap_runout = False
@@ -686,6 +766,19 @@ def _track_print_edge(printer_name, state_info, fb_url):
             entry = _PRINT_TRACKER.setdefault(printer_name, {})
             prev_state = entry.get('state')  # 22.3(b): pre-overwrite, for resume detection
             entry['state'] = cur
+            if cur in _PAUSED_CONDITION_STATES and entry.get('filename') and 'paused_at' not in entry:
+                # Group 64 full review (OR2 / SP2): when the print stopped (its first
+                # paused tick; a PRINTING tick spends it). A swap at this pause ends the
+                # share of the spool it takes off, and a spool weighed at the printer's
+                # prompt was weighed after its share ended. An ATTENTION park is noted
+                # below, in the branch that handles it.
+                entry['paused_at'] = time.time()
+            if cur == 'PRINTING':
+                # Group 64.3 (4): printing again, the park's read is spent: a resume
+                # checks for a swap against it (below), and the next park reads afresh.
+                park_was = entry.pop('park_heads', None)
+                entry.pop('park_read', None)
+                paused_was = entry.pop('paused_at', None)
             if job:
                 # Reject blank/zero ids (None/''/'0'/0) — same "blank job" set
                 # print_deduct_ledger keys on, so the tracker and the ledger
@@ -714,7 +807,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         prev_job = {
                             'filename': entry.get('filename'),
                             'job_id': old_jid,
-                            'progress': float(entry.get('progress', 0.0)),
+                            # Group 64.2 (10): at least a park's frozen progress and
+                            # its last recorded swap's point, as at a live edge.
+                            'progress': print_deduct._reached_at_least(
+                                entry.get('progress', 0.0),
+                                print_deduct._validated_swap_log(entry, old_jid),
+                                entry.get('pause_progress')),
                             # `progress` is set (5854-ish) only from a REAL job sample,
                             # so its presence tells us whether we ever measured this
                             # job's progress. Absent ⇒ replaced before any sample ⇒
@@ -729,7 +827,6 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         }
                     entry.pop('progress', None)
                     entry.pop('filename', None)
-                    entry.pop('file_meta', None)
                     # 22.3: drop the previous job's start-spool snapshot so the new
                     # job re-captures its OWN start mapping (the snapshot_job!=jid
                     # guard below would catch it anyway, but pop defensively so a
@@ -743,15 +840,13 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     # job can't inherit the prior job's frozen pause position / flag.
                     entry.pop('pause_progress', None)
                     entry.pop('saw_attention', None)
+                    entry.pop('park_heads', None)
+                    entry.pop('park_read', None)
+                    entry.pop('paused_at', None)
                 if job.get('filename'):
                     entry['filename'] = job['filename']
                 if new_jid is not None:
                     entry['job_id'] = new_jid
-                # file_meta (the slicer's per-tool 'filament used' estimate) is
-                # latched for slice 5's preview UX, which shows the estimate
-                # alongside the computed partial without re-fetching the job.
-                if job.get('file_meta'):
-                    entry['file_meta'] = job['file_meta']
                 prog = job.get('progress')
                 if isinstance(prog, (int, float)):
                     entry['progress'] = max(float(entry.get('progress', 0.0)), float(prog))
@@ -790,12 +885,14 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                         float(entry.get('pause_progress', 0.0)))
                     swap_runout = bool(entry.get('saw_attention'))
         # 22.3 (off-lock, like get_printer_job): capture the start-spool snapshot for
-        # mid-print swap detection. ONLY when FCC owns completions (taking it whatever
-        # the flag says is a follow-up). Since the hotfix of 2026-11-11 the cancel and
-        # ambiguous reviews read it too, to check the heads read when the print ended.
+        # mid-print swap detection. Taken whatever `fcc_owns_completion_deduct` says
+        # (Group 64.3 (2)): since the hotfix of 2026-11-11 the cancel and ambiguous
+        # reviews read it too, to check the heads read when the print ended, and a
+        # cancel FCC always owns; without it a cancel couldn't see a spool changed
+        # during the print on an install that leaves completions to another tool.
         # _snapshot_active_spools is best-effort ({} on failure), so a blip leaves
         # start_spools unset and the completion degrades to today's auto-apply.
-        if need_snapshot and _fcc_owns_completion_deduct():
+        if need_snapshot:
             snap = print_deduct._snapshot_active_spools(printer_name, fb_url)
             with _PRINT_TRACKER_LOCK:
                 e = _PRINT_TRACKER.get(printer_name)
@@ -813,12 +910,13 @@ def _track_print_edge(printer_name, state_info, fb_url):
         # against the mapping in effect for the segment just printed (start_spools +
         # any prior swaps) — each clean 1→1 sid change appends an ordered swap_log
         # event. Best-effort: an empty/failed snapshot just skips (retries next resume).
-        # Same flag gate + same-job re-check as the start snapshot. This release-then-
+        # Taken whatever the flag says, as the start snapshot (64.3 (2)), with the same
+        # same-job re-check. This release-then-
         # re-acquire is safe because _track_print_edge has a SINGLE sequential caller
         # (the _cancel_monitor daemon's per-printer loop) — the job_id re-check guards a
         # fast job change, not a concurrent same-job writer (none exists). If this is ever
         # re-attached to the dashboard pulse (it historically was), revisit the locking.
-        if need_swap_snapshot and _fcc_owns_completion_deduct():
+        if need_swap_snapshot:
             snap = print_deduct._snapshot_active_spools(printer_name, fb_url)
             if snap:
                 with _PRINT_TRACKER_LOCK:
@@ -827,8 +925,19 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         _before = dict(e.get('start_spools') or {})
                         for _ev in (e.get('swap_log') or []):
                             _before[str(_ev.get('position'))] = _ev.get('to_sid')
+                        # Group 64.3 (4): against what fed the segment when it
+                        # parked, where FCC read it (the park's read, this job's,
+                        # taken off the latch at this resume's tick).
+                        _park = park_was
+                        _park_map = (print_deduct._park_mapping(_park)
+                                     if isinstance(_park, dict)
+                                     and str(_park.get('job_id')) == str(swap_jid) else None)
+                        for _pos, _sid in (_park_map or {}).items():
+                            if _sid is not None:
+                                _before[str(_pos)] = _sid
                         _added = print_deduct._record_swap_events(
-                            e, snap, swap_progress, runout=swap_runout)
+                            e, snap, swap_progress, runout=swap_runout, before=_park_map,
+                            at=paused_was)
                         # Say what the diff actually found. A zero here is the
                         # interesting case: FCC looked and the Spoolman mapping
                         # was unchanged, which is what a purely physical roll
@@ -836,23 +945,27 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         # another slot without any FCC eject/load — looks like.
                         # Previously the count was discarded and nothing was
                         # logged either way.
+                        # Group 64.3 (4): in a person's words, true however the
+                        # print then ends (a completion, a cancel's card, a review):
+                        # never "the full footer will be billed", never raw dicts.
+                        _at = f"~{(swap_progress or 0.0) * 100:.1f}%"
                         if _added:
                             _d = ", ".join(
-                                f"pos {ev.get('position')}: #{ev.get('from_sid')}"
-                                f"->#{ev.get('to_sid')}"
+                                f"T{ev.get('position')}: #{ev.get('from_sid')} → #{ev.get('to_sid')}"
                                 for ev in (e.get('swap_log') or [])[-_added:])
                             state.add_log_entry(
-                                f"🔁 {printer_name}: resumed job {swap_jid} — recorded "
-                                f"{_added} spool swap(s) at ~{(swap_progress or 0.0) * 100:.1f}% "
-                                f"({_d}){' [runout]' if swap_runout else ''}.",
+                                f"🔁 {printer_name}: resumed job {swap_jid} at {_at}"
+                                f"{', after a run-out,' if swap_runout else ''} with a spool "
+                                f"changed ({_d}): FCC splits its grams at the change.",
                                 "INFO", "6cb2eb")
                         else:
+                            _heads = ", ".join(
+                                f"T{_p} #{_s}" if _s is not None else f"T{_p} no spool"
+                                for _p, _s in sorted(snap.items(), key=lambda kv: str(kv[0]).zfill(4)))
                             state.add_log_entry(
-                                f"🔁 {printer_name}: resumed job {swap_jid} — no spool "
-                                f"mapping change at any toolhead "
-                                f"(before={_before or '{}'}, after={snap}), so no swap "
-                                f"was recorded and the full footer will be billed as-is.",
-                                "INFO", "6cb2eb")
+                                f"🔁 {printer_name}: resumed job {swap_jid} at {_at} with the "
+                                f"same spool on every head ({_heads}), so no change was "
+                                f"recorded.", "INFO", "6cb2eb")
                         # Consume the pause markers so a SUBSEQUENT pause/swap in the
                         # same job starts from a clean slate (next runout re-samples).
                         e.pop('pause_progress', None)
@@ -895,6 +1008,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
     # AMBIGUOUS-idle edge against the latched prev state.
     fire = None
     cancel_without_latch = False
+    park_read_job = None         # Group 64.3 (4): the job whose first park's heads to read
     # 22.3(b) runout accuracy: an ATTENTION park (filament runout / M600) FREEZES the job
     # at the pause byte position, and /api/v1/job reports that frozen progress. The
     # in-progress block is SKIPPED for ATTENTION (it's not an in-progress state), so
@@ -965,7 +1079,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 'kind': edge_kind,
                 'filename': entry.get('filename'),
                 'job_id': entry.get('job_id', ''),
-                'progress': float(entry.get('progress', 0.0)),
+                # Group 64.2 (10): at least the frozen progress of a park it was in
+                # and its last recorded swap's point (the print reached both; the
+                # job samples' high-water can lag them by a poll).
+                'progress': print_deduct._reached_at_least(
+                    entry.get('progress', 0.0), entry.get('swap_log'),
+                    entry.get('pause_progress')),
                 # Whether we ever sampled a REAL progress for this job (entry sets
                 # 'progress' only from a job sample). Absent ⇒ a latched-but-unsampled
                 # job (e.g. caught at ATTENTION before any PRINTING tick) → route the
@@ -981,6 +1100,15 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 # 22.3(b): the ordered mid-print swap history rides along too (same
                 # snapshot_job guard via _validated_swap_log).
                 'swap_log': entry.get('swap_log'),
+                # Group 64.3 (4): an end with no printing since the printer first parked
+                # at ATTENTION (a cancel from its prompt, after a filament loaded there
+                # with the printer BUSY too, or a reset out of it) names the spools read
+                # when it parked, this job's, never ones loaded at the prompt. A PRINTING
+                # tick spends the read, so its being here says the print never resumed.
+                'park_heads': (entry.get('park_heads')
+                               if isinstance(entry.get('park_heads'), dict)
+                               and str(entry['park_heads'].get('job_id')) == str(entry.get('job_id', ''))
+                               else None),
             }
             # Reset the latch to the terminal state so the edge can't re-fire.
             _PRINT_TRACKER[printer_name] = {'state': cur}
@@ -1007,12 +1135,36 @@ def _track_print_edge(printer_name, state_info, fb_url):
                             f"— will check for a spool swap on resume.",
                             "INFO", "6cb2eb")
                     entry['saw_attention'] = True
+                    if 'paused_at' not in entry:
+                        # Group 64 full review (OR2 / SP2): when the print stopped for this
+                        # park, as the PAUSED states note it above.
+                        entry['paused_at'] = time.time()
+                    if not entry.get('park_read'):
+                        # Group 64.3 (4): one read of the heads per park (off the lock, below).
+                        entry['park_read'] = True
+                        park_read_job = entry.get('job_id')
                     if pause_progress is not None:
                         entry['pause_progress'] = max(
                             float(entry.get('pause_progress', 0.0)), pause_progress)
             else:
                 _PRINT_TRACKER[printer_name] = {'state': cur}
 
+    if park_read_job is not None:
+        # Group 64.3 (4), off the tracker lock as the start snapshot is: the spools on
+        # the heads when the print first parked, before anyone changes one at the
+        # printer's prompt. An end with no printing since takes it as its end read; a
+        # resume checks for a swap against it. A read that finds nothing keeps nothing.
+        try:
+            park = _capture_end_heads(printer_name, park_read_job, fb_url, heads_when="park")
+        except Exception:
+            park = None
+        if park:
+            park = dict(park, job_id=str(park_read_job), progress=pause_progress)
+            with _PRINT_TRACKER_LOCK:
+                e = _PRINT_TRACKER.get(printer_name)
+                if (e is not None and e.get('state') == 'ATTENTION' and e.get('filename')
+                        and str(e.get('job_id')) == str(park_read_job)):
+                    e['park_heads'] = park
     if cancel_without_latch:
         state.add_log_entry(
             f"🛑 Cancel detected on {printer_name}, but no active job was latched "
@@ -1029,6 +1181,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
             # read when the print ended against its start snapshot and swap log.
             snapshot = _edge_kwargs(print_deduct._validated_start_spools(fire, fire['job_id']),
                                     print_deduct._validated_swap_log(fire, fire['job_id']))
+            if fire.get('park_heads'):
+                snapshot["park_heads"] = fire['park_heads']
             if fire['kind'] == 'ambiguous':
                 _dispatch_ambiguous_edge(
                     printer_name, fire['filename'], fire['job_id'], fire['progress'],
@@ -1205,7 +1359,10 @@ def _process_pending_cancel_fetches(states, fb_url):
     gcode couldn't be downloaded at the edge (selected-file LOCK), re-attempt the
     compute ONCE the printer has left STOPPED (the file un-locks → IDLE), then
     stash the 🛑 Review and drop the queue entry. Gives up after
-    _CANCEL_FETCH_MAX_AGE_S with a "weigh the spool" warning.
+    _CANCEL_FETCH_MAX_AGE_S, never sooner, with a "weigh the spool" warning or the
+    "couldn't measure" review (_give_up_fetch); a file that downloaded and couldn't
+    be read, or a compute that raised, is tried less often after a few failures
+    (Group 64.4 / 64.2 (3), _waiting).
 
     `states` maps printer_name -> the state dict get_printer_state returned this
     tick (or None when offline). Best-effort per entry; one bad record never
@@ -1271,48 +1428,12 @@ def _process_pending_cancel_fetches(states, fb_url):
                 continue
 
             # Give up after the max-age window so a deleted/abandoned file's
-            # entry can't linger forever. Record grams=0 so it can't re-queue.
+            # entry can't linger forever: never sooner, whatever keeps failing
+            # (Derek, 2026-11-20: "I'd rather do that than just stop because
+            # something isn't working").
             first_seen = float(rec.get("first_seen", now) or now)
             if now - first_seen > _CANCEL_FETCH_MAX_AGE_S:
-                pct = max(0.0, min(1.0, progress)) * 100
-                hrs = _CANCEL_FETCH_MAX_AGE_S // 3600
-                if kind == "complete" and _fcc_owns_completion_deduct():
-                    # Group 56.3: a completion FCC owns is never recorded at 0 g
-                    # without a review. The "couldn't measure" card writes no
-                    # ledger entry and holds the job (a pending review drops any
-                    # later fetch entry, above) until Discard. First the crash
-                    # guard the deduct entry points use: a retry that charged the
-                    # spools and stashed an uncharged-grams card, then died before
-                    # its ledger write, is a deducted job, not an unmeasured one.
-                    if not print_deduct._shortfall_card_exists(printer, job_id, filename, 1.0):
-                        print_deduct._stash_unresolved_review(
-                            printer, filename, job_id, 1.0, usage_map=None,
-                            progress_unknown=True, reason="no_download")
-                    cancel_fetch_store.pop_pending(printer, job_id)
-                    continue
-                if kind != "complete" and ambiguous:
-                    # An ambiguous end may have been a completion (Group 56 review,
-                    # round 3): its queue line promised a review, so it gets the
-                    # "couldn't measure" card, not a 0 g "cancelled print" entry.
-                    # Nothing auto-charges on this path, so no crash guard.
-                    print_deduct._stash_unresolved_review(
-                        printer, filename, job_id, progress, usage_map=None,
-                        progress_unknown=True, ambiguous=True, reason="no_download")
-                    cancel_fetch_store.pop_pending(printer, job_id)
-                    continue
-                if kind == "complete":
-                    state.add_log_entry(
-                        f"✅ Gave up fetching the completed print's gcode on {printer} "
-                        f"('{print_deduct._esc(filename)}') after {hrs}h — no deduct recorded. "
-                        f"Weigh the spool to true it up.", "WARNING", "ffaa00")
-                else:
-                    state.add_log_entry(
-                        f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
-                        f"('{print_deduct._esc(filename)}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
-                        f"Weigh the spool to true it up.", "WARNING", "ffaa00")
-                print_deduct_ledger.record_deduct(printer, job_id, filename=filename,
-                                                  scale=progress, grams=0)
-                cancel_fetch_store.pop_pending(printer, job_id)
+                _give_up_fetch(rec)
                 continue
 
             # Gate on state: the selected file is reliably download-UNLOCKED only
@@ -1339,6 +1460,14 @@ def _process_pending_cancel_fetches(states, fb_url):
                     cancel_fetch_store.pop_pending(printer, job_id)
                     continue
 
+            # Group 64.4 / 64.2 (3): a file that downloaded and couldn't be read, or
+            # a compute that raised, more than print_deduct._FETCH_FAST_TRIES times
+            # waits longer each time (`next_try_at`), so a stuck 11 MB file isn't
+            # pulled off the printer's USB stick every 30 seconds, and the printer's
+            # other queued prints go ahead meanwhile. "Try again now" ends the wait.
+            if _waiting(rec, now):
+                continue
+
             # Due. One download per printer at a time (scope C): a printer with
             # one in flight (a live edge's, or an earlier tick's retry) waits for
             # a later tick. Then this print is claimed and computed on a thread of
@@ -1356,6 +1485,78 @@ def _process_pending_cancel_fetches(states, fb_url):
                 state.logger.debug(f"cancel-fetch retry failed for {rec}: {e}")
             except Exception:
                 pass
+
+
+def _waiting(rec, now):
+    """Whether a record waits out a slow retry now (Group 64.4 / 64.2 (3)): its
+    `next_try_at` (set after print_deduct._FETCH_FAST_TRIES failures of a file that
+    couldn't be read, or of a compute that raised) is still ahead. A record with
+    none, or one the queue can't read, is due."""
+    try:
+        due = rec.get("next_try_at")
+        return due is not None and float(due) > now
+    except (TypeError, ValueError):
+        return False
+
+
+def _give_up_fetch(rec):
+    """Give a queued print up for good, at the end of its 72-hour window (the
+    window's branch, made one helper by Group 64.4; Derek, 2026-11-20: never sooner).
+
+    A completion FCC owns is never recorded at 0 g without a review (Group 56.3):
+    the "couldn't measure" card writes no ledger entry and holds the job (a pending
+    review drops any later fetch entry) until Discard. First the crash guard the
+    deduct entry points use: a retry that charged the spools and stashed an
+    uncharged-grams card, then died before its ledger write, is a deducted job, not
+    an unmeasured one. An ambiguous end may have been a completion (Group 56
+    review, round 3): its queue line promised a review, so it gets the card too,
+    and nothing auto-charges on that path. The card's reason is "compute_failed"
+    when its last failure was a compute that raised (`last_failure` "raise"), else
+    "no_download" ("FCC couldn't download or read its file"). A true cancel, and a
+    completion FCC doesn't own, are recorded at 0 g with one "weigh the spool"
+    line, so they can't re-queue."""
+    printer = rec.get("printer_name")
+    job_id = rec.get("job_id")
+    filename = rec.get("filename")
+    progress = float(rec.get("progress", 0.0) or 0.0)
+    kind = rec.get("kind", "cancel")
+    ambiguous = bool(rec.get("ambiguous", False))
+    last = rec.get("last_failure")
+    reason = "compute_failed" if last == "raise" else "no_download"
+    if kind == "complete" and _fcc_owns_completion_deduct():
+        if not print_deduct._shortfall_card_exists(printer, job_id, filename, 1.0):
+            print_deduct._stash_unresolved_review(
+                printer, filename, job_id, 1.0, usage_map=None,
+                progress_unknown=True, reason=reason)
+        cancel_fetch_store.pop_pending(printer, job_id)
+        return
+    if kind != "complete" and ambiguous:
+        print_deduct._stash_unresolved_review(
+            printer, filename, job_id, progress, usage_map=None,
+            progress_unknown=True, ambiguous=True, reason=reason)
+        cancel_fetch_store.pop_pending(printer, job_id)
+        return
+    pct = max(0.0, min(1.0, progress)) * 100
+    hrs = _CANCEL_FETCH_MAX_AGE_S // 3600
+    shown = print_deduct._esc(filename)
+    if last == "raise":
+        how = " (its deduct kept failing)"
+    elif last == "decode":
+        how = " (its file downloaded but couldn't be read)"
+    else:
+        how = ""
+    if kind == "complete":
+        line = (f"✅ Gave up fetching the completed print's gcode on {printer} "
+                f"('{shown}') after {hrs}h{how} — no deduct recorded. "
+                f"Weigh the spool to true it up.")
+    else:
+        line = (f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
+                f"('{shown}', ~{pct:.0f}%) after {hrs}h{how} — no partial deduct. "
+                f"Weigh the spool to true it up.")
+    state.add_log_entry(line, "WARNING", "ffaa00")
+    print_deduct_ledger.record_deduct(printer, job_id, filename=filename,
+                                      scale=progress, grams=0)
+    cancel_fetch_store.pop_pending(printer, job_id)
 
 
 def _settle_stamped(printer, job_id, filename):
@@ -1470,11 +1671,15 @@ def _run_fetch_retry(rec, fb_url, key):
     except Exception as e:
         # Anything else raised before a spool write (a review or queue store
         # that couldn't be written, a malformed record): nothing was charged,
-        # so the entry stays queued and the next tick tries again.
+        # so the entry stays queued and the next tick tries again; after
+        # print_deduct._FETCH_FAST_TRIES raises, less often (Group 64.2 (3): one
+        # that always raised was downloaded again on every idle tick for 72 hours,
+        # with only this debug line). The first raise is said once at WARNING.
         try:
             state.logger.debug(f"cancel-fetch retry failed for {rec}: {e}")
         except Exception:
             pass
+        _note_compute_raise(printer, job_id, filename, e)
     finally:
         _release_fetch(key)
 
@@ -1528,8 +1733,8 @@ def _held_for_restart(printer, job_id):
     spool, as before). Since scope C a live edge queues its print before the
     download, so a print whose end FCC saw before the restart (its reset latch not
     saved) may still be computed by the queue: "weigh the spool" would have the
-    print charged on top of the weighing. Routing the print itself is a follow-up
-    (D8)."""
+    print charged on top of the weighing. When it holds nothing, the print goes to
+    the ambiguous review (Group 64.3 (6), the hotfix's D8)."""
     try:
         if print_deduct_ledger._is_blank_job(job_id):
             return None
@@ -1557,7 +1762,10 @@ def _recover_one_print_latch(name, entry, fb_url):
     table). Returns True if it acted, False for a no-op (bare entry / completion)."""
     job_id = entry.get('job_id')
     filename = entry.get('filename')
-    progress = float(entry.get('progress', 0.0) or 0.0)
+    # Group 64.2 (10): at least a park's frozen progress and its last recorded swap's
+    # point, as at a live edge (the persisted latch keeps both).
+    progress = print_deduct._reached_at_least(entry.get('progress', 0.0) or 0.0,
+                                              entry.get('swap_log'), entry.get('pause_progress'))
     # Whether a REAL progress was ever sampled for this latched job (the latch sets
     # 'progress' only from a job sample; print_tracker_store round-trips it verbatim).
     # Absent ⇒ unsampled → the ambiguous-idle branch routes to a non-destructive
@@ -1593,7 +1801,13 @@ def _recover_one_print_latch(name, entry, fb_url):
                 _PRINT_TRACKER[name] = dict(entry)
             return True
         # A DIFFERENT job is printing → the old one ended during the outage and
-        # we can't tell cancel from completion → manual review; latch the new job.
+        # we can't tell cancel from completion → the AMBIGUOUS REVIEW, as the live
+        # job change routes its outgoing print (Group 64.3 (6); it used to be a
+        # WARNING telling Derek to weigh the spool). Its heads are read now, during
+        # the next print, and checked against the old print's start snapshot and
+        # swap log, so a head changed for the next print is held. Unless FCC already
+        # holds the print (its record queued before the restart, its review or its
+        # ledger entry): the line then says so. Latch the new job.
         held = _held_for_restart(name, job_id)
         if held:
             state.add_log_entry(
@@ -1601,15 +1815,18 @@ def _recover_one_print_latch(name, entry, fb_url):
                 f"FCC restarted and a different job is printing now. {held}", "WARNING", "ffaa00")
         else:
             state.add_log_entry(
-                f"⚠️ {name}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress when FCC "
-                f"restarted and a different job is printing now — its outcome is unknown, "
-                f"not auto-deducted. Weigh the spool if that print was cancelled.",
-                "WARNING", "ffaa00")
+                f"❓ {name}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress when FCC "
+                f"restarted and a different job is printing now — surfacing a review (couldn't "
+                f"confirm completed vs cancelled).", "WARNING", "ffaa00")
+            _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url,
+                                     progress_unknown=not progress_sampled,
+                                     **_edge_kwargs(print_deduct._validated_start_spools(entry, job_id),
+                                                    print_deduct._validated_swap_log(entry, job_id),
+                                                    "restart"))
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {
                 'state': cur, 'job_id': cur_jid, 'filename': job.get('filename'),
-                'progress': float(job.get('progress') or 0.0),
-                'file_meta': job.get('file_meta') or {}}
+                'progress': float(job.get('progress') or 0.0)}
         return True
 
     if cur in _CANCEL_TERMINAL_STATES:

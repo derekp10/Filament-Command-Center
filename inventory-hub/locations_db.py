@@ -80,6 +80,10 @@ DRYER_BOX_TYPE = 'Dryer Box'
 # room inference, slot-bind validation) and the is_toolhead checks in
 # app.py / logic.py.
 TOOLHEAD_TYPES = frozenset({'Tool Head', 'MMU Slot', 'No MMU Direct Load'})
+# The one head Type the print deduct tells apart (Group 64.6): MMU slots sharing one
+# toolhead number, each holding a spool, can't be told apart, so the deduct asks.
+MMU_SLOT_TYPE = 'MMU Slot'
+assert MMU_SLOT_TYPE in TOOLHEAD_TYPES
 
 # A dual-role Printer row (e.g. Core One) IS its own toolhead and is registered
 # in printer_map as its own load position (L271 Phase 3). It is therefore a valid

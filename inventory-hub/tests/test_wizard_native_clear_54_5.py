@@ -402,12 +402,13 @@ def test_a_scanned_label_leaves_an_inherited_empty_weight_marked_and_unsent(wiz)
 def test_a_scanned_label_never_zeroes_the_used_weight(wiz):
     """Claude's call: every number box in the wizard, not just the five. An emptied
     Total Used box is sent as 0, a refill of a spool with 500 g used. RED on the
-    base: `used_weight: 0`."""
+    base: `used_weight: 0`. Since the Group 64 review (S2 / S3) a Total Used box left
+    as the record filled it isn't sent at all (it was sent as 500)."""
     _open_edit(wiz)
     assert _value(wiz, "#wiz-spool-used") == "500"
     _scan_into(wiz, "#wiz-spool-used", "LOC:XL")
     assert _value(wiz, "#wiz-spool-used") == "500"
-    assert _save(wiz, EDIT)["spool_data"]["used_weight"] == 500
+    assert _got(_save(wiz, EDIT)["spool_data"], "used_weight") == "<missing>"
 
 
 def test_a_persons_backspace_still_empties_the_box(wiz):
@@ -512,3 +513,446 @@ def test_the_route_passes_each_null_through_to_spoolman(monkeypatch):
     rec = copy.deepcopy(fake.records)
     assert rec["spool"][57]["price"] is None and rec["spool"][57]["spool_weight"] is None, rec["spool"][57]
     assert json.dumps(rec["filament"][7]["settings_bed_temp"]) == "null", rec["filament"][7]
+
+
+# --- Group 64 review (S2 / S3): Total Used is sent only when it changed -------------
+
+def _open_edit_used(page, used):
+    """Edit Spool on #57 with `used` g used (two decimals, as a print's charge leaves it)."""
+    details = _details()
+    details["used_weight"] = used
+    details["remaining_weight"] = round(1000.0 - used, 2)
+    page.evaluate("""(a) => {
+        window.__answers['/api/spool_details'] = a.details;
+        window.__answers['/api/external/vendors'] = { success: true, vendors: [a.vendor] };
+    }""", {"details": details, "vendor": details["filament"]["vendor"]})
+    page.evaluate("() => { window.openEditWizard(57); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool' && wizardState.selectedFilamentId === 7"
+                           " && document.getElementById('wiz-fil-color_name').value === 'Red'"
+                           " && !document.getElementById('btn-wiz-submit').disabled")
+
+
+def test_a_comment_only_edit_sends_no_used_weight(wiz):
+    """S2 / S3, RED on 82dbb38 (used_weight 100.4 sent). Total Used shows 100.37 as
+    100.4; a Save that changed only the comment sent the box as drawn, which
+    rewrote the used weight (and stamped a weighing), and a form opened before a
+    print's charge wrote the old used weight back over the charge."""
+    _open_edit_used(wiz, 100.37)
+    assert _value(wiz, "#wiz-spool-used") == "100.4"
+    wiz.locator("#wiz-spool-comment").fill("new note")
+    body = _save(wiz, EDIT)
+    assert "used_weight" not in body["spool_data"], body["spool_data"]
+    assert body["spool_data"]["comment"] == "new note", body["spool_data"]
+
+
+def test_a_total_used_the_person_changed_is_sent(wiz):
+    """Passes on 82dbb38 by design: a typed Total Used goes out as before."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    body = _save(wiz, EDIT)
+    assert body["spool_data"]["used_weight"] == 130, body["spool_data"]
+
+
+def test_a_total_used_worked_out_by_the_recent_usage_box_is_sent(wiz):
+    """The wizard's own weigh boxes change Total Used too (here "recent usage",
+    added to the used weight): that is a change, and is sent."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-recent-usage").press_sequentially("20")      # its keyup works it out
+    assert _value(wiz, "#wiz-spool-used") != "100.4"
+    body = _save(wiz, EDIT)
+    assert body["spool_data"]["used_weight"] == pytest.approx(120.4, abs=0.05), body["spool_data"]
+
+
+def test_a_second_save_sends_total_used_only_if_it_changed_again(wiz):
+    """S3: after a Save, the box shows what that Save wrote, so the next Save in the
+    same session (a comment fixed after the weight) sends no used weight."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    assert _save(wiz, EDIT)["spool_data"]["used_weight"] == 130
+    wiz.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    wiz.locator("#wiz-spool-comment").fill("fixed note")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert "used_weight" not in second["spool_data"], second["spool_data"]
+    assert second["spool_data"]["comment"] == "fixed note", second["spool_data"]
+
+
+# --- Group 64 fix review (FP2 / FP3): an addition goes with the weight it was added to ---
+
+def test_add_printed_wt_sends_the_used_weight_it_was_added_to(wiz):
+    """FP2 / FP3, red on abb67aa (no base: the server wrote the sum over a charge that
+    landed behind the open form, and stamped it as a weighing)."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-recent-usage").press_sequentially("50")
+    body = _save(wiz, EDIT)
+    assert body["used_based_on"] == {"mode": "additive", "used": 100.37}, body.get("used_based_on")
+    assert body["spool_data"]["used_weight"] == pytest.approx(150.4, abs=0.05)
+
+
+def _weigh_from_scale(page, mode, add=50.0):
+    """The wizard's Weigh from Scale, its overlay stood in for: what the wizard gives
+    the window, and the window's answer in `mode` (Additive adds `add` grams)."""
+    page.evaluate("""() => { window.WeightEntry = { openModal: (o) => { window.__weOpts = o; } };
+                             window.wizardOpenWeightEntry(); }""")
+    page.evaluate("""([mode, add]) => {
+        const o = window.__weOpts;
+        const used = mode === 'additive' ? o.spool.used_weight + add : 130.0;
+        o.onSubmit({ mode, used_weight: used, remaining: 1000 - used, empty_spool_weight: null,
+                     derived_initial: undefined, typed_tare: null });
+    }""", [mode, add])
+
+
+def test_weigh_from_scales_additive_mode_sends_the_records_own_used_weight(wiz):
+    """FP2 / FP3, red on abb67aa. The box showed 100.37 as 100.4; while untouched, the
+    record's own figure is the base, so the server's check matches it exactly."""
+    _open_edit_used(wiz, 100.37)
+    _weigh_from_scale(wiz, "additive")
+    body = _save(wiz, EDIT)
+    assert body["used_based_on"] == {"mode": "additive", "used": 100.37}, body.get("used_based_on")
+
+
+def test_a_scale_reading_says_it_is_one(wiz):
+    """Group 64 full review (PI2), red on c1ee3e0 (it said nothing, and the server
+    stamped every used weight as a weighing, a label's digits scanned into the box
+    included). A Gross reading is a weighing: it says so, and the server stamps it."""
+    _open_edit_used(wiz, 100.37)
+    _weigh_from_scale(wiz, "gross")
+    body = _save(wiz, EDIT)
+    assert body.get("used_based_on") == {"mode": "reading"} and body["spool_data"]["used_weight"] == 130, body
+
+
+def test_the_scale_boxs_figure_is_no_reading_fcc_can_vouch_for(wiz):
+    """Group 64 fix review 2 (CP1 / CX2), red on d0d51d7 ({mode: "reading"}): the Scale
+    box works Total Used out from a gross figure (1066 g, 1000 g net, a 196 g spool: 130
+    g used), but it is a number box with no scan capture, so a spool label scanned into
+    it leaves its digits there and they are worked out the same way. Its figure is sent
+    as the person's own, never stamped as FCC's weighing (Weigh from Scale's is)."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-scale").press_sequentially("1066")
+    assert _value(wiz, "#wiz-spool-used") == "130"
+    body = _save(wiz, EDIT)
+    assert "used_based_on" not in body and body["spool_data"]["used_weight"] == 130, body
+
+
+def test_a_total_used_typed_by_hand_or_over_a_reading_says_nothing(wiz):
+    """PI2: a figure typed in Total Used (or a label's digits a scan left there) is no
+    reading FCC can place, so the server stamps no weighing for it (passes on c1ee3e0,
+    which sent nothing either)."""
+    _open_edit_used(wiz, 100.37)
+    _weigh_from_scale(wiz, "gross")
+    wiz.locator("#wiz-spool-used").fill("57")
+    body = _save(wiz, EDIT)
+    assert "used_based_on" not in body and body["spool_data"]["used_weight"] == 57, body
+
+
+def test_a_total_used_typed_over_an_addition_sends_no_base(wiz):
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-recent-usage").press_sequentially("50")
+    wiz.locator("#wiz-spool-used").fill("140")
+    body = _save(wiz, EDIT)
+    assert "used_based_on" not in body and body["spool_data"]["used_weight"] == 140, body
+
+
+def test_a_failed_save_keeps_total_useds_baseline(wiz):
+    """S3: a Save the server refused leaves the box's baseline as the record filled
+    it, so the next Save sends the changed Total Used again (moved to after any
+    answer, it was dropped from the retry)."""
+    _open_edit_used(wiz, 100.37)
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: false, msg: 'refused (test)' }; }")
+    wiz.locator("#wiz-spool-used").fill("130")
+    assert _save(wiz, EDIT)["spool_data"]["used_weight"] == 130
+    wiz.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57 }; }")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert second["spool_data"]["used_weight"] == 130, second["spool_data"]
+
+
+
+def test_a_save_after_spool_saved_but_filament_refused_sends_total_used_only_if_it_changes(wiz):
+    """Group 64 fix review 2 (CP6), red on d0d51d7 (the second Save sent 130 again, over
+    a print's charge that landed in between, and a reading's second stamp). The spool's
+    own write landed and the filament's was refused; the next Save sends Total Used only
+    if it changed since."""
+    _open_edit_used(wiz, 100.37)
+    wiz.evaluate("""() => { window.__answers['/api/edit_spool_wizard'] = {
+        success: false, spool_saved: true, msg: 'Filament update failed (test)' }; }""")
+    wiz.locator("#wiz-spool-used").fill("130")
+    assert _save(wiz, EDIT)["spool_data"]["used_weight"] == 130
+    wiz.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57 }; }")
+    wiz.locator("#wiz-spool-comment").fill("filament fixed")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert "used_weight" not in second["spool_data"] and "used_based_on" not in second, second
+
+
+
+GATE_JS = r"""() => {
+  const real = window.fetch;
+  window.fetch = function (url, opts) {
+    const path = String(url).split('?')[0];
+    if (path === '/api/edit_spool_wizard' && window.__gateNext) {
+      window.__gateNext = false;
+      window.__posts.push({ url: path, body: opts.body ? JSON.parse(opts.body) : null });
+      const answer = JSON.parse(JSON.stringify(window.__answers[path]));
+      return new Promise((res) => { window.__release = () => res({ ok: true, status: 200,
+          json: () => Promise.resolve(answer) }); });
+    }
+    return real.apply(this, arguments);
+  };
+}"""
+
+
+@pytest.mark.parametrize("first_answer", [{"success": False, "spool_saved": True, "msg": "Filament update failed (test)"},
+                                          {"success": True, "spool_id": 57}], ids=["spool_saved", "success"])
+def test_a_total_used_corrected_while_the_save_is_out_is_sent_next_time(wiz, first_answer):
+    """Group 64 fix review 3 (TP5), red on a5857f84 (the baseline was read from the box
+    when the answer came, so a correction typed while the Save was out was never sent):
+    the baseline is what the Save sent."""
+    _open_edit_used(wiz, 100.37)
+    wiz.evaluate(GATE_JS)
+    wiz.evaluate("(a) => { window.__answers['/api/edit_spool_wizard'] = a; window.__gateNext = true; }", first_answer)
+    wiz.locator("#wiz-spool-used").fill("130")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("() => typeof window.__release === 'function'")
+    wiz.locator("#wiz-spool-used").fill("140")
+    wiz.evaluate("() => window.__release()")
+    wiz.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57 }; }")
+    wiz.locator("#wiz-spool-comment").fill("again")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert second["spool_data"].get("used_weight") == 140, second["spool_data"]
+
+
+
+# --- Group 64 fix review 4 (UP4 / UP5): what a Save sent, and in which session ---------
+
+def _weigh_reading(page, mode, used):
+    page.evaluate("""() => { window.WeightEntry = { openModal: (o) => { window.__weOpts = o; } };
+                             window.wizardOpenWeightEntry(); }""")
+    page.evaluate("""([mode, used]) => {
+        const o = window.__weOpts;
+        o.onSubmit({ mode, used_weight: used, remaining: 1000 - used, empty_spool_weight: null,
+                     derived_initial: undefined, typed_tare: null });
+    }""", [mode, used])
+
+
+def _gated_save(page, during):
+    """A Save held while `during` runs, then answered; then a second Save (a comment):
+    both posts."""
+    page.evaluate(GATE_JS)
+    page.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57 };"
+                  " window.__gateNext = true; }")
+    page.locator("#btn-wiz-submit").click()
+    page.wait_for_function("() => typeof window.__release === 'function'")
+    during()
+    page.evaluate("() => window.__release()")
+    page.wait_for_function("() => !document.getElementById('btn-wiz-submit').disabled")
+    page.locator("#wiz-spool-comment").fill("again")
+    page.locator("#btn-wiz-submit").click()
+    page.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    return page.evaluate("(u) => window.__posts.filter((p) => p.url === u).map((p) => p.body)", EDIT)
+
+
+def test_a_scale_reading_taken_while_the_save_is_out_keeps_its_own(wiz):
+    """UP4, red on 5af23516 (the answer spent the newer reading, the box showing its figure,
+    and the second Save went without {mode: "reading"}): only what the Save sent is spent."""
+    _open_edit_used(wiz, 100.37)
+    _weigh_reading(wiz, "gross", 130.0)
+    posts = _gated_save(wiz, lambda: _weigh_reading(wiz, "gross", 135.0))
+    assert posts[0].get("used_based_on") == {"mode": "reading"}, posts[0]
+    assert posts[1]["spool_data"].get("used_weight") == 135 and posts[1].get("used_based_on") == {"mode": "reading"}, posts[1]
+
+
+def test_an_addition_made_while_the_save_is_out_keeps_its_base(wiz):
+    """UP4's other half, red on 5af23516 (the addition went without its base, so the
+    server could neither refuse it over a charge nor leave it unstamped)."""
+    _open_edit_used(wiz, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    posts = _gated_save(wiz, lambda: wiz.locator("#wiz-spool-recent-usage").press_sequentially("35"))
+    assert posts[1]["spool_data"].get("used_weight") == pytest.approx(135.4, abs=0.05), posts[1]
+    assert posts[1].get("used_based_on") == {"mode": "additive", "used": 100.37}, posts[1]
+
+
+def test_a_saves_late_answer_leaves_a_form_opened_since_for_another_spool_alone(wiz):
+    """UP5, red on 5af23516 (#57's answer set #58's Total Used baseline to #57's figure, so
+    #58's comment-only Save sent its untouched 200, rewriting 199.97 and anything charged
+    since #58's form opened). The Save's answer, coming after Edit Spool was opened again
+    for #58, changes nothing on #58's form; a toast says #57 was saved."""
+    _open_edit_used(wiz, 100.37)
+    wiz.evaluate(GATE_JS)
+    wiz.evaluate("() => { window.__answers['/api/edit_spool_wizard'] = { success: true, spool_id: 57,"
+                 " archived_now: true }; window.__gateNext = true; }")
+    wiz.locator("#wiz-spool-used").fill("130")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("() => typeof window.__release === 'function'")
+    d58 = _details()
+    d58.update(id=58, used_weight=199.97, remaining_weight=800.03)
+    wiz.evaluate("(d) => { window.__answers['/api/spool_details'] = d; window.openEditWizard(58); }", d58)
+    wiz.wait_for_function("() => wizardState.mode === 'edit_spool' && wizardState.editSpoolId == 58"
+                          " && document.getElementById('wiz-fil-color_name').value === 'Red'"
+                          " && wizardState.usedShown != null && !document.getElementById('btn-wiz-submit').disabled")
+    wiz.evaluate("() => window.__release()")
+    # The answer is handled: said in a toast (or, before the fix, on the form's status line).
+    toast = ("Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+             ".some((t) => t.innerText === 'Spool #57 saved.' && t.classList.contains('toast-success'))")
+    wiz.wait_for_function(f"() => {toast} || document.getElementById('wiz-status-msg').innerText.includes('Success')")
+    after = wiz.evaluate(f"() => ({{ shown: wizardState.usedShown, id: wizardState.editSpoolId, toast: {toast},"
+                         f" archived: document.getElementById('wiz-spool-archived').checked }})")
+    assert after == {"shown": "200", "archived": False, "id": 58, "toast": True}, after
+    wiz.locator("#wiz-spool-comment").fill("58's note")
+    wiz.locator("#btn-wiz-submit").click()
+    wiz.wait_for_function("(u) => window.__posts.filter((p) => p.url === u).length === 2", arg=EDIT)
+    second = wiz.evaluate("(u) => window.__posts.filter((p) => p.url === u)[1].body", EDIT)
+    assert second["spool_id"] == 58 and "used_weight" not in second["spool_data"], second
+
+
+
+# --- Group 64 fix review 5 (VP1-VP5): a Save's answer in another session, a failed load ---
+
+REJECT_JS = r"""() => {
+  const real = window.fetch;
+  window.fetch = function (url, opts) {
+    const path = String(url).split('?')[0];
+    if (path === '/api/edit_spool_wizard' && window.__gateNext) {
+      window.__gateNext = false;
+      window.__posts.push({ url: path, body: opts.body ? JSON.parse(opts.body) : null });
+      return new Promise((res, rej) => { window.__release = () => rej(new TypeError('Failed to fetch')); });
+    }
+    return real.apply(this, arguments);
+  };
+}"""
+
+
+def _recording(page):
+    page.evaluate("""() => {
+        window.__reprint = [];
+        window._maybePromptLabelReprint = (...a) => { window.__reprint.push(a); };
+        window.renderBuffer = () => {};
+    }""")
+
+
+def _open_sid(page, sid, used):
+    d = _details()
+    d.update(id=sid, used_weight=used, remaining_weight=round(1000 - used, 2))
+    page.evaluate("(d) => { window.__answers['/api/spool_details'] = d; window.openEditWizard(d.id); }", d)
+    page.wait_for_function("(sid) => wizardState.mode === 'edit_spool' && wizardState.editSpoolId == sid"
+                           " && document.getElementById('wiz-fil-color_name').value === 'Red'"
+                           " && wizardState.usedShown != null"
+                           " && !document.getElementById('btn-wiz-submit').disabled", arg=sid)
+
+
+def _save_held(page, answer, fail=False):
+    """Save on the open form, its answer (or its failure) held until window.__release()."""
+    page.evaluate(REJECT_JS if fail else GATE_JS)
+    page.evaluate("(a) => { window.__answers['/api/edit_spool_wizard'] = a; window.__gateNext = true; }", answer)
+    page.locator("#btn-wiz-submit").click()
+    page.wait_for_function("() => typeof window.__release === 'function'")
+
+
+def _released_in_58s_form(page):
+    """#57's answer, let go once Edit Spool shows #58; waits for the toast naming #57."""
+    _open_sid(page, 58, 199.97)
+    page.evaluate("() => window.__release()")
+    page.wait_for_function("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                           ".some((t) => t.innerText.includes('#57'))")
+
+
+def _toast_list(page):
+    return page.evaluate("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                         ".map((t) => [t.className.replace('toast-msg toast-', ''), t.innerText])")
+
+
+def test_a_late_answer_still_flags_the_filaments_labels(wiz):
+    """VP1, red on 0e6db3ea (UP5's guard skipped it: the filament's spools were never flagged
+    for a new label, and the reprint nudge never showed). The Save renamed #57's filament;
+    its answer comes after Edit Spool was opened for #58: the label check runs, from the
+    filament as #57's form opened it."""
+    _recording(wiz)
+    _open_sid(wiz, 57, 100.37)
+    wiz.locator("#wiz-fil-color_name").fill("Crimson")
+    _save_held(wiz, {"success": True, "spool_id": 57})
+    _released_in_58s_form(wiz)
+    calls = wiz.evaluate("() => window.__reprint.map((a) => [a[0], Object.keys(a[2] || {})])")
+    assert calls and calls[0][0] == 7 and "name" in calls[0][1], calls
+
+
+def test_a_late_not_moved_answer_still_takes_a_swaps_spool_and_says_why(wiz):
+    """VP2, red on 0e6db3ea (in another session the answer was one generic toast: the Swap's
+    old spool never reached this page's scan buffer, which then drops it from the server's
+    copy, and the refusal's own words were never said)."""
+    _recording(wiz)
+    _open_sid(wiz, 57, 100.37)
+    msg = "Saved your other changes, but #57 was not moved to SHELF-1: Spoolman refused the write (test)."
+    _save_held(wiz, {"success": False, "spool_saved": True, "location_moved": False,
+                     "location_result": {"status": "error", "msg": "Spoolman refused the write (test)"},
+                     "to_buffer": [{"id": 99, "display": "#99 Old Spool"}], "msg": msg})
+    _released_in_58s_form(wiz)
+    out = wiz.evaluate("() => ({ buffer: (state.heldSpools || []).map((s) => s.id), id: wizardState.editSpoolId })")
+    assert 99 in out["buffer"] and out["id"] == 58, out
+    assert ["error", "❌ " + msg] in _toast_list(wiz), _toast_list(wiz)
+
+
+@pytest.mark.parametrize("answer", [
+    {"success": False, "spool_saved": True, "archived_now": False,
+     "msg": "Spool saved, but filament update rejected: Spoolman refused it (test)"},
+    {"success": False, "spool_saved": False, "location_moved": False, "may_have_saved": True,
+     "msg": "Couldn't tell whether Spool #57 saved: Spoolman didn't answer in time. Check where FCC shows it, "
+            "then save again."}], ids=["spool_saved", "may_have_saved"])
+def test_a_late_answer_whose_spool_write_landed_is_never_said_not_saved(wiz, answer):
+    """VP3, red on 0e6db3ea ("Spool #57 wasn't saved: Spool saved, but ..."; a person told so
+    may do it again, an addition charging twice): the server's own words, the spool named."""
+    _open_sid(wiz, 57, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    _save_held(wiz, answer)
+    _released_in_58s_form(wiz)
+    toasts = _toast_list(wiz)
+    assert ["error", "Spool #57: " + answer["msg"]] in toasts, toasts
+    assert not [t for _ty, t in toasts if "wasn't saved" in t], toasts
+
+
+def test_a_save_with_no_answer_after_a_reopen_is_said_in_a_toast(wiz):
+    """VP4, red on 0e6db3ea ("Frontend Error: Failed to fetch" on #58's form, its Save
+    enabled, and nothing said of #57, whose write may have landed)."""
+    _open_sid(wiz, 57, 100.37)
+    wiz.locator("#wiz-spool-used").fill("130")
+    _save_held(wiz, {}, fail=True)
+    _released_in_58s_form(wiz)
+    out = wiz.evaluate("() => ({ status: document.getElementById('wiz-status-msg').innerText,"
+                       " id: wizardState.editSpoolId })")
+    assert "Frontend Error" not in out["status"] and out["id"] == 58, out
+    assert ["error", "FCC didn't answer #57's Save, so it may or may not have landed: open it in Edit Spool "
+                     "to check."] in _toast_list(wiz), _toast_list(wiz)
+
+
+@pytest.mark.parametrize("how", ["no_answer", "no_filament"])
+def test_an_edit_that_never_loaded_offers_no_save(wiz, how):
+    """VP5 (fix review 5's skeptic, a follow-up older than this group), red on 0e6db3ea: after
+    "Failed to connect for edit." Save was enabled on wizardReset's create form under a SAVE
+    CHANGES label (and after "Failed to fetch spool data." any typing enabled it), and a press
+    created an "Unknown" filament and spool. Save stays off, also after typing, and a press
+    by any means posts nothing."""
+    if how == "no_answer":
+        wiz.evaluate("""() => { const real = window.fetch; window.fetch = function (url, opts) {
+            if (String(url).split('?')[0] === '/api/spool_details') return Promise.reject(new TypeError('Failed to fetch'));
+            return real.apply(this, arguments); }; }""")
+    else:
+        wiz.evaluate("() => { window.__answers['/api/spool_details'] = { success: false }; }")
+    wiz.evaluate("() => { window.openEditWizard(58); }")
+    wiz.wait_for_function("() => /Failed to (connect for edit|fetch spool data)/"
+                          ".test(document.getElementById('wiz-status-msg').innerText)")
+    wiz.locator("#wiz-spool-comment").fill("typed")
+    for kind in ("manual", "external"):      # New Manual Form sets Save itself; Import Database runs the check
+        wiz.evaluate("(k) => wizardSelectType(k)", kind)
+        assert wiz.evaluate("() => document.getElementById('btn-wiz-submit').disabled") is True, kind
+    wiz.evaluate("() => window.wizardSubmit()")
+    wiz.wait_for_timeout(200)
+    posted = wiz.evaluate("() => window.__posts.filter((p) => /inventory_wizard|edit_spool_wizard/.test(p.url))"
+                          ".map((p) => p.url)")
+    assert posted == [], posted

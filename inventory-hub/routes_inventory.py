@@ -22,8 +22,11 @@ Preserved quirks (do not 'fix' in a move — see the carve plan):
 
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
+import contextlib
 import html
+import math
 import re
+import time
 
 from flask import request, jsonify  # type: ignore
 import requests  # type: ignore
@@ -38,6 +41,7 @@ import locations_db  # type: ignore  # Group 40.7: Printer-row / one-spool check
 import attr_migration  # type: ignore  # Group 36: hidden filament-attribute choices
 import stock_report  # type: ignore  # Group 49.2: the Low-stock list + the low-stock warning
 import archive_takeoff  # type: ignore  # Group 63.2: a spool a weigh archived in place, taken off
+import weigh_stamps  # type: ignore  # Group 64, Decision 1: when FCC weighed a spool
 
 from app_core import app
 
@@ -1287,6 +1291,11 @@ def api_edit_spool_wizard():
     filament_id = data.get('filament_id')
     filament_data = data.get('filament_data')
     spool_data = data.get('spool_data')
+    # Group 64 fix review (FP2 / FP3): a used weight the page worked out as an addition,
+    # and the used weight it was added to.
+    additive = _additive_base(data)
+    # Group 64 full review (PI2): whether that used weight is a scale reading.
+    reading = _used_from_a_reading(data)
 
     if not spool_id:
         return jsonify({"success": False, "msg": "Missing Spool ID for edit session."})
@@ -1326,6 +1335,13 @@ def api_edit_spool_wizard():
                             new_location = _loc_key(v)
                         elif _loc_key(v) and _reslot_asked(data, original_spool, _loc_key(v)):
                             new_location = _loc_key(v)
+                        continue
+                    if k == 'used_weight' and _within_box_rounding(original_spool.get(k), v):
+                        # Group 64 review (S2): Total Used shows the used weight to
+                        # 0.1 g, so a page that sends the box as it drew it (any page
+                        # before this release) rewrote 100.37 as 100.4 on a comment
+                        # save, and stamped a weighing nobody made. Within half a
+                        # step, the box wasn't changed: nothing is written.
                         continue
                     if k == 'spool_weight':
                         if v != original_spool.get('spool_weight'):
@@ -1394,6 +1410,9 @@ def api_edit_spool_wizard():
                     dirty_spool_data['location'] = original_spool.get('location') or ''
                 spool_data = dirty_spool_data
                 state.logger.info(f"DIRTY SPOOL DATA: {dirty_spool_data}")
+                moved = _addition_base_moved(spool_id, original_spool, additive, dirty_spool_data)
+                if moved:
+                    return jsonify({"success": False, "details_changed": True, "msg": moved, "error": moved})
             else:
                 # 27.1 — a Spoolman blip on the pre-fetch (get_spool -> None)
                 # must NOT degrade into a raw full-overwrite PATCH: without the
@@ -1416,7 +1435,19 @@ def api_edit_spool_wizard():
                 })
 
             if spool_data:
-                spool_res = spoolman_api.update_spool(spool_id, spool_data)
+                # Group 64.2 (1): a weight write waits for a print's charge of it.
+                stamp_at = time.time()
+                stamped = False
+                with _weight_lock(spool_id, spool_data):
+                    spool_res = spoolman_api.update_spool(spool_id, spool_data)
+                    if spool_res and "used_weight" in spool_data and additive is None and reading:
+                        # Group 64 fix review (FS3): inside the lock, so a print's charge
+                        # waiting on this write finds the stamp with the new weight (it
+                        # read the weight and no stamp, and held the print as one FCC
+                        # can't place). An addition is no weighing (FP3), nor a figure
+                        # typed in the box or a scan's digits left there (PI2).
+                        weigh_stamps.note(spool_id, "Edit Spool", at=stamp_at)
+                        stamped = True
                 if not spool_res:
                     err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
                     # Group 63 review (C4): a write whose answer was lost may have
@@ -1493,6 +1524,11 @@ def api_edit_spool_wizard():
                 # the pre snapshot — None when get_spool blipped, handled by helper).
                 if any(k in spool_data for k in ("used_weight", "initial_weight")):
                     _log_manual_weight_change(spool_id, original_spool, spool_res)
+                if "used_weight" in spool_data and not stamped and additive is None and reading:
+                    # Group 64, Decision 1: when FCC weighed it, for a print charged later
+                    # (here a write whose lost answer a read-back showed had landed; one
+                    # that answered was stamped inside the lock, above).
+                    weigh_stamps.note(spool_id, "Edit Spool", at=stamp_at)
                 if new_location is not None:
                     # Group 40.7 review: an archived spool leaves where it is
                     # before its move, even if a filament rejection stops below.
@@ -1809,6 +1845,91 @@ def _details_changed(pre, based_on, updates=None):
     return None
 
 
+def _stamp_weighing(spool_id, data, updates, at):
+    """Group 64, Decision 1: note that FCC weighed `spool_id` (a save of its used or
+    remaining weight), on which screen, at `at`, so a print whose charge comes after it
+    (a 20-minute download, a file locked behind the printer's screen) can tell the
+    scale already counted the print. Not for the Quick-Weigh's Additive mode
+    (`based_on.mode`): grams typed for a print are no reading of the scale (Group 64
+    fix review, FP3). True when it noted one."""
+    if not (isinstance(updates, dict) and any(k in updates for k in ("used_weight", "remaining_weight"))):
+        return False
+    based = data.get('based_on') if isinstance(data, dict) and isinstance(data.get('based_on'), dict) else {}
+    if str(based.get('mode') or '').lower() == 'additive':
+        return False
+    screen = str(based.get('screen') or '').lower()
+    weigh_stamps.note(spool_id, {"list": "the weigh-out list", "quick": "the Quick-Weigh"}.get(screen, "a weight save"),
+                      at=at)
+    return True
+
+
+def _additive_base(data):
+    """Group 64 fix review (FP2 / FP3): the used weight an Edit Spool addition ("+ Add
+    Printed Wt", or Weigh from Scale's Additive mode) was made on top of, as the page
+    sends it (`used_based_on: {mode: "additive", used}`), else None."""
+    based = data.get('used_based_on') if isinstance(data, dict) else None
+    if not isinstance(based, dict) or str(based.get('mode') or '').lower() != 'additive':
+        return None
+    try:
+        g = float(based.get('used'))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return g if math.isfinite(g) else None
+
+
+def _used_from_a_reading(data):
+    """Group 64 full review (PI2): whether Edit Spool's Total Used is a scale reading,
+    as the page says (`used_based_on: {mode: "reading"}`: the box still shows what Weigh
+    from Scale's Gross, Net or Set Used, or the Scale box, put there). Only then is the
+    save stamped as FCC's weighing (Decision 1). A figure typed in the box is no reading
+    FCC can place, and a spool label scanned into it left its digits there (ID:57 read
+    57): stamped, the print that ended before the save was held at 0 g as weighed. A
+    change FCC can't place keeps the print's grams on its card, loudly noted."""
+    based = data.get('used_based_on') if isinstance(data, dict) else None
+    return isinstance(based, dict) and str(based.get('mode') or '').lower() == 'reading'
+
+
+def _addition_base_moved(spool_id, original, base, dirty):
+    """Group 64 fix review (FP2): the refusal's words when Edit Spool writes a used
+    weight it worked out as an addition on top of `base`, and the spool's used weight
+    isn't `base` any more (a print's charge landed while the form was open, as the
+    weigh screens' 63.6 rule refuses): the sum would write over that change. None
+    otherwise. One WARNING line when it refuses."""
+    if base is None or 'used_weight' not in (dirty or {}):
+        return None
+    try:
+        now = float((original or {}).get('used_weight') or 0)
+    except (TypeError, ValueError):
+        return None
+    if abs(now - base) <= 0.01:
+        return None
+    msg = (f"Spool #{spool_id}'s used weight changed since Edit Spool opened ({base:g} g then, {now:g} g now: "
+           f"a print may have been charged), so nothing was saved. Open Edit Spool again, and add the print "
+           f"again if it wasn't that one.")
+    state.add_log_entry(f"⚖️ {msg}", "WARNING", "ffaa00")
+    return msg
+
+
+def _within_box_rounding(stored, sent):
+    """Group 64 review (S2): whether Edit Spool's Total Used value `sent` is the
+    stored used weight as the box shows it (fmtGramsPrecise: to 0.1 g), so within
+    half a step of it."""
+    try:
+        return stored is not None and abs(float(sent) - float(stored)) <= 0.05 + 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
+def _weight_lock(spool_id, updates):
+    """Group 64.2 (1): the spool's write lock (spoolman_api.spool_lock, which a
+    print's charge holds from its read to its write) when `updates` writes a weight
+    the deduct reads, else nothing to hold."""
+    if isinstance(updates, dict) and any(
+            k in updates for k in ("used_weight", "initial_weight", "remaining_weight")):
+        return spoolman_api.spool_lock(spool_id)
+    return contextlib.nullcontext()
+
+
 @app.route('/api/spool/update', methods=['POST'])
 def api_spool_update():
     """Generic endpoint to partially update a spool from frontend modules.
@@ -1846,50 +1967,57 @@ def api_spool_update():
         if not spool_id or not updates:
             return jsonify({"status": "error", "msg": "Missing id or updates"})
 
-        pre = spoolman_api.get_spool(spool_id) or {}
-        pre_archived = bool(pre.get('archived', False))
+        # Group 64.2 (1): a weight save holds the spool's write lock from its read to
+        # its write, as a print's charge does, so neither lands inside the other.
+        with _weight_lock(spool_id, updates):
+            pre = spoolman_api.get_spool(spool_id) or {}
+            pre_archived = bool(pre.get('archived', False))
 
-        # Group 63.6: a weigh screen sends what its preview was worked out from
-        # (`based_on`); when what its mode depends on changed since (a print
-        # charged the spool, its total was corrected), the save writes nothing and
-        # answers the fresh figures, so a reading of 0 g can't be saved as the old
-        # total's used weight (it archived a spool with grams on its record; R5-4).
-        # Only against the spool's own record: a read that failed is no check, as
-        # is a request without `based_on` (a page from before 63.6).
-        based_on = data.get('based_on')
-        changed = (_details_changed(pre, based_on, updates)
-                   if _is_spool_record(pre, spool_id) else None)
-        if changed:
-            what, was_g, now_g = changed
-            words = ("its total" if what == 'capacity' else "its used weight")
-            # Group 63 review (C3): what to do next, for the screen that sent it
-            # (`based_on.screen`): the weigh-out list redraws the row's preview,
-            # the Quick-Weigh has closed and is opened again.
-            screen = str((based_on or {}).get('screen') or '').strip().lower()
-            then = ("Open its Quick-Weigh again to weigh it." if screen == 'quick'
-                    else "Its preview was redrawn; press Enter in its box again to save.")
-            state.add_log_entry(
-                f"⚖️ Spool #{spool_id}'s reading wasn't saved: {words} changed since it was read "
-                f"({was_g:g} g, now {now_g:g} g). {then}",
-                "WARNING", "ffaa00")
-            return jsonify({
-                "status": "details_changed", "changed": what,
-                "msg": (f"#{spool_id}'s weight changed since this was read: check its preview "
-                        f"and press Enter in its box again"),
-                "fresh": {"initial": spoolman_api.effective_initial_weight(pre) or 0,
-                          "used": float(pre.get('used_weight') or 0),
-                          "archived": bool(pre.get('archived'))},
-            })
+            # Group 63.6: a weigh screen sends what its preview was worked out from
+            # (`based_on`); when what its mode depends on changed since (a print
+            # charged the spool, its total was corrected), the save writes nothing and
+            # answers the fresh figures, so a reading of 0 g can't be saved as the old
+            # total's used weight (it archived a spool with grams on its record; R5-4).
+            # Only against the spool's own record: a read that failed is no check, as
+            # is a request without `based_on` (a page from before 63.6).
+            based_on = data.get('based_on')
+            changed = (_details_changed(pre, based_on, updates)
+                       if _is_spool_record(pre, spool_id) else None)
+            if changed:
+                what, was_g, now_g = changed
+                words = ("its total" if what == 'capacity' else "its used weight")
+                # Group 63 review (C3): what to do next, for the screen that sent it
+                # (`based_on.screen`): the weigh-out list redraws the row's preview,
+                # the Quick-Weigh has closed and is opened again.
+                screen = str((based_on or {}).get('screen') or '').strip().lower()
+                then = ("Open its Quick-Weigh again to weigh it." if screen == 'quick'
+                        else "Its preview was redrawn; press Enter in its box again to save.")
+                state.add_log_entry(
+                    f"⚖️ Spool #{spool_id}'s reading wasn't saved: {words} changed since it was read "
+                    f"({was_g:g} g, now {now_g:g} g). {then}",
+                    "WARNING", "ffaa00")
+                return jsonify({
+                    "status": "details_changed", "changed": what,
+                    "msg": (f"#{spool_id}'s weight changed since this was read: check its preview "
+                            f"and press Enter in its box again"),
+                    "fresh": {"initial": spoolman_api.effective_initial_weight(pre) or 0,
+                              "used": float(pre.get('used_weight') or 0),
+                              "archived": bool(pre.get('archived'))},
+                })
 
-        if isinstance(updates, dict) and 'location' in updates:
-            refusal, updates = _direct_location_write(spool_id, pre, updates)
-            if refusal:
-                return jsonify(refusal)
+            if isinstance(updates, dict) and 'location' in updates:
+                refusal, updates = _direct_location_write(spool_id, pre, updates)
+                if refusal:
+                    return jsonify(refusal)
 
-        if archive_on_empty:
-            res = spoolman_api.update_spool(spool_id, updates)
-        else:
-            res = spoolman_api.update_spool(spool_id, updates, archive_on_empty=False)
+            stamp_at = time.time()
+            if archive_on_empty:
+                res = spoolman_api.update_spool(spool_id, updates)
+            else:
+                res = spoolman_api.update_spool(spool_id, updates, archive_on_empty=False)
+            # Group 64 fix review (FS3): stamped inside the lock, so a print's charge
+            # waiting on this save finds the stamp with the new weight.
+            stamped = bool(res) and _stamp_weighing(spool_id, data, updates, stamp_at)
         if not res:
             # Group 54 review R4-2: `msg` is the weigh screens' 7 s toast, so it is
             # put in words (refusal_words: no Spoolman address, no JSON, nothing
@@ -2026,6 +2154,10 @@ def api_spool_update():
         # Shared with the wizard edit-spool save via _log_manual_weight_change.
         if any(k in updates for k in ("used_weight", "initial_weight", "remaining_weight")):
             _log_manual_weight_change(spool_id, pre, res)
+        if not stamped:
+            # A write whose lost answer a read-back showed had landed (one that
+            # answered was stamped inside the lock, above).
+            _stamp_weighing(spool_id, data, updates, stamp_at)
 
         post_archived = bool(res.get('archived', False))
         auto_archived = (not pre_archived) and post_archived

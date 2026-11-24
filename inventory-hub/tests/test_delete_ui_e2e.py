@@ -16,6 +16,8 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
+import conftest
+
 
 def _open_first_spool_modal(page: Page, reset_js: str) -> None:
     page.goto("http://localhost:8000")
@@ -391,6 +393,12 @@ def test_a_refused_merge_says_why_on_its_question_and_a_double_click_sends_one(p
     page.evaluate("(id) => openFilamentDetails(id)", src)
     page.wait_for_function("""(id) => document.getElementById('filamentModal').classList.contains('show')
         && (document.getElementById('fil-detail-id').innerText || '').trim() === String(id)""", arg=src, timeout=15_000)
+    # The window has its show class some 330 ms before Bootstrap ends its show, and the end
+    # focuses the window itself (its focus trap's autofocus). This flow reaches the refusal
+    # well inside that, so the window took the keyboard back from Cancel whenever the two
+    # landed in the wrong order (the full sweep of 2026-11-23: red on every run, the click
+    # within 30 ms of the show's end). No person gets this far in 330 ms.
+    conftest.wait_modal_settled(page, "filamentModal")
     page.evaluate(REFUSE_MERGES)
     page.evaluate("() => document.getElementById('btn-fil-merge').click()")
     page.wait_for_selector("#fcc-merge-target-input")

@@ -208,7 +208,7 @@ def test_three_boxes_are_added_up_and_placed_exactly_post_one_charge_each(tmp_pa
                               "leave them uncharged."), asked
     # A box changed: the button is its own again, and the set is placed.
     assert res["placed"] == {"btn": "Confirm deduct", "alert": None, "left": "All 84.28 g placed"}, res
-    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "h3", "charges": [
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "h3", "rev": 0, "charges": [
         {"row": 243, "sid": 243, "grams": 75.32},
         {"position": 4, "sid": 42, "grams": 10}, {"position": 4, "sid": 229, "grams": 30},
         {"position": 4, "sid": 300, "grams": 44.28}]}], res
@@ -246,8 +246,8 @@ def test_four_boxes_placed_exactly_post_four_charges_on_either_card(tmp_path):
     four = [{"position": 4, "sid": 42, "grams": 10}, {"position": 4, "sid": 229, "grams": 20},
             {"position": 4, "sid": 300, "grams": 30}, {"position": 4, "sid": 301, "grams": 24.28}]
     assert res["posted"] == [
-        {"printer_name": "TESTER", "job_id": "h4", "charges": [{"row": 243, "sid": 243, "grams": 75.32}] + four},
-        {"printer_name": "TESTER", "job_id": "n4", "charges": four}], res
+        {"printer_name": "TESTER", "job_id": "h4", "rev": 0, "charges": [{"row": 243, "sid": 243, "grams": 75.32}] + four},
+        {"printer_name": "TESTER", "job_id": "n4", "rev": 0, "charges": four}], res
 
 
 # Two run-out spools of one head that couldn't take their split: the card that

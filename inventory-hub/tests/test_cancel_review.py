@@ -239,10 +239,12 @@ def test_progress_unknown_short_circuits_to_review_no_compute():
     assert print_deduct_ledger.was_deducted("XL", "PU-2") is False
 
 
-def test_confirm_no_spool_reresolves_and_applies():
-    """Apply on a no_spool review re-resolves the stored usage_map to whatever spool
-    is bound NOW (toolhead just bound) and deducts additively. Exercises the
-    int-key coercion (usage_map key "0" → position 0) end to end."""
+def test_confirm_no_spool_applies_the_pick_additively():
+    """Apply on a no_spool review charges the spool picked for each head and deducts
+    additively, ONLY used_weight. Exercises the key coercion (usage_map key "0" →
+    position 0) end to end. Group 64.3 (5): the Apply names its picks; the old Apply
+    without them, which re-resolved the usage against whatever was bound at Apply
+    time, is retired (test_a_pickless_no_spool_apply_is_told_to_reload...)."""
     cancel_review_store.add_pending({
         "printer_name": "XL", "job_id": "NS-1", "filename": "f.gcode", "progress": 0.4,
         "total_grams": 20.0, "spools": [], "kind": "no_spool",
@@ -262,39 +264,48 @@ def test_confirm_no_spool_reresolves_and_applies():
          patch.object(app_module.spoolman_api, "format_spool_display",
                       return_value={"text": "#100", "color": "ff0000"}), \
          patch.object(app_module.state, "add_log_entry"):
-        r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
-                                               json={"printer_name": "XL", "job_id": "NS-1", "updates": {}})
+        r = app_module.app.test_client().post(
+            "/api/cancel_deduct/confirm",
+            json={"printer_name": "XL", "job_id": "NS-1",
+                  "charges": [{"position": "0", "sid": 100, "grams": 20.0}]})
     d = r.get_json()
-    assert d["status"] == "confirmed"
+    assert d["status"] == "confirmed", d
     assert captured == [(100, {"used_weight": 120.0})]   # 100 + 20g, ONLY used_weight
     assert print_deduct_ledger.was_deducted("XL", "NS-1") is True
     assert cancel_review_store.has_pending("XL", "NS-1") is False
 
 
 def test_confirm_no_spool_partial_apply_warns_shortfall():
-    """no_spool review with multi-position usage_map; on Apply only ONE position
-    resolves to a bound spool, so part of the computed usage can't be applied. The
-    applied grams are recorded, and the shortfall is surfaced (WARNING + shortfall_g
-    in the response) rather than silently lost (review findings F5/F6, 2026-06-13)."""
+    """no_spool review with a multi-position usage_map; the Apply picks a spool for
+    ONE position only, so part of the computed usage isn't charged. The applied grams
+    are recorded, and the shortfall is surfaced (WARNING + shortfall_g in the
+    response) rather than silently lost (review findings F5/F6, 2026-06-13). Group
+    64.3 (5): through the card's picks, the only no_spool Apply now."""
     cancel_review_store.add_pending({
         "printer_name": "XL", "job_id": "NS-P", "filename": "f.gcode", "progress": 1.0,
         "total_grams": 30.0, "spools": [], "kind": "no_spool",
         "usage_map": {"0": 20.0, "1": 10.0}, "created": "2026-06-13 00:00:00"})
+    spools = {100: {"id": 100, "used_weight": 100.0, "initial_weight": 1000.0}}
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
-         patch.object(print_deduct, "_resolve_usage_to_spools",
-                      return_value=[{"sid": 100, "grams": 20.0, "position": 0, "toolhead": "XL-1"}]), \
-         patch.object(print_deduct, "_apply_usage_to_printer",
-                      return_value=(1, [{"sid": 100, "grams": 20.0, "remaining": 880.0}], {0, 1})), \
+         patch.object(app_module.config_loader, "load_config", return_value={}), \
+         patch.object(app_module.spoolman_api, "get_spool", side_effect=lambda sid: spools.get(int(sid))), \
+         patch.object(app_module.spoolman_api, "update_spool",
+                      side_effect=lambda sid, data: {"id": sid, **data}), \
+         patch.object(app_module.spoolman_api, "format_spool_display",
+                      return_value={"text": "#100", "color": "ff0000"}), \
+         patch.object(print_deduct.stock_report, "check_after_deduct"), \
          patch.object(app_module.state, "add_log_entry") as log:
-        r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
-                                               json={"printer_name": "XL", "job_id": "NS-P", "updates": {}})
+        r = app_module.app.test_client().post(
+            "/api/cancel_deduct/confirm",
+            json={"printer_name": "XL", "job_id": "NS-P",
+                  "charges": [{"position": "0", "sid": 100, "grams": 20.0}]})
     d = r.get_json()
-    assert d["status"] == "confirmed"
+    assert d["status"] == "confirmed", d
     assert d["shortfall_g"] == 10.0                                  # 30 requested - 20 applied
     entry = print_deduct_ledger._load()[print_deduct_ledger._key("XL", "NS-P")]
     assert entry["grams"] == 20.0                                    # only the applied 20g
-    assert any(len(c.args) > 1 and c.args[1] == "WARNING" and "wasn't deducted" in str(c.args[0])
-               for c in log.call_args_list), log.call_args_list
+    assert any(len(c.args) > 1 and c.args[1] == "WARNING" for c in log.call_args_list), \
+        log.call_args_list
 
 
 def test_apply_usage_records_clamped_grams_not_requested():
@@ -320,21 +331,29 @@ def test_apply_usage_records_clamped_grams_not_requested():
     assert details[0]["grams"] == 5.0          # absorbed 5g (clamped), NOT the requested 20g
 
 
-def test_confirm_no_spool_unexpected_raise_restashes_review():
-    """If _confirm_no_spool_review raises unexpectedly after the record was popped
-    (the claim), the review must be RE-STASHED (kept recoverable) not lost — the
-    pop-without-guard silent-loss the review flagged (2026-06-13)."""
+def test_a_pickless_no_spool_apply_is_told_to_reload_and_keeps_the_card():
+    """Group 64.3 (5): a no_spool Apply names the spool each head used (`charges`;
+    today's page always sends them). The old Apply without picks re-read the heads
+    and charged whatever was loaded at Apply time (prod job 1141's mistake), and it
+    is retired for every card, not only one built from the print-end read: an older
+    page is told to reload, the card kept (the pop was the claim), nothing read or
+    charged. Red on fc2ba19 (an older card went to the old path)."""
     cancel_review_store.add_pending({
         "printer_name": "XL", "job_id": "NS-R", "filename": "f.gcode", "progress": 1.0,
         "total_grams": 20.0, "spools": [], "kind": "no_spool",
         "usage_map": {"0": 20.0}, "created": "2026-06-13 00:00:00"})
-    with patch.object(print_deduct, "_confirm_no_spool_review", side_effect=RuntimeError("boom")), \
+    with patch.object(app_module.spoolman_api, "get_spools_at_location") as heads, \
+         patch.object(app_module.spoolman_api, "update_spool") as write, \
          patch.object(app_module.state, "add_log_entry"):
         r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
                                                json={"printer_name": "XL", "job_id": "NS-R", "updates": {}})
-    assert r.status_code == 500 and r.get_json()["status"] == "error"
-    assert cancel_review_store.has_pending("XL", "NS-R") is True     # re-stashed, recoverable
+    body = r.get_json()
+    assert body["status"] == "error" and body.get("stale_page") is True, body
+    assert "reload" in body["msg"] and "Pick the spool each head used" in body["msg"], body
+    assert cancel_review_store.has_pending("XL", "NS-R") is True     # kept, recoverable
     assert print_deduct_ledger.was_deducted("XL", "NS-R") is False
+    heads.assert_not_called()
+    write.assert_not_called()
 
 
 def test_stash_unresolved_neither_flag_defaults_progress_unknown():
@@ -348,32 +367,6 @@ def test_stash_unresolved_neither_flag_defaults_progress_unknown():
     rec = cancel_review_store.get_pending("XL", "NF-1")
     assert rec["kind"] == "progress_unknown"                         # NOT 'partial'
     assert rec["spools"] == [] and rec["usage_map"] is None
-
-
-def test_confirm_no_spool_still_unbound_restashes_no_ledger():
-    """If still no spool is bound at Apply time, the review is RE-STASHED (kept
-    recoverable) and reports still_no_spool — never a terminal 0g, never popped."""
-    cancel_review_store.add_pending({
-        "printer_name": "XL", "job_id": "NS-2", "filename": "f.gcode", "progress": 0.4,
-        "total_grams": 20.0, "spools": [], "kind": "no_spool",
-        "usage_map": {"0": 20.0}, "created": "2026-06-13 00:00:00"})
-    captured = []
-    with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
-         patch.object(app_module.locations_db, "get_active_printer_map",
-                      return_value={"XL-1": {"printer_name": "XL", "position": 0}}), \
-         patch.object(print_deduct, "_resolve_active_locs_for_printer",
-                      return_value=[("XL-1", {"position": 0})]), \
-         patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=lambda loc: []), \
-         patch.object(app_module.spoolman_api, "update_spool",
-                      side_effect=lambda sid, data: captured.append((sid, data))), \
-         patch.object(app_module.state, "add_log_entry"):
-        r = app_module.app.test_client().post("/api/cancel_deduct/confirm",
-                                               json={"printer_name": "XL", "job_id": "NS-2", "updates": {}})
-    d = r.get_json()
-    assert d["status"] == "still_no_spool"
-    assert captured == []                                            # nothing written
-    assert print_deduct_ledger.was_deducted("XL", "NS-2") is False   # no terminal 0g
-    assert cancel_review_store.has_pending("XL", "NS-2") is True     # re-stashed, recoverable
 
 
 def test_confirm_progress_unknown_is_manual_only_and_restashes():

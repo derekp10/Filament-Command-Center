@@ -142,8 +142,10 @@ def _ledger():
     return print_deduct_ledger._load()[print_deduct_ledger._key(INDX, str(JOB))]
 
 
-def _seg(frm, to, runout):
-    return {"from": frm, "to": to, "runout": runout}
+def _seg(frm, to, runout, grams):
+    """A row's stretch; `grams` its own grams (Group 64 full review, FX5): a spool with
+    one stretch has all its row's grams in it."""
+    return {"from": frm, "to": to, "runout": runout, "grams": grams}
 
 
 # --------------------------------------------------------------------------- #
@@ -166,9 +168,9 @@ def test_two_run_outs_on_one_head_then_a_cancel_split_three_ways_from_one_downlo
             (300, "RCOI-5", round(part[4] - at25[4], 2)),
             (243, "RCOI-7", round(part[6], 2)), (231, "RCOI-8", round(part[7], 2))]
         by = {r["sid"]: r for r in rec["spools"]}
-        assert by[42]["segments"] == [_seg(None, 0.1, True)]
-        assert by[229]["segments"] == [_seg(0.1, 0.25, True)]
-        assert by[300]["segments"] == [_seg(0.25, 0.42, False)]
+        assert by[42]["segments"] == [_seg(None, 0.1, True, by[42]["grams"])]
+        assert by[229]["segments"] == [_seg(0.1, 0.25, True, by[229]["grams"])]
+        assert by[300]["segments"] == [_seg(0.25, 0.42, False, by[300]["grams"])]
         assert all(by[s]["auto_split"] for s in (42, 229, 300))
         # The stretches add up to the head's partial; each run-out spool also took the
         # path remnant.
@@ -199,7 +201,7 @@ def test_two_run_outs_on_one_head_then_a_completion_split_three_ways_from_one_do
         assert by[42]["grams"] == pytest.approx(round(at10[4] + PATH_G, 2))
         assert by[229]["grams"] == pytest.approx(round(at25[4] - at10[4] + PATH_G, 2))
         assert by[300]["grams"] == pytest.approx(round(84.28 - at25[4], 2))
-        assert by[300]["segments"] == [_seg(0.25, None, False)]
+        assert by[300]["segments"] == [_seg(0.25, None, False, by[300]["grams"])]
         assert by[243]["grams"] == pytest.approx(75.32) and by[231]["grams"] == pytest.approx(21.9)
         assert p.sm.patches == []                 # reviewed, never auto-applied
         body = _confirm({"updates": {str(r["sid"]): r["grams"] for r in rec["spools"]}})
@@ -224,7 +226,8 @@ def test_three_recorded_swaps_split_four_ways(logs):
     by = {r["sid"]: r for r in rec["spools"] if r["position"] == 4}
     assert sorted(by) == [42, 229, 300, 301]
     assert [by[s]["segments"] for s in (42, 229, 300, 301)] == [
-        [_seg(None, 0.1, True)], [_seg(0.1, 0.2, True)], [_seg(0.2, 0.3, True)], [_seg(0.3, 0.42, False)]]
+        [_seg(None, 0.1, True, by[42]["grams"])], [_seg(0.1, 0.2, True, by[229]["grams"])],
+        [_seg(0.2, 0.3, True, by[300]["grams"])], [_seg(0.3, 0.42, False, by[301]["grams"])]]
     assert by[300]["grams"] == pytest.approx(round(cut[2][4] - cut[1][4] + PATH_G, 2))
     assert by[301]["grams"] == pytest.approx(round(part[4] - cut[2][4], 2))
     assert sum(r["grams"] for r in by.values()) == pytest.approx(part[4] + 3 * PATH_G, abs=0.02)
@@ -276,10 +279,12 @@ def test_three_spools_held_on_a_cancel_take_a_pick_each(logs):
             "RCOI-5's spool was swapped during the print (#42 to #229 at ~10%, then #229 to #300 at "
             "~25%), but FCC couldn't split its grams at the swaps: split the 84.28 g among them, or "
             "put it all on one.")
+        # 80 of the set's 84.28 g placed: the page's second press, after its question
+        # (Group 64.2 (2): the server checks a set itself).
         body = _confirm({"charges": [
             {"row": 243, "sid": 243, "grams": 75.32}, {"row": 231, "sid": 231, "grams": 21.9},
             {"position": 4, "sid": 42, "grams": 10.0}, {"position": 4, "sid": 229, "grams": 30.0},
-            {"position": 4, "sid": 300, "grams": 40.0}]})
+            {"position": 4, "sid": 300, "grams": 40.0}], "set_ack": {"4": 80.0}})
         assert body["status"] == "confirmed", body
         assert p.sm.used(42) == pytest.approx(710.0)
         assert p.sm.used(229) == pytest.approx(40.0) and p.sm.used(300) == pytest.approx(50.0)
@@ -515,8 +520,11 @@ def test_a_spool_picked_by_its_number_that_runs_out_is_never_called_the_heads(lo
         assert p.sm.used(500) == pytest.approx(1000.0)
     assert body["status"] == "confirmed" and body.get("shortfall_card") == f"{JOB}#shortfall", body
     card = cancel_review_store.get_pending(INDX, f"{JOB}#shortfall")
-    at4 = [(h.get("sid"), bool(h.get("archived"))) for h in card["heads_at_end"] if h.get("position") == 4]
-    assert at4 == [(42, False)], card["heads_at_end"]
+    # Group 64.2 (7): #500 is offered beside the head's own entry, marked as picked on
+    # a card (the picker's words say so), never as the spool on the head.
+    at4 = [(h.get("sid"), bool(h.get("archived")), h.get("when"))
+           for h in card["heads_at_end"] if h.get("position") == 4]
+    assert at4 == [(42, False, None), (500, True, "picked")], card["heads_at_end"]
     assert card["shortfall_causes"]["4"] == {"why": "ran_out", "sid": 500, "toolhead": "RCOI-5",
                                              "archived": True}, card
     assert any("(#500's record hit 0 g on RCOI-5)" in m for m in logs), logs

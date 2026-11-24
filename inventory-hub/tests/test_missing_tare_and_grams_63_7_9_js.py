@@ -56,7 +56,12 @@ def entry(isolated_page):
 
 
 def _prompt_up(page):
+    """The prompt is up and its box has the keyboard. mountOverlay focuses the box on a
+    zero-delay timer, so a key typed the moment the prompt exists could land before it
+    under a full run's load ("250" arrived as "50": offline runs of 2026-11-21 and 22)."""
     page.wait_for_function("(id) => !!document.getElementById(id)", arg=PROMPT_ID, timeout=5000)
+    page.wait_for_function("(id) => (document.activeElement || {}).id === id + '-input'", arg=PROMPT_ID,
+                           timeout=5000)
 
 
 def _saved(page):
