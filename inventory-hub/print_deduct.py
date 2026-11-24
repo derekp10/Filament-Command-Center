@@ -2205,7 +2205,7 @@ def _held_at_apply(rec, row, sid, used_now, shown=None):
     if then is not None and end_at is not None:
         info = _weighed_info(sid, then, used_now, end_at, rec.get("heads_source"))
         if info is None:
-            return None
+            return _held_unseen(rec, row, sid, used_now, mark)
         if mark is not None and mark.get("then") is not None:
             try:
                 if "ours" in mark:
@@ -2248,10 +2248,10 @@ def _held_by_stamp(rec, row, sid, used_now, end_at, mark):
     the print's grams filled in (Group 65 fix review, RC5: such a spool weighed before
     it printed was held at 0 g as already counted)."""
     if end_at is None:
-        return None
+        return _held_unseen(rec, row, sid, used_now, mark)
     stamp = weigh_stamps.weighed_after(sid, end_at)
     if not stamp:
-        return None
+        return _held_unseen(rec, row, sid, used_now, mark)
     try:
         if (mark is not None and mark.get("stamp_at") is not None
                 and stamp["at"] <= float(mark["stamp_at"]) + 0.001):
@@ -2287,7 +2287,7 @@ def _held_mark(late, grams):
     known = bool(stamp) and not unsure
     return {"weighed": {"words": words, "known_order": known, "then": late.get("then"),
                         "now": late.get("now"), "ours": late.get("ours"), "stamp_at": stamp.get("at"),
-                        "left": bool(late.get("left"))},
+                        "left": bool(late.get("left")), "unseen": unsure},
             "prefill": 0.0 if known else round(float(grams or 0), 2)}
 
 
@@ -2400,7 +2400,54 @@ def _weighed_words(info, grams):
             f"counted this print's {grams:.2f} g")
 
 
-def _mark_weighed_rows(rows, heads, end_at, left_at=None, source=None, back_spans=None):
+def _unseen_stretch(lost_contact):
+    """(start, back): the stretch FCC couldn't see a print in, from a card's lost_contact
+    (the last time FCC saw it, else its first failed probe, to when FCC saw the printer
+    again), else None (Group 65 fix review 2, AV3 / RE3)."""
+    lc = lost_contact if isinstance(lost_contact, dict) else {}
+    try:
+        start = lc.get('seen_at') if lc.get('seen_at') is not None else lc.get('lost_at')
+        back = lc.get('back_at')
+        if start is None or back is None or float(back) <= float(start):
+            return None
+        return float(start), float(back)
+    except (TypeError, ValueError):
+        return None
+
+
+def _unseen_weighing(sid, stretch):
+    """FCC's own last weighing of spool `sid` when it falls inside an unseen stretch, else
+    None: FCC can't tell whether it came before or after the print used the spool."""
+    if not stretch:
+        return None
+    stamp = weigh_stamps.weighed_after(sid, stretch[0])
+    try:
+        return stamp if stamp and float(stamp["at"]) <= stretch[1] else None
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _held_unseen(rec, row, sid, used_now, mark):
+    """Decision 1 at the Apply for a spool FCC weighed while it couldn't see the print, on a
+    card seen only after lost contact (Group 65 fix review 2, AV3 / RE3: the 'back' read
+    already held the weighing, so nothing changed after it, and the print was charged on
+    top): held unsure, unless the card showed that weighing."""
+    stretch = _unseen_stretch(rec.get("lost_contact"))
+    stamp = _unseen_weighing(sid, stretch)
+    if not stamp:
+        return None
+    try:
+        if (mark is not None and mark.get("stamp_at") is not None
+                and float(stamp["at"]) <= float(mark["stamp_at"]) + 0.001):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return {"sid": sid, "toolhead": _hold_head(rec, row, sid), "then": None, "now": round(used_now, 2),
+            "ours": 0.0, "stamp": stamp, "ended": stretch[0], "back": stretch[1], "unsure": True,
+            "source": rec.get("heads_source")}
+
+
+def _mark_weighed_rows(rows, heads, end_at, left_at=None, source=None, back_spans=None, unseen=None):
     """Decision 1 on a review card (Group 64): each row whose spool changed weight
     since the print-end read (_weighed_since_end) carries `weighed` (the words, and
     whether FCC knows the weighing came after the print) and `prefill`, what its
@@ -2417,6 +2464,21 @@ def _mark_weighed_rows(rows, heads, end_at, left_at=None, source=None, back_span
                         "then": info.get("then"), "now": info.get("now"), "ours": info.get("ours"),
                         "stamp_at": (info.get("stamp") or {}).get("at")}
         r["prefill"] = 0.0 if info.get("stamp") else grams
+    # Group 65 fix review 2 (AV3 / RE3): a row whose spool FCC weighed while it couldn't see
+    # the print (`unseen`, _unseen_stretch) can't be placed against it: held unsure, the
+    # print's grams filled in, said as a weighing FCC couldn't place.
+    for r in rows or []:
+        if r.get("weighed"):
+            continue
+        stamp = _unseen_weighing(r.get('sid'), unseen)
+        if not stamp:
+            continue
+        grams = round(float(r.get('grams') or 0), 2)
+        info = {"sid": r.get('sid'), "toolhead": r.get('toolhead'), "stamp": stamp, "ended": unseen[0],
+                "back": unseen[1]}
+        r["weighed"] = {"words": _unsure_weighed_words(info, grams), "known_order": False, "unseen": True,
+                        "stamp_at": stamp.get("at")}
+        r["prefill"] = grams
     # Group 64 full review (OR2 / SP2): a row whose spool left its head at a swap
     # (`left_at`, _swap_left_at) and was weighed on FCC after that: the scale counted
     # its share. A change with no stamp can't be told (no read of it was kept then).
@@ -4993,7 +5055,8 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
     # Decision 1 (Group 64): a row whose spool changed weight after the print ended
     # says so loudly, its grams filled in with 0 g when FCC weighed it after the end.
     left_at = _swap_left_at(swap_log)
-    _mark_weighed_rows(rows, heads, end_at, left_at, source, _swap_back_spans(swap_log))
+    _mark_weighed_rows(rows, heads, end_at, left_at, source, _swap_back_spans(swap_log),
+                       unseen=_unseen_stretch(lost_contact))
     total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
         "printer_name": printer_name,
@@ -5885,24 +5948,25 @@ def _note_added_lines(rec, added, lines, heads, held, start_spools, swap_log, un
         rec["heads_at_end"] = list(rec.get("heads_at_end") or []) + offers
 
 
-def _mark_rows_again(rec, rows, heads, swap_log, facts):
+def _mark_rows_again(rec, rows, heads, swap_log):
     """Every row's Decision 1 mark worked out again, as the builder works it out, at the
     row's new grams (Group 65 review, CM3 / OR7): its words name them, its box follows
     them, and a row the rescale added says a weighing before Confirm. A back mark (a
     spool weighed while off its head between two swaps) on a card that kept no swap log
     can't be worked out again, and is kept as it was. A list Spoolman doesn't answer
     leaves a row unmarked; its Apply still holds it (_held_at_apply)."""
+    has_log = isinstance(rec.get("swap_log"), list)
     redo = []
     for r in rows:
         mark = r.get("weighed")
-        if isinstance(mark, dict) and mark.get("back") and not facts:
+        if isinstance(mark, dict) and mark.get("back") and not has_log:
             continue
         r.pop("weighed", None)
         r.pop("prefill", None)
         redo.append(r)
     if redo:
         _mark_weighed_rows(redo, heads, _card_end_at(rec), rec.get("swap_left_at"), rec.get("heads_source"),
-                           _swap_back_spans(swap_log))
+                           _swap_back_spans(swap_log), unseen=_unseen_stretch(rec.get("lost_contact")))
 
 
 def _rescale_review(rec, grams_at, to_point=None):
@@ -5939,7 +6003,9 @@ def _rescale_review(rec, grams_at, to_point=None):
     facts = bool(isinstance(rec.get("start_spools"), dict) and rec["start_spools"]
                  and isinstance(rec.get("swap_log"), list))
     start_spools = rec.get("start_spools") if facts else {}
-    swap_log = rec.get("swap_log") if facts else []
+    # Group 65 fix review 2 (RE4): the swap log the card kept, snapshot or not (it works out
+    # the rows' marks; only a usable snapshot judges a newly used head).
+    swap_log = rec.get("swap_log") if isinstance(rec.get("swap_log"), list) else []
     words = _heads_words(rec.get("heads_source"))
     end_point = _swap_point({"progress": rec.get("progress")})
     held, unread, added = {}, set(), []
@@ -5989,7 +6055,7 @@ def _rescale_review(rec, grams_at, to_point=None):
     if added:
         _note_added_lines(rec, added, lines, heads, held, start_spools, swap_log, unread, words, no_spool, facts)
     rows.sort(key=lambda r: _pos_order(r.get("position")))
-    _mark_rows_again(rec, rows, heads, swap_log, facts)
+    _mark_rows_again(rec, rows, heads, swap_log)
     rec["spools"] = rows
     rec[line_key] = lines
     rec["total_grams"] = round(sum(float(r.get("grams") or 0.0) for r in rows)
@@ -6022,8 +6088,14 @@ def _rework_refusal(rec):
     if any(isinstance(r, dict) and r.get("attempt_used_before") is not None for r in rec.get("spools") or []):
         return ("An earlier Apply's write may still have landed, so this card can't be worked out again: Apply "
                 "it as shown (FCC checks that write first), or Discard and weigh the spools.")
-    return ("An earlier Apply on this card held or settled a spool, so it can't be worked out again: Apply it as "
-            "shown, or Discard and weigh the spools.")
+    rows = [r for r in rec.get("spools") or [] if isinstance(r, dict)]
+    if any(isinstance(r.get("weighed"), dict) for r in rows) or float(rec.get("weighed_left_g") or 0) > 0.005:
+        return ("An earlier Apply on this card held or left uncharged a spool weighed since the print, so it "
+                "can't be worked out again: Apply it as shown, or Discard and weigh the spools.")
+    # Group 65 fix review 2 (RE2): kept with nothing held, settled or charged (Spoolman didn't
+    # answer, or a spool changed since a write that failed).
+    return ("An earlier Apply couldn't charge part of this card, so it can't be worked out again: Apply it as "
+            "shown (FCC reads its spools again first), or Discard and weigh the spools.")
 
 
 def _seen_words(seen):
@@ -6951,8 +7023,10 @@ def _weighed_rows_left(weighed_rows, rec_rows, asked):
             g = round(float(r.get('grams') or 0), 2)
         except (TypeError, ValueError):
             g = 0.0
-        out.append({"line": line, "sid": r.get('sid'), "grams": g,
-                    "known_order": bool(w.get("known_order"))})
+        entry = {"line": line, "sid": r.get('sid'), "grams": g, "known_order": bool(w.get("known_order"))}
+        if w.get("unseen"):
+            entry["unseen"] = True             # Group 65 fix review 2 (RE1)
+        out.append(entry)
     return out
 
 
@@ -6963,11 +7037,15 @@ def _say_left_weighed(printer, filename, job_ref, left):
     person set it). Never raises."""
     try:
         known = [l for l in left or [] if l.get("known_order")]
-        unsure = [l for l in left or [] if not l.get("known_order")]
+        unseen = [l for l in left or [] if not l.get("known_order") and l.get("unseen")]
+        unsure = [l for l in left or [] if not l.get("known_order") and not l.get("unseen")]
         # FCC's own words, never outside text (`why` in this file is outside text,
-        # escaped: test_deduct_accuracy_56's canary).
+        # escaped: test_deduct_accuracy_56's canary). Group 65 fix review 2 (RE1): a spool
+        # weighed while FCC couldn't see the print is said as that.
         for group, words in (
                 (known, "weighed after the print ended, the scale counted it"),
+                (unseen, "weighed while FCC couldn't see the print, so FCC couldn't tell whether the "
+                         "scale counted it: left as set on the card"),
                 (unsure, "its weight changed after the print ended, and FCC couldn't tell whether the "
                          "scale counted it: left as set on the card")):
             if not group:

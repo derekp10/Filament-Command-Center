@@ -75,6 +75,9 @@
         // in, the part the scale didn't count: never "0 g", and charging it is right.
         const head = w.back
             ? '⚠️ Weighed while off its head: only its stretch after going back on is filled in'
+            : w.unseen
+            // Group 65 fix review 2 (RE1): FCC can't place it against the print.
+            ? '⚠️ Weighed while FCC couldn’t see the print: check before you Apply'
             : w.known_order
             ? '⚠️ Weighed after this print ended: 0 g filled in'
             : '⚠️ Changed weight after this print ended: check before you Apply';
@@ -1866,7 +1869,7 @@
         // `freshHeads`: re-read the printer's heads first. After an Apply that
         // emptied a spool (43.2), the cached list still offers it with its old
         // "Ng left".
-        async function rerenderCard(card, freshHeads) {
+        async function rerenderCard(card, freshHeads, keep) {
             const printer = card.dataset.printer;
             const job = card.dataset.job;
             const rec = (await fetchPending()).find(
@@ -1885,14 +1888,75 @@
             }
             if (!rec) { card.remove(); updateCount(); refreshBadge(); closeIfEmpty(); return null; }
             if (freshHeads) liveHeads[printer] = await fetchCandidates(printer);
+            // Group 65 fix review 2 (CA2): what the person did on the card (its picks, a figure
+            // being typed, where the keyboard is) is read here, after every read this redraw
+            // makes and right before the fresh card takes its place: read at the press, or
+            // before the list read, a key or a pick made meanwhile was lost.
+            const kept = keep ? keepCard(card) : null;
             const tmp = document.createElement('div');
             tmp.innerHTML = cardHtml(rec).trim();
             const fresh = tmp.firstElementChild;
             card.replaceWith(fresh);
             if (liveHeads[printer]) withHeads(fresh, liveHeads[printer]);
-            const first = fresh.querySelector('.fcc-cr-pick, .fcc-cr-grams');
-            if (first) { try { first.focus(); } catch (_) { /* noop */ } }
+            if (kept) {
+                fresh._fccKept = restoreCard(fresh, kept, keep);
+            } else {
+                const first = fresh.querySelector('.fcc-cr-pick, .fcc-cr-grams');
+                if (first) { try { first.focus(); } catch (_) { /* noop */ } }
+            }
             return fresh;
+        }
+        // Group 65 fix review 2 (CA1 / CA2 / CA5): a card's picks, the How far it got figure
+        // the person was typing, and where the keyboard was, with its caret and selection.
+        function keepCard(card) {
+            const was = document.activeElement;
+            const inCard = !!(was && was !== document.body && card.contains(was));
+            const basis = inCard && ['fcc-cr-pct', 'fcc-cr-whole', 'fcc-cr-workout']
+                .some((c) => String(was.className || '').split(/\s+/).includes(c));
+            const pct = card.querySelector('.fcc-cr-pct');
+            const caret = (el) => {
+                try { return [el.selectionStart, el.selectionEnd]; } catch (_) { return [null, null]; }
+            };
+            return {
+                picks: keptPicks(card),
+                was, inCard, basis: basis || !was || was === document.body,
+                key: inCard ? focusKey(was) : null,
+                caret: inCard ? caret(was) : [null, null],
+                pct: pct ? { value: String(pct.value), drawn: String(pct.getAttribute('value') || '') } : null,
+            };
+        }
+        function restoreCard(fresh, kept, opts) {
+            const lost = putPicksBack(fresh, kept.picks);
+            const pct = fresh.querySelector('.fcc-cr-pct');
+            const typedPct = kept.pct && kept.pct.value !== kept.pct.drawn;
+            // CA5: a figure the person was typing in How far it got stays theirs.
+            if (pct && typedPct) pct.value = kept.pct.value;
+            let target = null;
+            let select = false;
+            let caret = null;
+            if (kept.key && kept.key.cls !== 'fcc-cr-whole' && kept.key.cls !== 'fcc-cr-workout') {
+                target = findByKey(fresh, kept.key);
+                const carried = kept.key.cls === 'fcc-cr-other' || (kept.key.cls === 'fcc-cr-pct' && typedPct);
+                // CA1: a box whose text came across keeps the caret and selection the person left;
+                // a box whose figure the redraw replaced has the new figure selected, so the
+                // next digit replaces it rather than joining it.
+                if (carried) caret = kept.caret; else select = true;
+            } else if (kept.basis) {
+                target = pct || fresh.querySelector(opts && opts.whole ? '.fcc-cr-whole' : '.fcc-cr-workout');
+                select = !typedPct;
+            } else if (!kept.inCard && kept.was && kept.was.isConnected !== false && typeof kept.was.focus === 'function') {
+                target = kept.was;
+            }
+            try {
+                if (target) {
+                    target.focus();
+                    if (select && typeof target.select === 'function') target.select();
+                    else if (caret && caret[0] != null && typeof target.setSelectionRange === 'function') {
+                        target.setSelectionRange(caret[0], caret[1]);
+                    }
+                }
+            } catch (_) { /* noop */ }
+            return { lost, picks: kept.picks.length };
         }
         // Say on the card (review fix) and in a toast: the toast layer is drawn
         // under the review panel. A card drawn again is told on its new self.
@@ -1934,14 +1998,6 @@
                 d = await r.json();
             } catch (_) { d = null; }
             delete card.dataset.recomputing;
-            // Group 65 fix review (CD1 / CD5): the picks, and where the keyboard is, read when
-            // the answer comes, so a pick made while FCC worked it out is kept too.
-            const picks = keptPicks(card);
-            const was = document.activeElement;
-            const fromBasis = !was || was === document.body
-                || (card.contains(was) && was.classList && ['fcc-cr-pct', 'fcc-cr-whole', 'fcc-cr-workout']
-                    .some((c) => was.classList.contains(c)));
-            const wasKey = !fromBasis && card.contains(was) ? focusKey(was) : null;
             if (d && d.status === 'already_handled') {
                 // Group 65 review (PI1): the card goes from under the pointer (and the panel
                 // with it, when it was the only card): a double click's second press reaches
@@ -1953,38 +2009,24 @@
                 return;
             }
             if (d && (d.status === 'recomputed' || d.stale)) {
-                const fresh = await rerenderCard(card);
+                // Group 65 review (PI2 / PI4) and fix reviews (CD1 / CD5 / CA1 / CA2 / CA5): the
+                // redraw keeps what the person did on the card and gives the keyboard back as
+                // they left it (from a basis control, or from nowhere: How far it got, its figure
+                // selected, so a figure typed next replaces it).
+                const fresh = await rerenderCard(card, false, { whole });
                 if (fresh === card) {
-                    // Group 65 fix review (CD2): worked out, but the list couldn't be read to draw
-                    // it: every button back (Discard too), and said so, never "Worked out" over
-                    // the old grams.
+                    // Group 65 fix review (CD2) and fix review 2 (CA3): the list couldn't be read
+                    // to draw it: every button back (Discard too), and what the answer was (the
+                    // card's own words then say the list couldn't be read).
                     btns.forEach((b) => { b.disabled = false; });
-                    tell(card, 'FCC worked it out, but couldn’t read the review list to draw it: close 🛑 Review and '
-                        + 'open it again to see it.');
+                    tell(card, d.stale ? 'This card changed since it was drawn, and FCC couldn’t draw it again here.'
+                        : 'FCC worked it out, but couldn’t draw it here.');
                     return;
                 }
                 if (fresh) {
-                    const lost = putPicksBack(fresh, picks);
-                    // Group 65 review (PI2 / PI4): the keyboard goes to How far it got with its
-                    // figure selected, so a figure typed next replaces it (typed on Charge the
-                    // whole print, it went to the scan path as a spool's number). Group 65 fix
-                    // review (CD5): only from where the basis was pressed (or from nowhere);
-                    // typing anywhere else on the card goes on there, and elsewhere is left be.
-                    const back = fromBasis
-                        ? (fresh.querySelector('.fcc-cr-pct') || fresh.querySelector(whole ? '.fcc-cr-whole' : '.fcc-cr-workout'))
-                        : findByKey(fresh, wasKey);
-                    try {
-                        if (back) {
-                            back.focus();
-                            if (fromBasis && typeof back.select === 'function') back.select();
-                            else if (typeof back.setSelectionRange === 'function' && typeof back.value === 'string') {
-                                back.setSelectionRange(back.value.length, back.value.length);
-                            }
-                        } else if (!wasKey && was && was !== document.body && was.isConnected !== false
-                                   && typeof was.focus === 'function') {
-                            was.focus();
-                        }
-                    } catch (_) { /* noop */ }
+                    const back = fresh._fccKept || { lost: [], picks: 0 };
+                    const lost = back.lost;
+                    const picks = { length: back.picks };
                     // Group 65 review (WD5 / CM5): the words name the card's own button, and the
                     // picks kept or lost.
                     const how = whole ? 'Worked out for the whole print' : `Worked out at ${fmt(payload.percent)}%`;
@@ -2038,7 +2080,10 @@
         function updatePreview(input) {
             const sid = input.dataset.sid;
             const g = parseFloat(input.value);
-            const prev = overlay.querySelector(`.fcc-cr-preview[data-sid="${sid}"]`);
+            // Group 65 fix review 2 (CA4): its own card's preview (a lookup that answers after
+            // the card was drawn again painted the fresh card's from the old grams).
+            const scope = (input.closest && input.closest('.fcc-cr-card')) || overlay;
+            const prev = scope.querySelector(`.fcc-cr-preview[data-sid="${sid}"]`);
             if (!prev) return;
             if (Number.isNaN(g)) { prev.textContent = '→ —'; prev.style.color = '#9aa'; return; }
             // 43.1: no known capacity, so no remaining to preview.
@@ -2135,7 +2180,7 @@
             }
             let j = null;
             if (r.ok) { try { j = await r.json(); } catch (_) { j = null; } }
-            if (inp._fccLook !== seq) return;
+            if (inp._fccLook !== seq || card.isConnected === false) return;
             const s = j && j.success !== false ? j.data : null;
             if (!s || s.id == null || Number(s.id) !== id) {
                 setBoxInfo(info, `FCC couldn't find spool #${id}.`, true);
@@ -2328,10 +2373,10 @@
                 // as drawn, a spool an earlier Apply had charged read as a failure.
                 if (card.dataset.stale === '1') {
                     e.target.disabled = true;
-                    const picks = keptPicks(card);     // Group 65 fix review (CD2)
-                    const fresh = await rerenderCard(card, true);
+                    // Group 65 fix review (CD2) and fix review 2 (CA2): the picks, read right
+                    // before the fresh card takes its place, after the redraw's own reads.
+                    const fresh = await rerenderCard(card, true, {});
                     if (fresh && fresh !== card) {
-                        putPicksBack(fresh, picks);
                         sayOnCard(fresh, 'Drawn again as FCC holds this card now: check it, then Apply.');
                     } else if (fresh) {
                         sayOnCard(card, '');
@@ -2500,6 +2545,10 @@
                     const leftG = left.reduce((a, l) => a + (Number(l.grams) || 0), 0);
                     const leftWho = spoolListWords(left.map((l) => l.sid));
                     const leftWords = !left.length ? ''
+                        : left.some((l) => l.unseen)
+                        // Group 65 fix review 2 (RE1).
+                        ? `left ${fmtG(leftG)}g uncharged on ${leftWho} as set: `
+                          + `${left.length > 1 ? 'they were' : 'it was'} weighed while FCC couldn’t see the print`
                         : (d.settled_unsure
                             ? `left ${fmtG(leftG)}g uncharged on ${leftWho} as set: `
                               + `${left.length > 1 ? 'their weights' : 'its weight'} changed after the print`

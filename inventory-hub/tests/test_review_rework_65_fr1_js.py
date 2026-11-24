@@ -55,7 +55,9 @@ return { same: now === c, discard: now.querySelector('.fcc-cr-discard').disabled
          whole: now.querySelector('.fcc-cr-whole').disabled, notice: notice('a') };
 """, {"pending": _cards(), "spools": SPOOLS})
     assert res["same"] and res["discard"] is False and res["whole"] is False, res
-    assert "couldn’t read the review list to draw it" in res["notice"] and "Worked out" not in res["notice"], res
+    # Group 65 fix review 2 (CA3): what the answer was, once; the card's own words say the
+    # list couldn't be read.
+    assert "FCC worked it out, but couldn’t draw it here." in res["notice"], res
 
 
 def test_a_pick_the_fresh_picker_no_longer_lists_is_put_back(tmp_path):

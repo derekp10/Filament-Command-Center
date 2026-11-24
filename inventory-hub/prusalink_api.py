@@ -701,7 +701,16 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
     try:
         r = requests.get(f"http://{ip}/api/v1/status", headers=headers, timeout=2)
         if r.ok:
-            body = r.json() or {}
+            try:
+                body = r.json() or {}
+            except ValueError:
+                # Group 65 fix review 2 (WA4): an answer that isn't JSON, and doesn't say it is,
+                # is no PrusaLink (another device took the address); JSON FCC can't read, JSON
+                # without a state, or a cut-off answer stays "unreadable" (PrusaLink answering
+                # badly).
+                ctype = str((getattr(r, "headers", None) or {}).get("Content-Type", "") or "")
+                why = "unreadable" if "json" in ctype.lower() else "not_prusalink"
+                raise
             printer = body.get("printer") or {}
             state_str = str(printer.get("state", "")).upper()
             if state_str:
@@ -737,7 +746,7 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
             if state_text:
                 _note_probe_failure(printer_name, None)
                 return {"state": state_text, "is_active": is_active}
-        elif why == "unreadable":
+        elif why in ("unreadable", "not_prusalink"):
             why = f"http {r.status_code}"
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         why = _connection_failure_kind(e)

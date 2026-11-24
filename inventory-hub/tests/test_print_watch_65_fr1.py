@@ -45,7 +45,7 @@ def test_a_finish_after_a_restart_that_isnt_the_latched_print_opens_its_review(m
     assert _recover(monkeypatch, {"job_id": 8, "filename": "/usb/B.BGC", "progress": 1.0}) is True
     assert completions == [] and [(kind, a[2]) for kind, a, _k in dispatched] == [("ambiguous", 7)], dispatched
     assert dispatched[0][2]["lost_contact"]["why"] == "restart" and dispatched[0][2]["heads_when"] == "restart"
-    assert words[0].startswith("📡 XL: the print that finished while FCC couldn't see the printer is job 8"), words
+    assert words[0].startswith("📡 XL: the print that finished while FCC was restarting is job 8"), words
 
 
 def test_a_finish_after_a_restart_fcc_cant_tie_to_the_latched_print_opens_its_review(monkeypatch, clock,
@@ -69,8 +69,28 @@ def _resume(monkeypatch, clock, **latch):
     return swaps
 
 
+def _resume_at(monkeypatch, clock, progress, **latch):
+    swaps = []
+    monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {"0": 58})
+    monkeypatch.setattr(print_deduct, "_record_swap_events",
+                        lambda e, snap, p, **k: swaps.append(p) or [])
+    _latch(state="ATTENTION", snapshot_job="7", start_spools={"0": 57}, **latch)
+    _miss(3, clock)
+    print_monitor._track_print_edge("XL", _printing(monkeypatch, job_id=7, progress=progress), "fb")
+    return swaps
+
+
 def test_a_run_out_swap_seen_after_lost_contact_is_cut_at_the_park(monkeypatch, clock, words):
-    assert _resume(monkeypatch, clock, saw_attention=True, pause_progress=0.31) == [0.31]
+    # Group 65 fix review 2 (WA5): only when FCC sees the resume itself, at the park.
+    assert _resume_at(monkeypatch, clock, 0.32, saw_attention=True, pause_progress=0.31) == [0.31]
+
+
+def test_a_swap_seen_past_the_park_after_lost_contact_is_not_recorded(monkeypatch, clock, words):
+    # Group 65 fix review 2 (WA5 / WA3): past the park FCC can't tell where (or how many
+    # times) a spool changed: no swap, and the pause markers go.
+    assert _resume_at(monkeypatch, clock, 0.6, saw_attention=True, pause_progress=0.31) == []
+    entry = print_monitor._PRINT_TRACKER["XL"]
+    assert "pause_progress" not in entry and "saw_attention" not in entry, entry
 
 
 def test_a_swap_fcc_cant_place_after_lost_contact_is_not_recorded(monkeypatch, clock, words):
@@ -81,16 +101,20 @@ def test_a_swap_fcc_cant_place_after_lost_contact_is_not_recorded(monkeypatch, c
 # WT3 / WT5: the park's facts                                                 #
 # --------------------------------------------------------------------------- #
 
-def test_another_prints_park_after_lost_contact_writes_nothing_into_the_latched_print(monkeypatch, clock, words):
+def test_another_prints_park_after_lost_contact_is_a_job_change(monkeypatch, clock, dispatched, words):
+    # Group 65 fix review (WT3) and fix review 2 (WA1): nothing of the other print goes into
+    # the latched one; the latched print opens its review, and the other print is latched.
     _latch()
     _miss(3, clock)
-    reads = []
-    monkeypatch.setattr(print_monitor, "_capture_end_heads", lambda *a, **k: reads.append(a) or None)
+    monkeypatch.setattr(print_monitor, "_capture_end_heads", lambda *a, **k: None)
     _job(monkeypatch, {"job_id": 8, "filename": "/usb/B.BGC", "progress": 0.8})
     print_monitor._track_print_edge("XL", {"state": "ATTENTION"}, "fb")
+    ((kind, a, k),) = dispatched
+    assert (kind, a[1], a[2], a[3]) == ("ambiguous", "/usb/A.BGC", 7, 0.3), a
+    assert k["lost_contact"]["why"] == "lost" and k["heads_when"] == "job_change", k
     entry = print_monitor._PRINT_TRACKER["XL"]
-    assert not any(k in entry for k in ("pause_progress", "saw_attention", "park_read", "paused_at")), entry
-    assert entry["misses"] == 3 and reads == [] and not any("parked at ATTENTION" in w for w in words), (entry, words)
+    assert (entry["job_id"], entry["filename"], entry.get("pause_progress")) == (8, "/usb/B.BGC", 0.8), entry
+    assert "misses" not in entry, entry
 
 
 def test_a_short_blip_at_a_park_keeps_the_parks_read(monkeypatch, clock):
@@ -128,8 +152,13 @@ def test_a_finished_screen_fcc_cant_tie_to_the_print_is_said_as_that(monkeypatch
 def test_an_answer_that_isnt_prusalinks_is_said_as_the_addresss_problem(monkeypatch):
     pings = []
     monkeypatch.setattr(prusalink_api, "icmp_echo", lambda *a, **k: pings.append(a) or True)
+    monkeypatch.setattr(prusalink_api, "fetch_printer_credentials", lambda fb, name: {"ip_address": "10.0.0.9"})
+    # Group 65 fix review 2 (WA4): PrusaLink answering in a way FCC can't read is pinged, as
+    # before; only an answer that isn't PrusaLink's at all is the address's problem.
     prusalink_api._note_probe_failure("XL", "unreadable")
-    assert print_monitor._reach_verdict("XL") == "address" and pings == []
+    assert print_monitor._reach_verdict("XL") == "prusalink" and len(pings) == 1
+    prusalink_api._note_probe_failure("XL", "not_prusalink")
+    assert print_monitor._reach_verdict("XL") == "address" and len(pings) == 1
     assert print_monitor._reach_words("XL", "address", True) == (
         "Something answers at XL's address, but not as PrusaLink: check the address in Settings, "
         "🔌 Printer Connections.")

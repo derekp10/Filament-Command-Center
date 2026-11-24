@@ -243,7 +243,9 @@ class _R:
     (requests.exceptions.ConnectionError("Max retries exceeded"), "connection"),
     ([_R(404), _R(404)], "http 404"),
     ([_R(200, ValueError("not json")), _R(500)], "http 500"),
-    ([_R(200, ValueError("not json")), _R(200, ValueError("not json"))], "unreadable"),
+    # Group 65 fix review 2 (WA4): answers that aren't JSON, and don't say they are, are no
+    # PrusaLink's.
+    ([_R(200, ValueError("not json")), _R(200, ValueError("not json"))], "not_prusalink"),
 ])
 def test_a_failed_probe_says_why_and_still_answers_none(raise_or_answers, why):
     answers = list(raise_or_answers) if isinstance(raise_or_answers, list) else None

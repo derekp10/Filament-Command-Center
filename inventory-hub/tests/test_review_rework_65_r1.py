@@ -312,7 +312,7 @@ def test_after_an_apply_that_only_held_its_row_the_card_is_refused_in_words_that
     # Apply settled or left at 0 g, so it is refused, saying what the Apply did.
     with _spoolman({57: 160.0, 58: 50.0}):
         ans = _recompute(rev=kept["rev"], whole=True)
-    assert ans["status"] == "error" and "held or settled a spool" in ans["msg"], ans
+    assert ans["status"] == "error" and "held or left uncharged a spool weighed since the print" in ans["msg"], ans
     assert cancel_review_store.get_pending("XL", "J-1") == kept
 
 
@@ -321,8 +321,9 @@ def test_after_an_apply_that_only_held_its_row_the_card_is_refused_in_words_that
     ({"requested_total": 15.0, "applied_g": 0.0,
       "spools": [{"sid": 57, "position": 0, "grams": 12.0, "attempt_used_before": 100.0,
                   "attempt_used_after": 112.0}]}, "write may still have landed"),
-    ({"requested_total": 15.0, "applied_g": 0.0, "requested_keys": ["0:57", "1:58"]}, "held or settled a spool"),
-], ids=["charged", "write may have landed", "held or settled"])
+    ({"requested_total": 15.0, "applied_g": 0.0, "requested_keys": ["0:57", "1:58"]},
+     "couldn't charge part of this card"),
+], ids=["charged", "write may have landed", "couldn't charge"])
 def test_the_refusal_after_an_apply_says_what_happened(more, words):
     before = _card(**more)
     ans = _recompute(rev=0, whole=True)
