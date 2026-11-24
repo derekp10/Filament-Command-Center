@@ -61,9 +61,11 @@ def test_a_spool_weighed_while_fcc_couldnt_see_the_print_is_marked_when_the_card
     card = _lost_card(weighed_at=3600)
     row = next(r for r in card["spools"] if r["sid"] == 100)
     mark = row.get("weighed") or {}
-    assert mark.get("unseen") is True and mark.get("known_order") is False, row
-    assert row["prefill"] == row["grams"], row
-    assert "after FCC last saw the print" in mark["words"] and "FCC can't tell whether" in mark["words"], mark
+    # Group 65 fix review 3 (RX4): the card is worked out at the progress FCC last saw, and
+    # every gram on its row was printed before that weighing: 0 g, of known order.
+    assert mark.get("seen") is True and mark.get("known_order") is True, row
+    assert row["prefill"] == 0.0, row
+    assert "after FCC last saw the print" in mark["words"] and "already counted" in mark["words"], mark
 
 
 def test_a_spool_weighed_after_fcc_saw_the_printer_again_is_no_unseen_mark(logs):
@@ -80,8 +82,10 @@ def test_an_apply_on_a_card_that_didnt_show_the_unseen_weighing_holds_it(logs):
     cancel_review_store.add_pending(card)
     held = print_deduct._held_at_apply(card, card["spools"][0], 100, 140.0)
     assert held and held["unsure"] is True and held["stamp"]["how"] == "Quick Weigh", held
+    # Group 65 fix review 3 (RX4): at the progress FCC last saw, what the Apply asks was all
+    # printed before that weighing: held at 0 g, of known order.
     mark = print_deduct._held_mark(held, 20.0)
-    assert mark["weighed"]["unseen"] is True and mark["prefill"] == 20.0, mark
+    assert mark["weighed"]["seen"] is True and mark["prefill"] == 0.0, mark
 
 
 def test_an_unseen_weighing_left_uncharged_is_said_as_that(logs):
