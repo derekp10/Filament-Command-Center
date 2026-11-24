@@ -23,6 +23,7 @@ Wiring notes:
 
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
+import os
 import time
 import threading
 
@@ -85,6 +86,9 @@ _PARK_STATES = _PAUSED_CONDITION_STATES | frozenset({"BUSY"})
 # Group 65 fix review 4 (WY3): the reads of the heads a park of a print FCC has no start
 # snapshot for (one it first met at the park) gets before it gives up, one per tick.
 _PARK_READ_TRIES = 5
+# Group 65 fix review 5 (RZ4 / WZ1): when the latch file was last saved before this
+# process's restart recovery (_recover_print_tracker_on_start), else None.
+_LATCH_SAVED_AT = None
 # Terminal states that, reached FROM an in-progress state, mean a CANCEL/abort.
 # Cancel terminal states (reached FROM in-progress = a CANCEL/abort). This set
 # ALSO doubles as the "file still download-locked, don't fetch yet" gate in
@@ -849,6 +853,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
         unseen_was = None  # Group 65 fix review 4 (WY6): FCC's last sight before a park it met
         met_was = None     # Group 65 fix review 4 (WY3): a print FCC first met at its park
         unread_park_job = None  # ... resumed with no read of its heads at that park
+        late_was = None    # fix review 5 (WZ2): ... whose read landed only on a retry (when)
         swap_jid = None
         swap_progress = None
         swap_runout = False
@@ -872,6 +877,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 # Group 65 fix review 4 (WY6 / WY3): a park FCC met the print at is spent too.
                 unseen_was = entry.pop('unseen_from', None)
                 met_was = entry.pop('met_at_park', None)
+                late_was = entry.pop('start_late', None)     # fix review 5 (WZ2 / AZ2)
                 paused_was = entry.pop('paused_at', None)
             if job:
                 # Reject blank/zero ids (None/''/'0'/0) — same "blank job" set
@@ -943,7 +949,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     entry.pop('park_reads', None)
                     entry.pop('unseen_from', None)
                     entry.pop('met_at_park', None)
-                    unseen_was = met_was = None
+                    entry.pop('start_late', None)
+                    unseen_was = met_was = late_was = None
                 if job.get('filename'):
                     entry['filename'] = job['filename']
                 if new_jid is not None:
@@ -1113,6 +1120,25 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                 f"{', after a run-out,' if swap_runout else ''} with a spool "
                                 f"changed ({_d}): FCC splits its grams at the change.",
                                 "INFO", "6cb2eb")
+                        elif late_was is not None:
+                            # Group 65 fix review 5 (WZ2 / AZ2): FCC met this print at its park and
+                            # read its heads there only on a retry, so the spools it read may be
+                            # ones changed at the prompt: no change found proves nothing.
+                            _heads = ", ".join(
+                                f"T{print_deduct._esc(_p)} #{print_deduct._esc(_s)}"
+                                for _p, _s in sorted(snap.items(), key=lambda kv: str(kv[0]).zfill(4))
+                                if _s is not None)
+                            try:
+                                _late = max(0, int(round(float(late_was) - float(paused_was))))
+                                _after = f" {_late} s"
+                            except (TypeError, ValueError):
+                                _after = ""
+                            state.add_log_entry(
+                                f"⚠️ {print_deduct._esc(printer_name)}: resumed job {print_deduct._esc(swap_jid)} "
+                                f"at {_at}. FCC read its heads{f' ({_heads})' if _heads else ''} only{_after} after "
+                                f"it first saw the print parked, so if a spool was changed at that prompt before "
+                                f"then, the one it replaced is charged nothing for this print: weigh it to true it up.",
+                                "WARNING", "ffaa00")
                         else:
                             _heads = ", ".join(
                                 f"T{_p} #{_s}" if _s is not None else f"T{_p} no spool"
@@ -1352,7 +1378,10 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         entry['progress'] = float(pause_progress)
                     park_ok = True
                 if not entry.get('filename') or ours:
-                    _end_lost_stretch(entry, pause_job)
+                    # Group 65 fix review 5 (WZ1 / AZ1): a park tick whose job read named no print
+                    # (it failed) can't say which print the printer is at: its bound stays.
+                    _end_lost_stretch(entry, pause_job,
+                                      keep_bound=cur in _PARK_STATES and not pause_job)
                 # 22.3(b): during an ATTENTION runout park of a latched job, record the
                 # frozen pause progress + that an ATTENTION was seen (so a swap on the
                 # resume is treated as a RUNOUT). Keep the MAX across re-polls.
@@ -1412,6 +1441,11 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         if first and any(v is not None for v in first.values()):
                             e['start_spools'] = dict(first)
                             e['snapshot_job'] = str(park_read_job)
+                            if int(e.get('park_reads') or 0) > 0:
+                                # Group 65 fix review 5 (WZ2 / AZ2): a read that landed only on
+                                # a retry may come after a spool was changed at the prompt: the
+                                # resume says so when it finds no change (when it read them).
+                                e['start_late'] = time.time()
         if not park:
             # Group 65 fix review 4 (WY3): a read that kept nothing (a Spoolman blip), of a
             # print FCC has no start snapshot for (one it first met at this park): read again
@@ -1757,7 +1791,7 @@ def _names_other_job(entry, job):
     return jid not in blank and entry.get('job_id') not in blank and str(jid) != str(entry.get('job_id'))
 
 
-def _end_lost_stretch(entry, job=None):
+def _end_lost_stretch(entry, job=None, keep_bound=False):
     """FCC sees the latched print again: its lost-contact facts go. A park read taken
     before a lost stretch is kept only when the printer is still in that park (the job
     read's frozen progress is the read's own: the print never moved; Group 65 fix
@@ -1785,10 +1819,11 @@ def _end_lost_stretch(entry, job=None):
     entry.pop('lost_why', None)
     if entry.get('filename'):
         entry['seen_at'] = time.time()
-    else:
+    elif not keep_bound:
         # Group 65 fix review 4 (WY6): a restart's bound for a print it would meet at a park,
         # and when FCC lost sight of an idle printer, spent once FCC sees the printer with no
-        # such print.
+        # such print. Fix review 5 (WZ1 / AZ1): `keep_bound`, a park tick whose job read named
+        # no print, can't say so: the bound stays for the tick that meets the print.
         entry.pop('unseen_from', None)
         entry.pop('unseen_since', None)
 
@@ -2399,23 +2434,35 @@ def _recover_print_tracker_on_start():
 
     Idempotent: _dispatch_cancel_edge dedups via the (printer, job_id) ledger +
     review store, so a double restart can't double-deduct."""
+    global _LATCH_SAVED_AT
+    # Group 65 fix review 5 (RZ4 / WZ1): when the latch file was last saved, before any
+    # save of this process: FCC couldn't see the printers after it (it was down), so a
+    # print met at its park after the restart may have begun then.
+    try:
+        _LATCH_SAVED_AT = os.path.getmtime(print_tracker_store._STORE_PATH)
+    except (OSError, TypeError, ValueError, AttributeError):
+        _LATCH_SAVED_AT = None
     persisted = print_tracker_store.load()
     if not persisted:
+        _LATCH_SAVED_AT = None
         return
     try:
         _, fb_url = config_loader.get_api_urls()
     except Exception:
         fb_url = None
     recovered = 0
-    for name, entry in list(persisted.items()):
-        try:
-            if _recover_one_print_latch(name, entry, fb_url):
-                recovered += 1
-        except Exception as e:
+    try:
+        for name, entry in list(persisted.items()):
             try:
-                state.logger.debug(f"print-latch recovery failed for {name}: {e}")
-            except Exception:
-                pass
+                if _recover_one_print_latch(name, entry, fb_url):
+                    recovered += 1
+            except Exception as e:
+                try:
+                    state.logger.debug(f"print-latch recovery failed for {name}: {e}")
+                except Exception:
+                    pass
+    finally:
+        _LATCH_SAVED_AT = None      # recovery's own: never a later process step's
     if recovered:
         try:
             state.logger.info(
@@ -2472,8 +2519,16 @@ def _recover_one_print_latch(name, entry, fb_url):
     if not (job_id and filename):
         # No latched job (a bare terminal/idle snapshot) — nothing to recover;
         # seed the baseline state so the first edge-detect has a `prev`.
+        bare = {'state': str(entry.get('state', '')).upper()}
+        # Group 65 fix review 5 (WZ1 / RZ4): what bounds a print FCC may meet at its park
+        # next (it began while FCC couldn't see the printer): the bare latch's own, else
+        # when the latch file was last saved (FCC was down after that). An idle tick drops it.
+        since = next((entry.get(k) for k in ('unseen_from', 'unseen_since') if entry.get(k) is not None),
+                     _LATCH_SAVED_AT)
+        if since is not None:
+            bare['unseen_since'] = since
         with _PRINT_TRACKER_LOCK:
-            _PRINT_TRACKER[name] = {'state': str(entry.get('state', '')).upper()}
+            _PRINT_TRACKER[name] = bare
         return False
 
     cur_info = prusalink_api.get_printer_state(fb_url, name) if fb_url else None

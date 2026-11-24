@@ -1263,7 +1263,14 @@
             const state = LOST_STATE_WORDS[String(lc.back_state || '').toUpperCase()] || 'again';
             const lost = `FCC lost contact with ${esc(rec.printer_name)} at ~${pct}%`
                 + at(lc.lost_at != null ? lc.lost_at : lc.seen_at);
-            words = mayHaveGoneFurther
+            // Group 65 fix review 5 (RZ2): a finished print's card (a completion FCC saw only
+            // after it lost contact) says FCC saw it finish, never that it may have been
+            // cancelled: its grams are the whole print's.
+            const finished = String(lc.back_state || '').toUpperCase() === 'FINISHED' && !rec.ambiguous
+                && Number(rec.progress) >= 1;
+            words = finished
+                ? `${lost} and next saw it ${state}${back ? ` at ${back}` : ''}.`
+                : mayHaveGoneFurther
                 ? `${lost} and next saw it ${state}${back ? ` at ${back}` : ''}, so the print may have gone further.`
                 : `${lost} and next saw it ${state}${back ? ` at ${back}` : ''}: it may have printed further before it was cancelled.`;
         }
@@ -2119,7 +2126,7 @@
             // Fix review 3: the card stays busy until it is drawn again (its redraw can wait for a
             // scan to finish), so an Enter in How far it got meanwhile works nothing out twice.
             const settled = (d && (d.status === 'recomputed' || d.stale || d.status === 'already_handled'));
-            if (!settled) { delete card.dataset.recomputing; delete card.dataset.queuedPct; }
+            if (!settled) delete card.dataset.recomputing;
             if (d && d.status === 'already_handled') {
                 // Group 65 review (PI1): the card goes from under the pointer (and the panel
                 // with it, when it was the only card): a double click's second press reaches
@@ -2142,10 +2149,10 @@
                     // to draw it: every button back (Discard too), and what the answer was (the
                     // card's own words then say the list couldn't be read).
                     delete card.dataset.recomputing;
-                    delete card.dataset.queuedPct;
                     btns.forEach((b) => { b.disabled = false; });
-                    tell(card, d.stale ? 'This card changed since it was drawn, and FCC couldn’t draw it again here.'
-                        : 'FCC worked it out, but couldn’t draw it here.');
+                    // Fix review 5 (CZ1): a figure queued meanwhile is said as not worked out.
+                    tell(card, (d.stale ? 'This card changed since it was drawn, and FCC couldn’t draw it again here.'
+                        : 'FCC worked it out, but couldn’t draw it here.') + queuedNotDone(card));
                     return;
                 }
                 if (fresh) {
@@ -2173,16 +2180,9 @@
                     sayOnCard(fresh, d.stale
                         ? (d.msg || 'This card changed since it was drawn: it is drawn again as it is now.') + notDone
                         : `${how}: ${next}${gone}`);
-                    if (card.dataset.queuedPct === '1') {
-                        // Fix review 4 (CY2): an Enter in How far it got while the card was being
-                        // worked out: the figure it was pressed on (carried over the redraw) is
-                        // worked out now, as the person asked; it was dropped without a word.
-                        delete card.dataset.queuedPct;
-                        const typed = freshBox ? pctNumber(freshBox.value) : NaN;
-                        if (freshBox && PCT_FIGURE.test(freshBox.value) && Number.isFinite(typed) && typed !== at) {
-                            recompute(fresh, false);
-                        }
-                    }
+                    // Fix review 4 (CY2) / 5 (CZ1 / CZ2): an Enter in How far it got while the card
+                    // was being worked out: its figure is worked out now, as the person asked.
+                    afterQueued(card, fresh);
                 }
                 // The redraw put new buttons where the pointer is: a double click's second
                 // press reaches nothing (Group 58's rule).
@@ -2190,7 +2190,37 @@
                 return;
             }
             btns.forEach((b) => { b.disabled = false; });
-            tell(card, (d && d.msg) || "FCC didn't answer, so the card wasn't worked out again. Try again in a moment.");
+            tell(card, ((d && d.msg) || "FCC didn't answer, so the card wasn't worked out again. Try again in a moment.")
+                + queuedNotDone(card));
+        }
+
+        // Group 65 fix review 5 (CZ1 / CZ2 / CZ3): an Enter in How far it got while the card was
+        // busy (worked out, or read again by a stale Confirm) keeps its figure (`queuedPct`).
+        // Once the card is drawn again the figure is worked out there, unless the card is at it
+        // already; a box changed since the Enter, or a card that couldn't be drawn again, says
+        // the figure wasn't worked out, never works out one nobody pressed Enter on.
+        function queuedNotDone(card) {
+            const q = card.dataset.queuedPct;
+            delete card.dataset.queuedPct;
+            return (q != null && q !== '') ? ` ${fmt(Number(q))}% wasn’t worked out: press Enter again.` : '';
+        }
+        function afterQueued(old, fresh) {
+            const q = old.dataset.queuedPct;
+            delete old.dataset.queuedPct;
+            if (q == null || q === '' || !fresh) return;
+            const want = Number(q);
+            const box = fresh.querySelector('.fcc-cr-pct');
+            if (!box || !Number.isFinite(want)) return;
+            const at = pctNumber(box.getAttribute('value'));
+            if (Number.isFinite(at) && at === want) return;      // drawn at it already
+            const now = pctNumber(box.value);
+            if (now === want || (Number.isFinite(at) && now === at)) {
+                box.value = fmt(want);
+                recompute(fresh, false);
+                return;
+            }
+            sayOnCard(fresh, `${fmt(want)}% wasn’t worked out: How far it got changed after you pressed Enter. `
+                + 'Press Enter to work out what it holds.');
         }
 
         // 43.2: an Apply that couldn't place every gram opened an uncharged-grams
@@ -2412,21 +2442,28 @@
             // out again ("whole" became "100%", a second log line).
             const card = t.closest('.fcc-cr-card');
             if (!card) return;
+            if (card.dataset.recomputing === '1') {
+                // Fix review 4 (CY2) / 5 (CZ1 / CZ2 / CZ3): the card is being worked out, or a
+                // stale Confirm reads it again: the figure the Enter was pressed on (any figure,
+                // the old card's own too) is kept and worked out once the card is drawn again
+                // (afterQueued); one that isn't from 0 to 100 is said at once, never promised.
+                const n = pctNumber(t.value);
+                if (!PCT_FIGURE.test(t.value) || !Number.isFinite(n) || n < 0 || n > 100) {
+                    sayOnCard(card, 'Type how far the print got, from 0 to 100 %, then press Enter.');
+                    return;
+                }
+                card.dataset.queuedPct = String(n);
+                sayOnCard(card, `Still working this card out: ${fmt(n)}% is worked out once it is drawn again.`);
+                return;
+            }
             const drawn = pctNumber(t.getAttribute('value'));
             if (Number.isFinite(drawn) && pctNumber(t.value) === drawn) {
                 // Fix review 4 (CY4): said, but not to a double press's second Enter right after
                 // the card was drawn (its own words stand).
-                if (card.dataset.recomputing !== '1' && Date.now() - Number(card.dataset.drawnAt || 0) >= 700) {
+                if (Date.now() - Number(card.dataset.drawnAt || 0) >= 700) {
                     const verb = card.dataset.kind === 'no_spool' ? 'Apply' : 'Confirm';
                     sayOnCard(card, `It is worked out at ${fmt(drawn)}% already: check the grams, then ${verb}.`);
                 }
-                return;
-            }
-            if (card.dataset.recomputing === '1') {
-                // Fix review 4 (CY2): the card is still being worked out: the figure is worked
-                // out once it is drawn again (recompute), never dropped without a word.
-                card.dataset.queuedPct = '1';
-                sayOnCard(card, `Still working this card out: ${fmt(pctNumber(t.value))}% is worked out once it is drawn again.`);
                 return;
             }
             recompute(card, false);
@@ -2545,14 +2582,19 @@
                     const held = Array.from(card.querySelectorAll(
                         '.fcc-cr-confirm, .fcc-cr-whole, .fcc-cr-workout, .fcc-cr-discard'));
                     held.forEach((b) => { b.disabled = true; });
+                    // Fix review 5 (CZ3): How far it got's Enter waits too (it is queued, as while
+                    // the card is worked out): sent now, it went out on the old revision.
+                    card.dataset.recomputing = '1';
                     // Group 65 fix review (CD2) and fix review 2 (CA2): the picks, read right
                     // before the fresh card takes its place, after the redraw's own reads.
                     const fresh = await rerenderCard(card, true, { from: 'confirm' });
                     if (fresh && fresh !== card) {
                         sayOnCard(fresh, 'Drawn again as FCC holds this card now: check it, then Apply.');
+                        afterQueued(card, fresh);
                     } else if (fresh) {
+                        delete card.dataset.recomputing;
                         held.forEach((b) => { b.disabled = false; });
-                        sayOnCard(card, '');
+                        sayOnCard(card, queuedNotDone(card).trim());
                         toast(STALE_CARD_WORDS, 'warning', 7000);
                     } else if (card._fccSettled) {
                         toast('That card was already settled: nothing more to apply on it.', 'info');

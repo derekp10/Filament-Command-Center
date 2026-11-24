@@ -636,7 +636,7 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                            usage_map, known_positions=None, confirmed=False,
                            fb_url=None, active_locs=None, failed=None, read_heads=False,
                            heads=None, heads_source=None, heads_read_at=None, held=None,
-                           lost_contact=None):
+                           lost_contact=None, seen_by_head=None):
     """Single source of truth for the tail of an auto-applied deduct: record the
     ACTUALLY-applied grams in the exactly-once ledger, then surface any shortfall
     (requested-but-not-applied grams) as a 2dp WARNING so it's never silently lost.
@@ -702,7 +702,8 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                     details=details, failed=failed, fb_url=fb_url, active_locs=active_locs,
                     read_heads=read_heads,
                     **_given(heads=heads, heads_source=heads_source, heads_read_at=heads_read_at,
-                             held=held or None, lost_contact=lost_contact or None))
+                             held=held or None, lost_contact=lost_contact or None,
+                             seen_by_head=seen_by_head or None))
             except Exception as e:
                 # The spools are already charged: the ledger write below must still
                 # happen, or the job is deducted again on the next retry.
@@ -842,7 +843,7 @@ def _uncharged_by_position(usage_map, details, known_positions=None):
 def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged, details=(),
                             failed=(), fb_url=None, active_locs=None, heads=None,
                             read_heads=False, heads_source=None, heads_read_at=None, held=None,
-                            picked=False, lost_contact=None):
+                            picked=False, lost_contact=None, seen_by_head=None):
     """Group 43.2 — stash a review card for grams a deduct couldn't charge (a
     spool's record ran out, a head had no spool or two, a write failed), so they
     can still be placed: job 1104's 27.12 g went to no spool after #99's record
@@ -1050,6 +1051,8 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
         record["shortfall_prefill"] = prefill
     if lost_contact:
         record["lost_contact"] = lost_contact     # Group 65 fix review 4 (RY1)
+    if seen_by_head:
+        record["seen_by_head"] = seen_by_head     # Group 65 fix review 5 (RZ1)
     if heads_source:
         _say_where_heads_were_read(record, heads_source, heads_read_at)
     cancel_review_store.add_pending(record)
@@ -2291,7 +2294,8 @@ def _held_at_apply(rec, row, sid, used_now, shown=None):
         return _held_by_stamp(rec, row, sid, used_now, end_at, mark)
     stamp = weigh_stamps.weighed_after(sid, left)
     if not stamp:
-        return None
+        # Group 65 fix review 5 (RZ3): weighed before FCC saw a park it first met the print at.
+        return _held_left_unseen(rec, row, sid, used_now, mark)
     try:
         if mark is not None and mark.get("stamp_at") is not None and stamp["at"] <= float(mark["stamp_at"]) + 0.001:
             return None
@@ -2299,6 +2303,70 @@ def _held_at_apply(rec, row, sid, used_now, shown=None):
         pass
     return {"sid": sid, "toolhead": _hold_head(rec, row, sid), "then": None,
             "now": round(used_now, 2), "ours": 0.0, "stamp": stamp, "ended": float(left), "left": True}
+
+
+def _held_left_unseen(rec, row, sid, used_now, mark):
+    """Group 65 fix review 5 (RZ3): Decision 1 at the Apply for a spool that left its head at
+    a swap at a park FCC first saw only when it got there (the card's `swap_left_unseen`,
+    _swap_left_unseen), weighed after FCC last saw the printer and before it saw that park:
+    held unsure, its grams filled in, as the builder marks such a row, unless the card
+    showed that weighing. A set's spool has no row to mark, so only its Apply holds it."""
+    # The card's own spans, else worked out from its swap log (a card built before they were kept).
+    spans = rec.get("swap_left_unseen") or _swap_left_unseen(rec.get("swap_log")) or {}
+    span = spans.get(str(sid)) if isinstance(spans, dict) else None
+    try:
+        frm, at = float(span[0]), float(span[1])
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    stamp = weigh_stamps.weighed_after(sid, frm)
+    try:
+        if not stamp or float(stamp["at"]) > at:
+            return None
+        if mark is not None and mark.get("stamp_at") is not None and float(stamp["at"]) <= float(mark["stamp_at"]) + 0.001:
+            return None
+    except (TypeError, ValueError, KeyError):
+        return None
+    return {"sid": sid, "toolhead": _hold_head(rec, row, sid), "then": None, "now": round(used_now, 2),
+            "ours": 0.0, "stamp": stamp, "ended": frm, "back": at, "unsure": True,
+            "source": rec.get("heads_source"), "unseen_stretch": True, "first_seen": True}
+
+
+def _rec_seen_g(rec, row, sid):
+    """Group 65 fix review 5 (RZ1): RX4's seen share at an Apply on a card that keeps no
+    figures (a completion's uncharged-grams or no-spool card, seen after lost contact), from
+    its `seen_by_head`: the spool FCC's record had on each head when it last saw the print,
+    and the walk's grams for that head up to then. 0.0 for any other spool on that head;
+    None when the card kept none (the figures' share is worked out instead)."""
+    seen = rec.get("seen_by_head")
+    if not isinstance(seen, dict):
+        return None
+    h = seen.get(str(_norm_pos(row.get("position"))))
+    if not isinstance(h, dict) or h.get("sid") is None or str(h.get("sid")) != str(sid):
+        return 0.0
+    try:
+        return round(max(0.0, min(float(h["grams"]), float(row.get("grams") or 0))), 2)
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _seen_by_head(start_spools, swap_log, seen, cums):
+    """{str(pos): {sid, grams}}: the spool FCC's record had on each head when it last saw
+    the print (progress `seen`: the start snapshot advanced by the swaps recorded by then)
+    and the walk's grams for that head up to then (`cums`, the download's grams at that
+    progress). {} when FCC can't say (Group 65 fix review 5, RZ1)."""
+    if seen is None or not isinstance(cums, dict):
+        return {}
+    try:
+        log = [ev for ev in swap_log or [] if isinstance(ev, dict)
+               and _swap_point(ev) is not None and _swap_point(ev) <= float(seen) + 1e-6]
+        out = {}
+        for pos, sid in _start_mapping(start_spools, log).items():
+            g = _cum_at(cums, pos)
+            if sid is not None and g is not None:
+                out[str(_norm_pos(pos))] = {"sid": sid, "grams": round(float(g), 4)}
+        return out
+    except (TypeError, ValueError):
+        return {}
 
 
 def _held_by_stamp(rec, row, sid, used_now, end_at, mark):
@@ -2334,10 +2402,12 @@ def _held_by_stamp(rec, row, sid, used_now, end_at, mark):
     if unsure and _seen_progress(rec.get("lost_contact")) is not None:
         # Group 65 fix review 3 (RX4): the end moment is when FCC last saw the print, so what it
         # saw printed by then came before the weighing. Fix review 4 (RY2): only for the spool
-        # FCC saw on the head then.
+        # FCC saw on the head then. Fix review 5 (RZ1): a card with no figures keeps its own.
+        own = _rec_seen_g(rec, row, sid)
         out.update(unseen_stretch=True,
-                   seen_g=_seen_share_on_head(row, sid, rec.get("progress"), _seen_progress(rec.get("lost_contact")),
-                                              rec.get("figures"), rec.get("start_spools"), rec.get("swap_log")))
+                   seen_g=own if own is not None else _seen_share_on_head(
+                       row, sid, rec.get("progress"), _seen_progress(rec.get("lost_contact")),
+                       rec.get("figures"), rec.get("start_spools"), rec.get("swap_log")))
     return out
 
 
@@ -2696,9 +2766,11 @@ def _held_unseen(rec, row, sid, used_now, mark):
             "ours": 0.0, "stamp": stamp, "ended": stretch[0], "back": stretch[1], "unsure": True,
             "source": rec.get("heads_source"), "unseen_stretch": True,
             # Group 65 fix review 3 (RX4): what FCC saw printed before it lost sight of the print.
-            # Fix review 4 (RY2): only for the spool FCC saw on the head then.
-            "seen_g": _seen_share_on_head(row, sid, rec.get("progress"), _seen_progress(rec.get("lost_contact")),
-                                          rec.get("figures"), rec.get("start_spools"), rec.get("swap_log"))}
+            # Fix review 4 (RY2): only for the spool FCC saw on the head then. Fix review 5 (RZ1):
+            # a card with no figures keeps its own (seen_by_head).
+            "seen_g": _rec_seen_g(rec, row, sid) if _rec_seen_g(rec, row, sid) is not None
+            else _seen_share_on_head(row, sid, rec.get("progress"), _seen_progress(rec.get("lost_contact")),
+                                     rec.get("figures"), rec.get("start_spools"), rec.get("swap_log"))}
 
 
 def _mark_weighed_rows(rows, heads, end_at, left_at=None, source=None, back_spans=None, unseen=None,
@@ -3658,6 +3730,10 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
                     "job_id": job_id}
         return terminal
 
+    # Group 65 fix review 5 (RZ1): what FCC saw each head print before it lost sight of the
+    # print, for the cards this opens (they keep no figures of their own).
+    seen_by_head = (_seen_by_head(start_spools, swap_log, seen, swap_cums.get(seen_point))
+                    if unseen and seen_point is not None else {})
     mapping = _usable_heads(end_heads)
     heads = source = read_at = None
     if mapping is not None:
@@ -3716,7 +3792,7 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             **_given(heads=heads, heads_source=source, heads_read_at=read_at,
                      swap_cums=swap_cums or None,
                      end_at=_end_epoch(end_heads) if heads is not None else None,
-                     lost_contact=lost_contact))
+                     lost_contact=lost_contact, seen_by_head=seen_by_head or None))
 
     # D1: one read of the heads right before the apply, to say which spool changed
     # since the print ended. It never changes what is charged.
@@ -3774,7 +3850,10 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
                                         **dict(card, **_given(sets=sets or None,
                                                               swap_left_at=_swap_left_at(swap_log) or None,
                                                               end_at_s=_end_epoch(end_heads),
-                                                              lost_contact=lost_contact)))
+                                                              lost_contact=lost_contact,
+                                                              # Fix review 5 (RZ1 / RZ3).
+                                                              seen_by_head=seen_by_head or None,
+                                                              swap_left_unseen=_swap_left_unseen(swap_log) or None)))
     if spools_updated == 0 and not failed and not weighed:
         # Footer had usage but NO spool is bound at the active toolhead(s). Don't
         # burn a terminal grams=0 ledger entry (it permanently blocks recovery —
@@ -3807,7 +3886,8 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
             # so a held head's grams are counted, and go on the card.
             known_positions=known,
             fb_url=fb_url, active_locs=active_locs,
-            failed=failed, read_heads=True, **dict(card, **_given(held=weighed or None, lost_contact=lost_contact)))
+            failed=failed, read_heads=True, **dict(card, **_given(held=weighed or None, lost_contact=lost_contact,
+                                                                  seen_by_head=seen_by_head or None)))
     except Exception as e:
         raise CompletionMayHaveCharged(
             f"{e} (raised after the spools were charged, before the job was recorded)") from e
@@ -4104,7 +4184,8 @@ def _carry_uncharged(record, unresolved, printer_name, fb_url, active_locs=None,
 def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_url,
                                changed_positions, active_locs=None, swap_log=None,
                                start_spools=None, heads=None, heads_source=None,
-                               heads_read_at=None, swap_cums=None, end_at=None, lost_contact=None):
+                               heads_read_at=None, swap_cums=None, end_at=None, lost_contact=None,
+                               seen_by_head=None):
     """22.3 minimum-viable: a COMPLETED print where a used toolhead's mapped spool
     CHANGED mid-print is NOT auto-applied (the full footer would dump the whole
     tool's usage on the replacement spool, zeroing the run-out spool). Stash a
@@ -4314,8 +4395,10 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 phrases=card["phrases"],
                 **_given(heads_read_at=heads_read_at, sets=card["sets"] or None,
                          swap_left_at=_swap_left_at(swap_log) or None, end_at_s=end_at,
-                         # Group 65 fix review 4 (RY1): a finish seen only after lost contact.
-                         lost_contact=lost_contact))
+                         # Group 65 fix review 4 (RY1): a finish seen only after lost contact,
+                         # and (fix review 5, RZ1 / RZ3) what its Apply holds by.
+                         lost_contact=lost_contact, seen_by_head=seen_by_head or None,
+                         swap_left_unseen=_swap_left_unseen(swap_log) or None))
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
                                         usage_map=usage_map, no_spool=True,
                                         **_given(notes={str(p): _mmu_shared_note(h) for p, h in mmu.items()} or None,
@@ -4358,10 +4441,14 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
     # Group 64 full review: what the Apply checks Decision 1 against again.
     if left_at:
         record["swap_left_at"] = left_at
+    if _swap_left_unseen(swap_log):
+        record["swap_left_unseen"] = _swap_left_unseen(swap_log)     # Group 65 fix review 5 (RZ3)
     if end_at is not None and heads is not None:
         record["end_at_s"] = end_at
     if lost_contact:
         record["lost_contact"] = lost_contact      # Group 65 fix review 3 (RX2)
+        if seen_by_head:
+            record["seen_by_head"] = seen_by_head  # Group 65 fix review 5 (RZ1)
     if heads is not None:
         # D1: one read of the heads right before the stash; a row whose head holds
         # another spool now keeps its print-end spool and says so.
@@ -4566,7 +4653,7 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                              notes=None, phrases=None, sets=None, swap_left_at=None, end_at_s=None,
                              mmu_shared=None, lost_contact=None, figures=None,
                              start_spools=None, swap_log=None, end_at_source=None, end_back_at_s=None,
-                             path_g=None):
+                             path_g=None, seen_by_head=None, swap_left_unseen=None):
     """Stash a persistent, RECOVERABLE review for a print whose usage couldn't be
     finalized — INSTEAD of writing a destructive terminal grams=0 ledger entry that
     would permanently block recovery (the 2026-06-13 silent-loss bug). Two kinds:
@@ -4685,6 +4772,8 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
             record["unresolved_sets"] = in_sets
         if swap_left_at:
             record["swap_left_at"] = swap_left_at
+        if swap_left_unseen:
+            record["swap_left_unseen"] = swap_left_unseen     # Group 65 fix review 5 (RZ3)
         if end_at_s is not None:
             record["end_at_s"] = end_at_s
     elif no_spool:
@@ -4719,6 +4808,8 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
         # Group 65.1 (1): FCC lost sight of the print before it ended; the card says so.
         record["lost_contact"] = lost_contact
         msg = f"{msg} {_lost_contact_sentence(lost_contact)}".rstrip()
+        if seen_by_head:
+            record["seen_by_head"] = seen_by_head     # Group 65 fix review 5 (RZ1)
     cancel_review_store.add_pending(record)
     state.add_log_entry(msg, "WARNING", "ffaa00",
                         meta={"type": "cancel_deduct_pending",
@@ -5374,7 +5465,9 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
                                         phrases=phrases, **_given(heads_read_at=read_at, sets=sets or None,
                                                                   swap_left_at=_swap_left_at(swap_log) or None,
                                                                   end_at_s=end_at, lost_contact=lost_contact,
-                                                                  figures=figures),
+                                                                  figures=figures,
+                                                                  # Group 65 fix review 5 (RZ3).
+                                                                  swap_left_unseen=_swap_left_unseen(swap_log) or None),
                                         **_rework_facts(figures, start_spools, swap_log, printer_name))
     # Re-check after the (slow) gcode download+parse — if the job was processed
     # in the meantime, don't stash a stale pending.
@@ -5404,6 +5497,8 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
     # Group 64 full review: what the Apply checks Decision 1 against again.
     if left_at:
         record["swap_left_at"] = left_at
+    if _swap_left_unseen(swap_log):
+        record["swap_left_unseen"] = _swap_left_unseen(swap_log)     # Group 65 fix review 5 (RZ3)
     if end_at is not None:
         record["end_at_s"] = end_at
     if source != "late":
@@ -7197,8 +7292,10 @@ def api_cancel_deduct_confirm():
                     picked=True,
                     **_given(heads_source=rec.get("heads_source"),
                              heads_read_at=rec.get("heads_read_at"),
-                             # Group 65 fix review 4 (RY1): the card's lost contact, kept.
-                             lost_contact=rec.get("lost_contact") or None))
+                             # Group 65 fix review 4 (RY1): the card's lost contact, kept,
+                             # and (fix review 5, RZ1) what FCC saw each head print by then.
+                             lost_contact=rec.get("lost_contact") or None,
+                             seen_by_head=rec.get("seen_by_head") or None))
             except Exception as e:
                 state.add_log_entry(
                     f"❌ {printer}: couldn't open a review card for the grams the picked spools "
