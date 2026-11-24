@@ -1189,7 +1189,8 @@ const badge = document.createElement('span');
 badge.id = 'cancel-review-badge'; badge.style.display = 'none'; badge.setAttribute('title', 'Reviews waiting');
 document.body.appendChild(badge);
 const look = () => ({ text: badge.textContent, shown: badge.style.display !== 'none',
-                      read: badge.dataset.read || null, title: badge.getAttribute('title') });
+                      read: badge.dataset.read || null, title: badge.getAttribute('title'),
+                      mark: badge.querySelectorAll('.fcc-cr-stale-mark').length });
 await window.refreshCancelReviewBadge(); await settle(20);
 const good = look();
 mode = '500';
@@ -1211,8 +1212,12 @@ def test_a_review_list_fcc_couldnt_read_is_never_no_reviews(tmp_path):
     recs = [_base(j, "partial", total_grams=3.6, spools=[_row(300, 3.6, toolhead="HEAD-2", position=1)],
                   heads_at_end=[{"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}]) for j in ("1", "2")]
     res = run(tmp_path, FAILED_READ_JS, {"pending": recs})
-    assert res["good"] == {"text": "🛑 2 reviews", "shown": True, "read": None, "title": "Reviews waiting"}, res
-    assert res["failed"]["text"] == "🛑 2 reviews" and res["failed"]["shown"] is True, res
+    assert res["good"] == {"text": "🛑 2 reviews", "shown": True, "read": None, "title": "Reviews waiting",
+                           "mark": 0}, res
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-23, the walk's sample (d)): the count keeps its
+    # number with a "?" after it (and, in global.css, a dashed edge), the tooltip says why.
+    assert res["failed"]["text"] == "🛑 2 reviews?" and res["failed"]["shown"] is True, res
+    assert res["failed"]["mark"] == 1, res
     assert res["failed"]["read"] == "failed" and "couldn't read the review list just now" in res["failed"]["title"], res
     assert res["opened"] is False, res
     assert res["toasts"] == [["warning", "FCC couldn't read the review list just now, so it can't be shown. "
