@@ -531,16 +531,19 @@
     const _stateMeta = (state, reach) => {
         if (state === undefined) return null;
         if (state === null) {
-            const why = reach === 'prusalink'
-                ? 'On the network, but PrusaLink isn’t answering: restarting the printer brings it back, but wait until its print is done'
-                : reach === 'none'
-                    ? 'Doesn’t answer at all (off, or off the network)'
-                    : 'Printer unreachable (offline, networked elsewhere, or cold-rebooting)';
+            // Group 65 review (RW2): PrusaLink answering with an error is said as that.
+            const said = {
+                prusalink: 'On the network, but PrusaLink isn’t answering: restarting the printer brings it back, but wait until its print is done',
+                none: 'Doesn’t answer at all (off, or off the network)',
+                login: 'PrusaLink answers, but turns FCC’s API key away: check the key in Settings, 🔌 Printer Connections',
+                error: 'PrusaLink answers, but with an error',
+            };
+            const why = said[reach] || 'Printer unreachable (offline, networked elsewhere, or cold-rebooting)';
             return {
                 cls: 'fcc-ps-state-offline',
                 label: 'OFFLINE',
                 title: why,
-                aria: reach === 'prusalink' || reach === 'none' ? `OFFLINE: ${why}` : '',
+                aria: said[reach] ? `OFFLINE: ${why}` : '',
             };
         }
         const raw = String(state.state || '').toUpperCase();

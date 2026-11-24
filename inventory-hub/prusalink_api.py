@@ -1,4 +1,5 @@
 import requests
+import errno
 import os
 import re
 import socket
@@ -795,15 +796,26 @@ def _icmp_socket(kind):
     return socket.socket(socket.AF_INET, kind, socket.IPPROTO_ICMP)
 
 
+_UNREACHABLE = {getattr(errno, n) for n in ("EHOSTUNREACH", "ENETUNREACH", "EHOSTDOWN") if hasattr(errno, n)}
+
+
 def icmp_echo(host, timeout=1.0):
     """Group 65.1 (3): one ICMP echo to `host` (an IP, a port after ':' ignored), the
     standard library only (the image has no `ping` program). True when it answers
     within `timeout`, False when it doesn't (or the network can't reach it), None when
     FCC can't send one: neither the unprivileged datagram socket (which works when the
     container's net.ipv4.ping_group_range covers its group, Docker's default since
-    20.10) nor a raw one (which needs NET_RAW) opens. Never raises."""
-    ip = str(host or "").strip().split(":")[0]
-    if not ip:
+    20.10) nor a raw one (which needs NET_RAW) opens. A host name is resolved once and
+    a reply counts only from that address (Group 65 review, RW3: a reply never matched a
+    name, and a printer that answers was called off); a name FCC can't resolve, an
+    address that isn't IPv4, and a send the system refuses for a reason that isn't the
+    network's are None too (WD12: FCC never pinged it). Never raises."""
+    raw = str(host or "").strip()
+    if not raw or raw.startswith("[") or raw.count(":") > 1:
+        return None          # none, or an IPv6 address: this echo is IPv4 only
+    try:
+        ip = socket.gethostbyname(raw.split(":")[0])
+    except (OSError, UnicodeError):
         return None
     ident = os.getpid() & 0xFFFF
     payload = b"fcc-reach"
@@ -819,8 +831,9 @@ def icmp_echo(host, timeout=1.0):
             sock.settimeout(float(timeout))
             try:
                 sock.sendto(packet, (ip, 0))
-            except OSError:
-                return False          # no route to it: it doesn't answer
+            except OSError as e:
+                # Only the network saying it can't reach the printer means it doesn't answer.
+                return False if getattr(e, "errno", None) in _UNREACHABLE else None
             while True:
                 left = deadline - time.monotonic()
                 if left <= 0:

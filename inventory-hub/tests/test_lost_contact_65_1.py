@@ -122,9 +122,14 @@ def test_the_stamps_ride_the_latch_file(clock):
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.parametrize("end,kind", [("IDLE", "ambiguous"), ("READY", "ambiguous"), ("STOPPED", "cancel")])
-def test_an_end_seen_after_lost_contact_carries_it_and_reads_the_heads_as_back(clock, dispatched, end, kind):
+def test_an_end_seen_after_lost_contact_carries_it_and_reads_the_heads_as_back(monkeypatch, clock, dispatched,
+                                                                              end, kind):
     _latch()
     _miss(3, clock)
+    # Group 65 review (RW7): a STOPPED after lost contact is the latched print's only when
+    # a job read names it (test_print_watch_65_r1.py has the other answers).
+    monkeypatch.setattr(prusalink_api, "get_printer_job",
+                        lambda fb, name: {"job_id": 7, "filename": "part.bgcode", "progress": 0.3})
     clock["t"] = 10480.0
     print_monitor._track_print_edge("XL", {"state": end}, "fb")
     ((got, _a, k),) = dispatched

@@ -2985,7 +2985,7 @@ def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charge
             if unseen:
                 fates.append(f"would charge {_esc(_and_list(unseen))} nothing")
             state.add_log_entry(
-                f"⚠️ {printer_name}: FCC's G-code walk of '{_esc(filename)}' came to {figures}. This "
+                f"⚠️ {_esc(printer_name)}: FCC's G-code walk of '{_esc(filename)}' came to {figures}. This "
                 f"finished print was charged the slicer's figures, so its charge stands, but FCC reads "
                 f"this file differently from the slicer: a cancelled print like it "
                 f"{' and '.join(fates)}.", "WARNING", "ffaa00")
@@ -2995,7 +2995,7 @@ def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charge
                     f"{_PARSE_GAP_PCT:.0f}% means FCC may be misreading this file."
                     if charged else "Nothing was charged from this file: FCC can't read its moves.")
             state.add_log_entry(
-                f"⚠️ {printer_name} {head}: FCC's G-code walk of '{_esc(filename)}' came to "
+                f"⚠️ {_esc(printer_name)} {_esc(head)}: FCC's G-code walk of '{_esc(filename)}' came to "
                 f"{got:.2f}g for this head against the slicer's {want:.2f}g ({gap:+.1f}%). {then}",
                 "WARNING", "ffaa00")
     except Exception as e:

@@ -515,10 +515,12 @@ def test_a_cancel_given_up_after_the_retry_window_still_records_and_warns(logs):
 # 56.4 — filenames are escaped in every deduct / monitor log line              #
 # --------------------------------------------------------------------------- #
 
-_ESCAPES = {"_esc", "print_deduct._esc", "html.escape"}
+_ESCAPES = {"_esc", "print_deduct._esc", "html.escape", "_state_said"}
 # Outside text besides a filename: an exception, Spoolman's error body and the
-# review's refusal reasons built from them (56.4 and its reviews).
-_FREE_TEXT_NAMES = {"e", "err", "exc", "why"}
+# review's refusal reasons built from them (56.4 and its reviews), and a printer's
+# state as the probe read it (Group 65 review, PR2: `cur`, `last`; print_monitor's
+# _state_said is FCC's words or the state escaped).
+_FREE_TEXT_NAMES = {"e", "err", "exc", "why", "cur", "last"}
 
 
 def _is_escape(node):

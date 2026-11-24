@@ -130,14 +130,18 @@ def test_back_mid_print_says_the_gap_and_the_progress_its_job_read_saw(monkeypat
 
 @pytest.mark.parametrize("back,fate", [
     ("IDLE", "ended while FCC couldn't see it; 🛑 Review will ask about it."),
-    ("FINISHED", "finished while FCC couldn't see it."),
-    ("STOPPED", "stopped while FCC couldn't see it."),
+    # Group 65 review (WD3 / WD10): a finished, stopped or busy screen may be another
+    # print's, or no end at all: only what FCC last saw.
+    ("FINISHED", "when FCC last saw it, it was printing '{f}' (~30%)."),
+    ("STOPPED", "when FCC last saw it, it was printing '{f}' (~30%)."),
+    ("BUSY", "when FCC last saw it, it was printing '{f}' (~30%)."),
 ])
 def test_a_print_that_ended_unseen_is_named_before_its_edges_line(monkeypatch, logs, clock, back, fate):
     _tick(monkeypatch, logs, _p("PRINTING"), None, None, None)
     clock["t"] += 600
     _tick(monkeypatch, logs, _p(back))
-    assert logs[1:] == [(f"📡 XL is back after 10 min ({back}): the print FCC last saw at ~30% {fate}", "INFO"),
+    lead = "the print FCC last saw at ~30% " if back == "IDLE" else ""
+    assert logs[1:] == [(f"📡 XL is back after 10 min ({back}): {lead}{fate.format(f=NASTY_ESC)}", "INFO"),
                         (f"EDGE {back}", "INFO")]
 
 

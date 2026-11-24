@@ -20,6 +20,7 @@ TrueNAS fact. Red on 08d3c2f9 (no icmp_echo, no verdict, no `reach`).
 """
 from __future__ import annotations
 
+import errno
 import socket
 import struct
 from unittest.mock import patch
@@ -89,7 +90,7 @@ def _sockets(dgram=None, raw=None):
     (None, FakeSock([(_reply(ip_header=True), ("10.0.0.9", 0))]), True),
     (None, None, None),
     (FakeSock([socket.timeout("timed out")]), None, False),
-    (FakeSock(send_error=OSError(113, "No route to host")), None, False),
+    (FakeSock(send_error=OSError(errno.EHOSTUNREACH, "No route to host")), None, False),
     (FakeSock([(_reply(), ("10.0.0.7", 0))]), None, False),                      # someone else's reply
     (None, FakeSock([(_reply(ip_header=True, kind=8), ("10.0.0.9", 0)),           # its own request seen raw
                      (_reply(ip_header=True), ("10.0.0.9", 0))]), True),

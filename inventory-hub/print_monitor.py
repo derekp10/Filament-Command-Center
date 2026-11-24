@@ -906,11 +906,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                         float(entry.get('pause_progress', 0.0)))
                     swap_runout = bool(entry.get('saw_attention'))
             # Group 65.1 (1): FCC sees the print: any lost contact is over (a job change
-            # took the outgoing job's facts above, before they went).
-            entry.pop('misses', None)
-            entry.pop('lost_at', None)
-            if entry.get('filename'):
-                entry['seen_at'] = time.time()
+            # took the outgoing job's facts above, before they went), once a job read
+            # names the latched print (Group 65 review, OR6: a tick whose job read failed
+            # ended the stretch, and a job change found a tick later had no lost contact
+            # to say).
+            if _confirms_latch(entry, job):
+                _end_lost_stretch(entry)
         # 22.3 (off-lock, like get_printer_job): capture the start-spool snapshot for
         # mid-print swap detection. Taken whatever `fcc_owns_completion_deduct` says
         # (Group 64.3 (2)): since the hotfix of 2026-11-11 the cancel and ambiguous
@@ -1044,13 +1045,27 @@ def _track_print_edge(printer_name, state_info, fb_url):
     # event then cuts at the TRUE runout point instead of the stale pre-runout PRINTING
     # high-water (the ~3 g lag measured 2026-07-02).
     pause_progress = None
+    pause_job = None
     if cur == 'ATTENTION':
         try:
             _pj = prusalink_api.get_printer_job(fb_url, printer_name)
+            pause_job = _pj
             if _pj and isinstance(_pj.get('progress'), (int, float)):
                 pause_progress = float(_pj['progress'])
         except Exception:
             pause_progress = None
+    # Group 65 review (RW7): an end FCC sees only after it lost sight of the latched print
+    # may be another print's (FCC can't see a job change while it can't see the printer):
+    # which job this end is is read off the lock, before the edge is decided.
+    end_job = None
+    if cur in _CANCEL_TERMINAL_STATES or cur in _COMPLETE_TERMINAL_STATES:
+        latch = _latched(printer_name)
+        if latch and _lost_contact_from(latch, cur):
+            try:
+                end_job = prusalink_api.get_printer_job(fb_url, printer_name) or {}
+            except Exception:
+                end_job = {}
+    other_end = None
     with _PRINT_TRACKER_LOCK:
         entry = _PRINT_TRACKER.get(printer_name)
         prev = entry.get('state') if entry else None
@@ -1102,6 +1117,13 @@ def _track_print_edge(printer_name, state_info, fb_url):
             edge_kind = 'ambiguous'
         else:
             edge_kind = None
+        if (edge_kind in ('cancel', 'complete') and end_job is not None and entry
+                and entry.get('filename') and not _confirms_latch(entry, end_job)):
+            # Group 65 review (RW7): not the latched print's end, or FCC can't tell which
+            # print this is: the latched print ended unseen, so it goes to the ❓ review
+            # (never charged as this end), and the end is said below.
+            other_end = end_job
+            edge_kind = 'ambiguous'
         if edge_kind and entry and entry.get('filename'):
             fire = {
                 'kind': edge_kind,
@@ -1148,11 +1170,10 @@ def _track_print_edge(printer_name, state_info, fb_url):
             if entry is not None:
                 entry['state'] = cur
                 # Group 65.1 (1): FCC sees the printer: its print is seen, any lost
-                # contact is over (an end after it would have fired above).
-                entry.pop('misses', None)
-                entry.pop('lost_at', None)
-                if entry.get('filename'):
-                    entry['seen_at'] = time.time()
+                # contact over (an end after it would have fired above), once a job read
+                # names the latched print (an ATTENTION park's own; Group 65 review, OR6).
+                if not entry.get('filename') or _confirms_latch(entry, pause_job):
+                    _end_lost_stretch(entry)
                 # 22.3(b): during an ATTENTION runout park of a latched job, record the
                 # frozen pause progress + that an ATTENTION was seen (so a swap on the
                 # resume is treated as a RUNOUT). Keep the MAX across re-polls.
@@ -1206,6 +1227,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
             f"🛑 Cancel detected on {printer_name}, but no active job was latched "
             f"(print too short to sample between heartbeats) — no partial deduct.",
             "INFO")
+    if fire and other_end is not None:
+        _say_other_end(printer_name, fire, other_end, cur)
     if fire:
         if fire['kind'] == 'complete':
             _dispatch_completion_edge(
@@ -1217,7 +1240,11 @@ def _track_print_edge(printer_name, state_info, fb_url):
             # read when the print ended against its start snapshot and swap log.
             snapshot = _edge_kwargs(print_deduct._validated_start_spools(fire, fire['job_id']),
                                     print_deduct._validated_swap_log(fire, fire['job_id']))
-            if fire.get('park_heads'):
+            if fire.get('park_heads') and not fire.get('lost_contact'):
+                # Group 65 review (OR5): across a stretch FCC couldn't see the printer, it
+                # can't tell whether the print resumed from the park (with that spool or
+                # another), so the heads are read when FCC saw the printer again, and
+                # Decision 1 compares them with the start snapshot.
                 snapshot["park_heads"] = fire['park_heads']
             if fire.get('lost_contact'):
                 # Group 65.1 (1): the heads are read when FCC saw the printer again.
@@ -1404,8 +1431,14 @@ def _reach_verdict(name):
     with no ping; otherwise one ICMP echo with a 1 s limit (prusalink_api.icmp_echo).
     Never raises."""
     try:
-        if prusalink_api.last_probe_failure(name) == "refused":
+        why = prusalink_api.last_probe_failure(name)
+        if why == "refused":
             return "prusalink"
+        if isinstance(why, str) and why.startswith("http "):
+            # Group 65 review (RW2): PrusaLink answered, with an error. No ping, and words
+            # of their own: a key the printer no longer takes is no stuck PrusaLink, and a
+            # restart wouldn't change it.
+            return "login" if why in ("http 401", "http 403") else "error"
         creds = prusalink_api.fetch_printer_credentials(None, name) or {}
         echo = prusalink_api.icmp_echo(creds.get("ip_address"), timeout=1.0)
         return None if echo is None else ("prusalink" if echo else "none")
@@ -1415,13 +1448,20 @@ def _reach_verdict(name):
 
 def _reach_words(name, verdict, printing):
     """The verdict in words ('' when FCC can't tell): it never says a printer is off
-    unless the printer didn't answer a ping."""
+    unless the printer didn't answer a ping, and never that PrusaLink is stuck when it
+    answered with an error ("login", "error"; Group 65 review, RW2)."""
     shown = print_deduct._esc(name)
     if verdict == "prusalink":
         return (f"{shown} is on the network, but PrusaLink isn't answering. Restarting the printer brings "
                 f"it back" + (", but a restart ends a print: wait until its print is done." if printing else "."))
     if verdict == "none":
         return f"{shown} doesn't answer at all (off, or off the network)."
+    if verdict in ("login", "error"):
+        code = print_deduct._esc(str(prusalink_api.last_probe_failure(name) or "").replace("http ", "HTTP "))
+        if verdict == "login":
+            return (f"{shown}'s PrusaLink answers, but turns FCC's API key away ({code}): check the key in "
+                    f"Settings, 🔌 Printer Connections.")
+        return f"{shown}'s PrusaLink answers, but with an error ({code})."
     return ""
 
 
@@ -1450,7 +1490,55 @@ def _lost_contact_from(entry, cur):
     return {"progress": print_deduct._reached_at_least(entry.get('progress', 0.0) or 0.0,
                                                       entry.get('swap_log'), entry.get('pause_progress')),
             "seen_at": entry.get('seen_at'), "lost_at": entry.get('lost_at'),
-            "back_at": time.time(), "back_state": cur, "why": "lost"}
+            "back_at": time.time(), "back_state": cur, "why": entry.get('lost_why') or "lost"}
+
+
+def _confirms_latch(entry, job):
+    """Whether a job read names the latched print (Group 65 review, OR6 / RW7): its job
+    id, or with no id on either side its file. A failed read names nothing."""
+    if not isinstance(job, dict) or not job:
+        return False
+    blank = (None, '', '0', 0)
+    jid, latched = job.get('job_id'), entry.get('job_id')
+    if jid not in blank or latched not in blank:
+        return jid not in blank and str(jid) == str(latched)
+    return bool(job.get('filename')) and str(job.get('filename')) == str(entry.get('filename'))
+
+
+def _end_lost_stretch(entry):
+    """FCC sees the latched print again: its lost-contact facts go, and a park read taken
+    before a lost stretch is dropped (Group 65 review, OR5: across the stretch FCC can't
+    tell whether the print resumed, with that spool or another, and parked again; the
+    end then reads the heads, and Decision 1 asks about a changed one)."""
+    if int(entry.get('misses') or 0) >= _LOST_AFTER_MISSES:
+        entry.pop('park_heads', None)
+    entry.pop('misses', None)
+    entry.pop('lost_at', None)
+    entry.pop('lost_why', None)
+    if entry.get('filename'):
+        entry['seen_at'] = time.time()
+
+
+def _say_other_end(name, fire, job, cur):
+    """Group 65 review (RW7): an end FCC saw after it lost sight of the printer that
+    isn't the latched print's, or that FCC can't tie to it, in words. The latched print
+    goes to 🛑 Review either way."""
+    shown = print_deduct._esc(name)
+    was = (f"'{print_deduct._esc(fire.get('filename'))}'"
+           + (f" (job {print_deduct._esc(fire.get('job_id'))})" if fire.get('job_id') not in (None, '') else ""))
+    ended = "finished" if cur in _COMPLETE_TERMINAL_STATES else "stopped"
+    jid = (job or {}).get('job_id')
+    if jid not in (None, '', '0', 0):
+        other = f"job {print_deduct._esc(jid)}" + (f" ('{print_deduct._esc(job.get('filename'))}')"
+                                                    if job.get('filename') else "")
+        state.add_log_entry(
+            f"📡 {shown}: the print that {ended} while FCC couldn't see the printer is {other}, not {was}, the "
+            f"one FCC last saw. FCC never saw {other} print, so it charged nothing for it (weigh its spools to "
+            f"true them up), and 🛑 Review asks about {was}.", "WARNING", "ffaa00")
+    else:
+        state.add_log_entry(
+            f"📡 {shown}: FCC couldn't read which print {ended} while it couldn't see the printer, so {was} goes "
+            f"to 🛑 Review instead of being charged as {ended}.", "WARNING", "ffaa00")
 
 
 def _restart_contact(entry, progress, cur):
@@ -1480,7 +1568,17 @@ def _doing_words(latch):
 
 
 _STATE_WORDS = {"IDLE": "idle", "READY": "ready", "OPERATIONAL": "idle", "FINISHED": "on its finished screen",
-                "STOPPED": "on its stopped screen", "ERROR": "showing an error", "BUSY": "busy"}
+                "STOPPED": "on its stopped screen", "ERROR": "showing an error", "BUSY": "busy",
+                # Group 65 review (WD2): a state with no print latched (a prompt from its menu).
+                "ATTENTION": "waiting at a prompt", "PRINTING": "printing", "PAUSED": "paused",
+                "PAUSING": "pausing", "RESUMING": "resuming"}
+
+
+def _state_said(state_word):
+    """A printer's state as a log line says it: FCC's own words, else the state itself,
+    lower-cased and escaped (Group 65 review, PR2: a state is the printer's text, and the
+    Activity Log draws its lines as HTML)."""
+    return _STATE_WORDS.get(state_word) or print_deduct._esc(str(state_word or 'idle').lower())
 
 
 def _note_contact(name, state_info):
@@ -1534,8 +1632,7 @@ def _note_contact(name, state_info):
             state.add_log_entry(f"📡 Lost contact with {shown}: {_doing_words(latch)} when FCC last "
                                 f"saw it.{' ' + words if words else ''}", "WARNING", "ffaa00")
         else:
-            state.add_log_entry(f"📡 Lost contact with {shown} (it was "
-                                f"{_STATE_WORDS.get(last, str(last or 'idle').lower())})."
+            state.add_log_entry(f"📡 Lost contact with {shown} (it was {_state_said(last)})."
                                 f"{' ' + words if words else ''}", "INFO", "6cb2eb")
         return None
     gap = _how_long(now - since) if since else None
@@ -1544,13 +1641,14 @@ def _note_contact(name, state_info):
     after = f" after {gap}" if gap else ""
     latch = _latched(name)
     if latch:
-        seen = f"the print FCC last saw at ~{_latch_pct(latch):.0f}%"
-        if cur in _COMPLETE_TERMINAL_STATES:
-            fate = f"{seen} finished while FCC couldn't see it."
-        elif cur in _CANCEL_TERMINAL_STATES:
-            fate = f"{seen} stopped while FCC couldn't see it."
+        if cur in _IDLE_READY_STATES:
+            fate = (f"the print FCC last saw at ~{_latch_pct(latch):.0f}% ended while FCC couldn't see it; "
+                    f"🛑 Review will ask about it.")
         else:
-            fate = f"{seen} ended while FCC couldn't see it; 🛑 Review will ask about it."
+            # Group 65 review (WD3 / WD10): a finished or stopped screen may be another
+            # print's, and a busy one no end at all: what FCC last saw, and nothing more
+            # (the edge that follows says what this end was).
+            fate = f"when FCC last saw it, {_doing_words(latch)}."
         state.add_log_entry(f"📡 {shown} is back{after} ({print_deduct._esc(cur)}): {fate}", "INFO", "6cb2eb")
     else:
         state.add_log_entry(f"📡 {shown} is back{after} ({print_deduct._esc(cur)}).", "INFO", "6cb2eb")
@@ -1571,9 +1669,19 @@ def _note_silent_at_restart(name, entry):
     it as lost, so its first answer is said as "back"."""
     if prusalink_api.last_probe_failure(name) == "no_ip":
         return
+    since = None
+    for key in ('lost_at', 'seen_at'):
+        # Group 65 review (OR4): the gap counts from when FCC lost sight of the print, as
+        # the review's own line does, never from FCC's restart.
+        try:
+            if entry.get(key) is not None:
+                since = float(entry[key])
+                break
+        except (TypeError, ValueError):
+            continue
     with _CONTACT_LOCK:
-        _CONTACT[name] = {"misses": _LOST_AFTER_MISSES, "since": time.time(), "said": True,
-                          "answered": True, "last": str(entry.get('state') or '').upper()}
+        _CONTACT[name] = {"misses": _LOST_AFTER_MISSES, "since": since if since is not None else time.time(),
+                          "said": True, "answered": True, "last": str(entry.get('state') or '').upper()}
     state.add_log_entry(f"📡 {print_deduct._esc(name)} hasn't answered since FCC restarted; "
                         f"{_doing_words(entry)} when FCC last saw it.", "WARNING", "ffaa00")
 
@@ -2051,8 +2159,16 @@ def _recover_one_print_latch(name, entry, fb_url):
     # edge-detection handle it when the printer is reachable again (mirrors the
     # in-tick "offline preserves the latch" rule).
     if cur is None:
+        restored = dict(entry)
+        if fb_url:
+            # Group 65 review (WD11): FCC lost sight of the print across its restart and
+            # the printer is still silent, so its latch is stamped as lost: the end FCC
+            # sees next says FCC last saw the print before it restarted.
+            restored['misses'] = max(int(restored.get('misses') or 0), _LOST_AFTER_MISSES)
+            restored.setdefault('lost_at', restored.get('seen_at') or time.time())
+            restored['lost_why'] = 'restart'
         with _PRINT_TRACKER_LOCK:
-            _PRINT_TRACKER[name] = dict(entry)
+            _PRINT_TRACKER[name] = restored
         if fb_url:
             try:
                 _note_silent_at_restart(name, entry)   # Group 65.1 (2): the probe ran, and failed
@@ -2106,7 +2222,8 @@ def _recover_one_print_latch(name, entry, fb_url):
         # status if it doesn't resume").
         state.add_log_entry(
             f"🛑 Recovering a cancel missed during an FCC restart on {name} "
-            f"('{print_deduct._esc(filename)}', ~{pct:.0f}%) — printer still {cur}.", "WARNING", "ffaa00")
+            f"('{print_deduct._esc(filename)}', ~{pct:.0f}%) — printer still {print_deduct._esc(cur)}.",
+            "WARNING", "ffaa00")
         # Hotfix 2026-11-11: the heads are read now ("restart": FCC was down, so FCC
         # itself moved nothing meanwhile) and checked against the persisted start
         # snapshot and swap log.
@@ -2153,7 +2270,7 @@ def _recover_one_print_latch(name, entry, fb_url):
         # double restart can't double-surface. NEVER auto-deducts.
         state.add_log_entry(
             f"❓ A print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress on {name} when FCC "
-            f"restarted and it's now {cur or 'idle'} — surfacing a review (couldn't "
+            f"restarted and it's now {print_deduct._esc(cur or 'idle')} — surfacing a review (couldn't "
             f"confirm completed vs cancelled).", "WARNING", "ffaa00")
         _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url,
                                  progress_unknown=not progress_sampled,
