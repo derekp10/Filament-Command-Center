@@ -356,6 +356,16 @@ body {
     border-style: dashed;
     background-clip: padding-box;
 }
+/* The 🛑 review count in the Live Activity header after a review list FCC couldn't
+   read (Group 64 fix review 4, UP7, keeps its last number): the counts' stale look
+   above, a dashed edge and a "?" (cancel_review.js's .fcc-cr-stale-mark), its tooltip
+   saying why (Derek, 2026-11-23, the walk's sample (d): "the ? alone just make it seem
+   more like a statement than denoting anything being wrong with it"). */
+#cancel-review-badge[data-read="failed"] {
+    border: 1px dashed currentColor;
+    border-radius: 4px;
+    padding: 0 5px;
+}
 @media (max-width: 991.98px) {
     .navbar {
         height: auto;

@@ -1566,10 +1566,25 @@
                 badge.dataset.read = 'failed';
                 badge.setAttribute('title', `${badge.dataset.titleWas} (FCC couldn't read the review list just now: `
                     + 'this count is from its last read)');
+                // Derek, 2026-11-23 (the walk's sample (d)): the title bar counts' stale
+                // look, a "?" after the count and a dashed edge (global.css), so the count
+                // reads as possibly wrong; the tooltip still says why.
+                if (!badge.querySelector('.fcc-cr-stale-mark')) {
+                    const q = document.createElement('span');
+                    q.className = 'fcc-cr-stale-mark';
+                    q.setAttribute('aria-hidden', 'true');
+                    q.textContent = '?';
+                    badge.appendChild(q);
+                }
             }
             return;
         }
-        if (badge) { delete badge.dataset.read; badge.setAttribute('title', badge.dataset.titleWas); }
+        if (badge) {
+            delete badge.dataset.read;
+            badge.setAttribute('title', badge.dataset.titleWas);
+            const q = badge.querySelector('.fcc-cr-stale-mark');
+            if (q) q.remove();
+        }
         applyBadges(pending);
     }
 
