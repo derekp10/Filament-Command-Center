@@ -1225,6 +1225,39 @@
     function hasFigures(rec) {
         return !!(rec && rec.figures && typeof rec.figures === 'object' && rec.figures.footer);
     }
+    // Group 65 review (PI5): the pending list says when a card can't be worked out again
+    // (an earlier Apply charged part of it, or a write of it may have landed), by the
+    // recompute's own rule: such a card offers no controls and its words don't invite them.
+    function canRework(rec) {
+        return hasFigures(rec) && !rec.rework_refused;
+    }
+    // Group 65 review (CM5): each line's spool pick that moved off what the card drew (the
+    // #ID box's text with it), to put back once the card is worked out again and drawn
+    // anew: a redirect made a moment before was silently undone, and Confirm charged the
+    // row's own spool for the whole print.
+    function keptPicks(card) {
+        return Array.from(card.querySelectorAll('.fcc-cr-pick')).map((sel) => {
+            const drawn = Array.from(sel.options).find((o) => o.defaultSelected) || sel.options[0];
+            const line = String(sel.dataset.line);
+            const other = card.querySelector(`.fcc-cr-other[data-line="${CSS.escape(line)}"]`);
+            return { line, value: sel.value, other: other ? other.value : '',
+                     moved: !drawn || sel.value !== drawn.value };
+        }).filter((p) => p.moved);
+    }
+    // Put `picks` back on the card drawn again (a line it still has, with that choice),
+    // through the picker's own change handler; returns the lines it couldn't.
+    function putPicksBack(card, picks) {
+        const lost = [];
+        picks.forEach((p) => {
+            const sel = card.querySelector(`.fcc-cr-pick[data-line="${CSS.escape(p.line)}"]`);
+            if (!sel || !Array.from(sel.options).some((o) => o.value === p.value)) { lost.push(p.line); return; }
+            const other = card.querySelector(`.fcc-cr-other[data-line="${CSS.escape(p.line)}"]`);
+            if (p.value === 'other' && other) other.value = p.other;
+            sel.value = p.value;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        return lost;
+    }
     function basisPct(rec) {
         if (rec.basis === 'whole') return 100;
         if (typeof rec.basis === 'number') return rec.basis;
@@ -1245,7 +1278,7 @@
         return `at the last progress FCC saw (~${seen}%)`;
     }
     function basisHtml(rec, offerWhole) {
-        if (!hasFigures(rec)) return '';
+        if (!canRework(rec)) return '';
         const id = `fcc-cr-pct-${String(rec.printer_name)}-${String(rec.job_id)}`.replace(/[^A-Za-z0-9_-]/g, '-');
         const said = rec.basis === 'whole' ? 'Worked out for the whole print.'
             : (typeof rec.basis === 'number' ? `Worked out at ${fmt(rec.basis)}%.` : '');
@@ -1267,8 +1300,10 @@
             </div>`;
     }
 
-    function unmeasuredBanner(rec) {
-        const weigh = `<b>Weigh the spool</b> and adjust it directly, or <b>Discard</b> this review.`;
+    // Group 65 review (OR1): once its file gave the card figures, it no longer says to weigh
+    // the spool and adjust it directly, beside a button that charges the print.
+    function unmeasuredBanner(rec, withFigures) {
+        const weigh = withFigures ? '' : `<b>Weigh the spool</b> and adjust it directly, or <b>Discard</b> this review.`;
         switch (rec.unmeasured_reason) {
             case 'no_footer':
                 return `FCC couldn't measure how much filament this print used — <b>its file's
@@ -1341,13 +1376,16 @@
                ${rec.basis === 'whole' ? '<b>for the whole print</b>' : `at <b>${fmt(rec.basis)}%</b>`}:
                <b>${total}g</b>. FCC didn't read the heads when it ended, so ${ask.charAt(0) === '<'
                 ? ask.replace('<b>Pick', '<b>pick').replace('<b>Type', '<b>type') : ask}, then <b>Apply</b>.
-               You can work it out again above. Or <b>Discard</b> if you've already trued it up.`
-            : !isNoSpool && hasFigures(rec)
-            ? `${unmeasuredBanner(rec)} ${hasPercents(rec)
+               ${canRework(rec) ? 'You can work it out again with the buttons below. ' : ''}Or <b>Discard</b>
+               if you've already trued it up.`
+            : !isNoSpool && canRework(rec)
+            ? `${unmeasuredBanner(rec, true)} ${hasPercents(rec)
                 ? `FCC read the print's file afterwards: press <b>Charge the whole print</b> if it finished, or
                    type how far it got and press <b>Work it out</b>, then pick the spool each head used.`
                 : `FCC can't read this file's moves, but its slicer total is known: press <b>Charge the whole
-                   print</b> if it finished, then pick the spool each head used.`}`
+                   print</b> if it finished, then pick the spool each head used.`} A spool FCC weighed since the
+                   print ended is held at 0 g, the scale having counted it. Or <b>Discard</b> if you've already
+                   trued it up.`
             : isNoSpool && noted
             ? `FCC computed this print used <b>${total}g</b>, but isn't sure which spool it came from
                on the heads below. ${ask}, then <b>Apply</b>. Or
@@ -1468,7 +1506,7 @@
             header = ambiguous
                 ? `❓ ${esc(rec.printer_name)} — ${worked || `ended at ~${pct}%`} (couldn't confirm: completed or cancelled?)`
                 : `🛑 ${esc(rec.printer_name)} — ${worked || `cancelled at ~${pct}%`}`;
-            banner = ambiguous && hasFigures(rec)
+            banner = ambiguous && canRework(rec)
                 ? `❓ FCC couldn't tell whether this print <b>finished</b> or was <b>cancelled</b> — it
                    reached idle without a clear cancel/finish signal. The grams below are worked out
                    ${esc(basisWords(rec))}. If it finished, press <b>Charge the whole print</b>; if you saw
@@ -1836,8 +1874,11 @@
                 payload.percent = n;
             }
             card.dataset.recomputing = '1';
-            const btns = Array.from(card.querySelectorAll('.fcc-cr-whole, .fcc-cr-workout, .fcc-cr-confirm'));
+            // Group 65 review (OR2): Discard waits too, so it can't land between the server's
+            // work and the redraw.
+            const btns = Array.from(card.querySelectorAll('.fcc-cr-whole, .fcc-cr-workout, .fcc-cr-confirm, .fcc-cr-discard'));
             btns.forEach((b) => { b.disabled = true; });
+            const picks = keptPicks(card);
             let d = null;
             try {
                 const r = await fetch('/api/cancel_deduct/recompute', {
@@ -1846,6 +1887,10 @@
             } catch (_) { d = null; }
             delete card.dataset.recomputing;
             if (d && d.status === 'already_handled') {
+                // Group 65 review (PI1): the card goes from under the pointer (and the panel
+                // with it, when it was the only card): a double click's second press reaches
+                // nothing, as every other branch that takes a card away does.
+                if (typeof window.fccShieldNextPress === 'function') window.fccShieldNextPress();
                 await rerenderCard(card);
                 toast('That card was already settled: nothing more to work out on it.', 'info');
                 if (body.querySelector('.fcc-cr-card')) sayOnPanel('That card was already settled: nothing more to work out on it.');
@@ -1854,11 +1899,23 @@
             if (d && (d.status === 'recomputed' || d.stale)) {
                 const fresh = await rerenderCard(card);
                 if (fresh) {
-                    const back = fresh.querySelector(whole ? '.fcc-cr-whole' : '.fcc-cr-pct') || fresh.querySelector('.fcc-cr-pct');
-                    if (back) { try { back.focus(); } catch (_) { /* noop */ } }
+                    const lost = putPicksBack(fresh, picks);
+                    // Group 65 review (PI2 / PI4): the keyboard goes to How far it got with its
+                    // figure selected, so a figure typed next replaces it (typed on Charge the
+                    // whole print, it went to the scan path as a spool's number).
+                    const back = fresh.querySelector('.fcc-cr-pct') || fresh.querySelector(whole ? '.fcc-cr-whole' : '.fcc-cr-workout');
+                    if (back) { try { back.focus(); if (typeof back.select === 'function') back.select(); } catch (_) { /* noop */ } }
+                    // Group 65 review (WD5 / CM5): the words name the card's own button, and the
+                    // picks kept or lost.
+                    const how = whole ? 'Worked out for the whole print' : `Worked out at ${fmt(payload.percent)}%`;
+                    const kept = picks.length > lost.length;
+                    const next = fresh.dataset.kind === 'no_spool'
+                        ? (kept ? 'your picks are kept: check them and the grams, then Apply.'
+                            : 'pick the spool each head used, then Apply.')
+                        : (kept ? 'your picks are kept: check the grams, then Confirm.' : 'check the grams, then Confirm.');
+                    const gone = lost.length ? ' A pick on a head that changed couldn’t be kept: pick it again.' : '';
                     sayOnCard(fresh, d.stale ? (d.msg || 'This card changed since it was drawn: it is drawn again as it is now.')
-                        : (whole ? 'Worked out for the whole print: check the grams, then Confirm.'
-                            : `Worked out at ${fmt(payload.percent)}%: check the grams, then Confirm.`));
+                        : `${how}: ${next}${gone}`);
                 }
                 // The redraw put new buttons where the pointer is: a double click's second
                 // press reaches nothing (Group 58's rule).
