@@ -155,7 +155,8 @@ def test_a_queued_print_whose_end_read_names_the_spool_is_found(env):
                                     "kind": "complete",
                                     "end_heads": {"heads": [{"toolhead": "RCOI-1", "position": 0, "sids": [12, 57]}],
                                                   "source": "print_end", "at": "now"}})
-    assert print_deduct.uncharged_print_for(57) == {"job_id": "1144", "printer_name": "INDX"}
+    # Group 65 review (RW1): FCC hasn't read which heads a queued print used: "may have".
+    assert print_deduct.uncharged_print_for(57) == {"job_id": "1144", "printer_name": "INDX", "sure": False}
     assert print_deduct.uncharged_print_for(58) is None
 
 
@@ -164,11 +165,15 @@ def test_an_open_review_naming_the_spool_is_found_as_its_print(env):
                                      "filename": "f.bgcode", "spools": [{"sid": 57, "grams": 3.0}],
                                      "total_grams": 3.0})
     cancel_review_store.add_pending({"printer_name": "XL", "job_id": "1146", "kind": "partial",
-                                     "filename": "g.bgcode", "spools": [],
-                                     "heads_at_end": [{"toolhead": "XL-2", "position": 1, "sid": 61, "sids": [61]}],
+                                     "filename": "g.bgcode", "spools": [], "unresolved_usage": {"1": 1.0},
+                                     "heads_at_end": [{"toolhead": "XL-2", "position": 1, "sid": 61, "sids": [61]},
+                                                      {"toolhead": "XL-3", "position": 2, "sid": 62, "sids": [62]}],
                                      "total_grams": 1.0})
-    assert print_deduct.uncharged_print_for(57) == {"job_id": "1145", "printer_name": "XL"}
-    assert print_deduct.uncharged_print_for("61") == {"job_id": "1146", "printer_name": "XL"}
+    # Group 65 review (RW1): a row the card charges is "sure"; a spool its line offers
+    # "may have"; a spool only on a head the card neither charges nor asks about is none.
+    assert print_deduct.uncharged_print_for(57) == {"job_id": "1145", "printer_name": "XL", "sure": True}
+    assert print_deduct.uncharged_print_for("61") == {"job_id": "1146", "printer_name": "XL", "sure": False}
+    assert print_deduct.uncharged_print_for(62) is None
     assert print_deduct.uncharged_print_for(99) is None
 
 
@@ -182,4 +187,5 @@ def test_the_real_lookup_runs_in_a_weigh_line(env):
     cancel_fetch_store.add_pending({"printer_name": "INDX", "job_id": "1144", "filename": "f.bgcode",
                                     "end_heads": {"heads": [{"toolhead": "RCOI-1", "position": 0, "sids": [57]}]}})
     (line,) = _save(env, _w("gross", 875, 220))
-    assert "but job 1144 on INDX, which used this spool, isn't charged yet." in line, line
+    # Group 65 review (RW1): a queued print may have used it: the comparison stays.
+    assert "heavier. Job 1144 on INDX, which may have used this spool, isn't charged yet." in line, line

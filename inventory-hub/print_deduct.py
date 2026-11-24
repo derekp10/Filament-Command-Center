@@ -1421,28 +1421,52 @@ def _usable_heads(end_heads):
 
 def uncharged_print_for(spool_id):
     """Group 65.3 (Claude's call 12): a print FCC hasn't charged yet that used this
-    spool, as {"job_id", "printer_name"}, else None: a queued print whose print-end
-    read names it (the fetch queue), or an open 🛑 review whose rows or heads name it
-    (a shortfall card answers its print's job). A spool weighed while its print's file
-    still downloads (20 to 33 minutes on the INDX) would otherwise read as drift; the
-    weigh line says so instead of comparing (Group 64's Decision 1 handles the charge).
-    Reads only FCC's own two files. Best-effort: None on any failure."""
+    spool, as {"job_id", "printer_name", "sure"}, else None. "sure" True: an open 🛑
+    review charges it (one of its rows names it; a shortfall card answers its print's
+    job). "sure" False: it may have printed grams no spool took yet (a review's line
+    offers it at that line's head, a set's member included), or a queued print's
+    print-end read names it (FCC hasn't read which heads that print used). Never a
+    spool only on a head the card neither charges nor asks about (Group 65 review, RW1
+    / WD1: every head of the print-end read named the print, and a spool it never used
+    lost its comparison). A spool weighed while its print's file still downloads (20 to
+    33 minutes on the INDX) would otherwise read as drift: the weigh line says so
+    instead of comparing when sure, beside the comparison when not (Group 64's
+    Decision 1 handles the charge). Reads only FCC's own two files. Best-effort: None
+    on any failure."""
     try:
         want = str(spool_id)
+        maybe = None
+        for rec in cancel_review_store.list_pending():
+            if not isinstance(rec, dict):
+                continue
+            job = {"job_id": str(rec.get('job_id') or '').split('#')[0],
+                   "printer_name": rec.get('printer_name') or ''}
+            if want in {str(r.get('sid')) for r in (rec.get('spools') or []) if isinstance(r, dict)}:
+                return dict(job, sure=True)
+            key = "usage_map" if rec.get('kind') == "no_spool" else "unresolved_usage"
+            lines = {str(_norm_pos(k)) for k, v in (rec.get(key) or {}).items() if _positive(v)}
+            offered = {str(s) for h in rec.get('heads_at_end') or []
+                       if isinstance(h, dict) and str(_norm_pos(h.get('position'))) in lines for s in _head_sids(h)}
+            for line, members in (rec.get('unresolved_sets') or {}).items():
+                if str(_norm_pos(line)) in lines:
+                    offered |= {str(m.get('sid')) for m in members or [] if isinstance(m, dict)}
+            if want in offered and maybe is None:
+                maybe = dict(job, sure=False)
         for rec in cancel_fetch_store.list_pending():
             usable = _usable_heads((rec or {}).get('end_heads'))
-            if usable and any(want in [str(s) for s in h['sids']] for h in usable[0]):
-                return {"job_id": str(rec.get('job_id') or ''), "printer_name": rec.get('printer_name') or ''}
-        for rec in cancel_review_store.list_pending():
-            names = {str(r.get('sid')) for r in (rec.get('spools') or []) if isinstance(r, dict)}
-            for h in rec.get('heads_at_end') or []:
-                names |= {str(s) for s in _head_sids(h)}
-            if want in names:
-                return {"job_id": str(rec.get('job_id') or '').split('#')[0],
-                        "printer_name": rec.get('printer_name') or ''}
+            if usable and any(want in [str(s) for s in h['sids']] for h in usable[0]) and maybe is None:
+                maybe = {"job_id": str(rec.get('job_id') or ''), "printer_name": rec.get('printer_name') or '',
+                         "sure": False}
+        return maybe
     except Exception:
         return None
-    return None
+
+
+def _positive(value):
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _heads_as_locs(heads):

@@ -120,6 +120,8 @@ def test_the_missing_tare_question_says_to_take_the_add_ons_off(entry):  # noqa:
     press(page, "645", 150)
     _prompt_up(page)
     line = page.evaluate(f"() => document.getElementById('{PROMPT_ID}-addons').innerText")
-    assert line == "Take off any clip, cap or edge guards first: FCC counts them as filament.", line
+    # Group 65 review (WD9): on an empty spool, a clip counts as spool, not filament.
+    assert line == ("Weigh the empty spool as the full one was weighed, with any clip, cap or edge guards off: "
+                    "on one and not the other, FCC counts them as filament or as spool."), line
     style = page.evaluate(f"() => document.getElementById('{PROMPT_ID}-addons').getAttribute('style')")
     assert "font-size:var(--fcc-fs-small)" in style.replace(" ", ""), style    # a named size, never typed

@@ -1095,15 +1095,19 @@ def _log_manual_weight_change(spool_id, pre, post, weigh=None):
                 # import at the top would load it (and register its routes) first.
                 import print_deduct  # type: ignore
                 unpaid = print_deduct.uncharged_print_for(spool_id)
-                if unpaid:
-                    line += (f" FCC expected {expected:.1f} g, but job {html.escape(str(unpaid['job_id']), quote=False)}"
-                             f" on {html.escape(str(unpaid['printer_name']), quote=False)}, which used this spool, "
-                             f"isn't charged yet.")
+                job = (f"job {html.escape(str((unpaid or {}).get('job_id')), quote=False)} on "
+                       f"{html.escape(str((unpaid or {}).get('printer_name')), quote=False)}")
+                if unpaid and unpaid.get("sure", True):
+                    line += f" FCC expected {expected:.1f} g, but {job}, which used this spool, isn't charged yet."
                 else:
                     diff = measured - expected
                     line += (f" FCC expected {expected:.1f} g: "
                              + ("the same." if abs(diff) < 0.05
                                 else f"{abs(diff):.1f} g {'heavier' if diff > 0 else 'lighter'}."))
+                    if unpaid:
+                        # Group 65 review (RW1): a print that may have used it, beside the
+                        # comparison (FCC can't say it did).
+                        line += f" {job[0].upper()}{job[1:]}, which may have used this spool, isn't charged yet."
             state.add_log_entry(f"{line} {used_note}{total_note}", "INFO", color)
             return
         title = "✏️ Weight edited by hand" if weigh else "✏️ Weight updated"

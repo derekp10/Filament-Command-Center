@@ -21,6 +21,7 @@ Red on 5b97b2d4 (no figures, no route).
 """
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -297,3 +298,47 @@ def test_the_apply_records_the_basis_as_its_scale_and_an_older_view_is_refused(l
     assert entry["scale"] == 0.62 and entry["grams"] == 24.8, entry
     assert any(m.startswith("📝 XL: job J-1 charged 24.80g for 62% of the print, as its review was worked out again "
                             "(FCC last saw ~30%).") for m in logs), logs
+
+
+# --------------------------------------------------------------------------- #
+# The real download's wiring (Group 65 review, PR1)                           #
+# --------------------------------------------------------------------------- #
+
+GOOD = "M83\nT0\n" + "G1 E1\n" * 10 + "T1\n" + "G1 E1\n" * 10 + FOOT
+
+
+@pytest.mark.parametrize("which", ["a plain file", "the repo's .bgcode"])
+def test_the_real_download_gives_a_card_its_figures(monkeypatch, which):
+    """Every other figures test stands in for fetch_cancel_gcode, its `remap` too, so
+    deleting the one line that hands the real one back left them all green (the review's
+    mutant: no card would keep figures, and Charge the whole print would never show).
+    Here only the bytes' download is stood in: the real fetch, decode and remap give the
+    card its figures, at the seen percent the very grams it charges, and the footer for
+    the whole print. Green on 681601f6 too: a pin of the wiring, not a fix."""
+    if which == "a plain file":
+        data, pm = GOOD.encode(), TWO
+    else:
+        with open(os.path.join(os.path.dirname(os.path.abspath(print_deduct.__file__)), "tests", "fixtures",
+                               "sample.bgcode"), "rb") as fh:
+            data = fh.read()
+        pm = {f"MMU-{i + 1}": {"printer_name": "XL", "position": i} for i in range(5)}
+    monkeypatch.setattr(print_deduct.state, "add_log_entry", lambda *a, **k: None)
+    monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {})
+    with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(print_deduct.locations_db, "get_active_printer_map", return_value=pm), \
+         patch.object(prusalink_api, "fetch_printer_credentials",
+                      return_value={"ip_address": "203.0.113.9", "api_key": "k"}), \
+         patch.object(prusalink_api, "_download_file_bytes", return_value=data), \
+         patch.object(print_deduct, "_resolve_usage_to_spools", return_value=[]),          patch.object(print_deduct, "_heads_snapshot", return_value=[]):
+        app_module._create_pending_cancel_review("XL", "/usb/A.gcode", "J-1", 0.3, fb_url="http://fb",
+                                                 ambiguous=True)
+    rec = cancel_review_store.get_pending("XL", "J-1")
+    figs = rec.get("figures") or {}
+    assert figs.get("by_pct") and figs.get("footer"), sorted(rec)
+    for pos, grams in (rec.get("usage_map") or {}).items():
+        assert abs(float(figs["by_pct"][str(pos)][30]) - float(grams)) < 0.01, (pos, grams, figs["by_pct"][str(pos)][30])
+    for pos, vals in figs["by_pct"].items():
+        assert abs(float(vals[100]) - float(figs["footer"][pos])) < 0.01, (pos, vals[100], figs["footer"])
+    ans = app_module.app.test_client().post("/api/cancel_deduct/recompute", json={
+        "printer_name": "XL", "job_id": "J-1", "rev": rec.get("rev", 0), "whole": True}).get_json()
+    assert ans["status"] == "recomputed", ans

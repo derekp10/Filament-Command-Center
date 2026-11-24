@@ -2145,7 +2145,8 @@ const _askArchiveEmptyWeight = async (spoolId, filamentId, prefillWeight = null,
                 filament so every future spool of it inherits the value.
             </p>
             <p id="fcc-archive-empty-addons" style="color:#bbb; font-size:var(--fcc-fs-small); margin:-6px 0 12px 0;">
-                Take off any clip, cap or edge guards first: FCC counts them as filament.
+                Take off any clip, cap or edge guards before you weigh it: left on, FCC counts them as part
+                of the empty spool, and every spool of this filament weighed without them reads light.
             </p>
             <label class="form-label text-warning small mb-1">Empty spool weight (g)</label>
             <input type="text" inputmode="decimal" id="fcc-archive-empty-wt"

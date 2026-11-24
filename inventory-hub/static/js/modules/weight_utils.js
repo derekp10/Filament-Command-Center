@@ -384,7 +384,7 @@ function promptMissingEmptyWeight({
                 <div id="${overlayId}-title" style="font-weight:bold;font-size:1.05rem;margin-bottom:6px;">⚖️ ${title}</div>
                 ${ctxRow}
                 <div style="color:#bbb;font-size:var(--fcc-fs-small);line-height:1.4;margin-bottom:12px;">${helper}</div>
-                <div id="${overlayId}-addons" style="color:#bbb;font-size:var(--fcc-fs-small);line-height:1.4;margin:-6px 0 12px 0;">Take off any clip, cap or edge guards first: FCC counts them as filament.</div>
+                <div id="${overlayId}-addons" style="color:#bbb;font-size:var(--fcc-fs-small);line-height:1.4;margin:-6px 0 12px 0;">Weigh the empty spool as the full one was weighed, with any clip, cap or edge guards off: on one and not the other, FCC counts them as filament or as spool.</div>
                 <div class="input-group input-group-sm">
                     <input type="text" inputmode="decimal" autocomplete="off"
                            id="${overlayId}-input"
