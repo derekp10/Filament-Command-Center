@@ -185,6 +185,12 @@ def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
         out = {"gcode": text, "fraction": _remap(reached_fraction)}
         if extra_fractions:
             out["fractions"] = [_remap(p) for p in extra_fractions]
+        # Group 65.1 (1b): how a progress value is placed in this file, so the review
+        # can cut it at every whole percent in the same walk (its figures, for
+        # "Charge the whole print" and a percentage typed later). The caller's call is
+        # unchanged: the 34 stand-ins that answer four arguments keep working, and a
+        # result without it keeps no figures.
+        out["remap"] = _remap
         return out
     except Exception as e:
         print(f"fetch_cancel_gcode: failed for {filename}: {e}")

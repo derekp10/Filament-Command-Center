@@ -1215,6 +1215,47 @@
                      style="color:#9fd3ff;font-size:0.95rem;margin-bottom:8px;line-height:1.45;">📡 ${words}</div>`;
     }
 
+    // Group 65.1 (1b) (Derek, 2026-11-09: "we should have a charge the whole print, or a
+    // way to change the percentage"): a card whose download kept its figures (an
+    // ambiguous end, a cancel FCC saw after it lost contact, a restart's review) is
+    // worked out again on the server at another basis. Charge the whole print only on a
+    // ❓ card (`offerWhole`); the percentage on those and on a 🛑 card seen late. The box
+    // is a weight box (a label scanned into it goes to the scan path); Enter in it works
+    // it out and never applies. A card from before keeps its look.
+    function hasFigures(rec) {
+        return !!(rec && rec.figures && typeof rec.figures === 'object' && rec.figures.footer);
+    }
+    function basisPct(rec) {
+        if (rec.basis === 'whole') return 100;
+        if (typeof rec.basis === 'number') return rec.basis;
+        return Math.round((Number(rec.progress) || 0) * 1000) / 10;
+    }
+    function basisWords(rec) {
+        const seen = Math.round((Number(rec.seen_progress != null ? rec.seen_progress : rec.progress) || 0) * 100);
+        if (rec.basis === 'whole') return `for the whole print (FCC last saw ~${seen}%)`;
+        if (typeof rec.basis === 'number') return `at ${fmt(rec.basis)}% (FCC last saw ~${seen}%)`;
+        return `at the last progress FCC saw (~${seen}%)`;
+    }
+    function basisHtml(rec, offerWhole) {
+        if (!hasFigures(rec)) return '';
+        const id = `fcc-cr-pct-${String(rec.printer_name)}-${String(rec.job_id)}`.replace(/[^A-Za-z0-9_-]/g, '-');
+        const said = rec.basis === 'whole' ? 'Worked out for the whole print.'
+            : (typeof rec.basis === 'number' ? `Worked out at ${fmt(rec.basis)}%.` : '');
+        return `
+            <div class="fcc-cr-basis" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px 0;">
+                ${offerWhole ? `<button type="button" class="btn btn-sm btn-outline-info fcc-cr-whole">Charge the whole print</button>` : ''}
+                <label for="${id}" style="color:#ddd;margin:0;">How far it got:</label>
+                <div class="input-group input-group-sm" style="width:auto;flex:none;">
+                    <input type="text" inputmode="decimal" id="${id}" autocomplete="off"
+                           class="form-control bg-dark text-white border-secondary fcc-cr-pct fcc-weight-box"
+                           value="${fmt(basisPct(rec))}" style="width:4.5rem;" placeholder="e.g. 62" />
+                    <span class="input-group-text bg-dark text-light border-secondary">%</span>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-info fcc-cr-workout">Work it out</button>
+                ${said ? `<span class="fcc-cr-basis-said" style="color:#9fd3ff;">${said}</span>` : ''}
+            </div>`;
+    }
+
     function unmeasuredBanner(rec) {
         const weigh = `<b>Weigh the spool</b> and adjust it directly, or <b>Discard</b> this review.`;
         switch (rec.unmeasured_reason) {
@@ -1310,6 +1351,7 @@
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
                     ${banner}
                 </div>
+                ${isNoSpool ? basisHtml(rec, !!rec.ambiguous) : ''}
                 ${lines}
                 <div style="display:flex;flex-direction:row-reverse;justify-content:flex-start;gap:8px;margin-top:10px;">
                     ${applyBtn}
@@ -1392,10 +1434,18 @@
                here once it left the toolhead). Confirm to deduct, or <b>Discard</b>.`;
         } else {
             headerColor = ambiguous ? '#7ec8ff' : '#ffd27a';
+            const worked = rec.basis === 'whole' ? 'worked out for the whole print'
+                : (typeof rec.basis === 'number' ? `worked out at ${fmt(rec.basis)}%` : '');
             header = ambiguous
-                ? `❓ ${esc(rec.printer_name)} — ended at ~${pct}% (couldn't confirm: completed or cancelled?)`
-                : `🛑 ${esc(rec.printer_name)} — cancelled at ~${pct}%`;
-            banner = ambiguous
+                ? `❓ ${esc(rec.printer_name)} — ${worked || `ended at ~${pct}%`} (couldn't confirm: completed or cancelled?)`
+                : `🛑 ${esc(rec.printer_name)} — ${worked || `cancelled at ~${pct}%`}`;
+            banner = ambiguous && hasFigures(rec)
+                ? `❓ FCC couldn't tell whether this print <b>finished</b> or was <b>cancelled</b> — it
+                   reached idle without a clear cancel/finish signal. The grams below are worked out
+                   ${esc(basisWords(rec))}. If it finished, press <b>Charge the whole print</b>; if you saw
+                   how far it got, type that percentage and press <b>Work it out</b>. You can still nudge
+                   each spool's grams. <b>Confirm</b> to deduct, or <b>Discard</b> if it was already handled.`
+                : ambiguous
                 ? `❓ FCC couldn't tell whether this print <b>finished</b> or was <b>cancelled</b> — it
                    reached idle without a clear cancel/finish signal (a fast restart, or the printer
                    power-cycled). The grams below are computed at the last seen progress (~${pct}%).
@@ -1424,6 +1474,7 @@
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
                     ${banner}
                 </div>
+                ${(ambiguous || rec.lost_contact) ? basisHtml(rec, ambiguous) : ''}
                 ${rows}
                 ${unresolvedLinesHtml(rec)}
                 <div style="display:flex;flex-direction:row-reverse;justify-content:flex-start;gap:8px;margin-top:10px;">
@@ -1735,6 +1786,60 @@
             toast(msg, type || 'warning', dur || 7000);
         }
 
+        // Group 65.1 (1b): work the card out again on the server, for the whole print or
+        // at the percentage in its box, and draw it again as FCC holds it now (its
+        // revision one up, so a view drawn before can't apply). Nothing is charged here.
+        async function recompute(card, whole) {
+            if (card.dataset.recomputing === '1') return;
+            const box = card.querySelector('.fcc-cr-pct');
+            const payload = { printer_name: card.dataset.printer, job_id: card.dataset.job,
+                              rev: Number(card.dataset.rev || 0) };
+            if (whole) {
+                payload.whole = true;
+            } else {
+                const typed = box ? String(box.value).trim().replace(/\s*%$/, '') : '';
+                const n = Number(typed);
+                if (!typed || !Number.isFinite(n) || n < 0 || n > 100) {
+                    tell(card, 'Type how far the print got, from 0 to 100 %, then press Work it out.');
+                    if (box) { try { box.focus(); box.select(); } catch (_) { /* noop */ } }
+                    return;
+                }
+                payload.percent = n;
+            }
+            card.dataset.recomputing = '1';
+            const btns = Array.from(card.querySelectorAll('.fcc-cr-whole, .fcc-cr-workout, .fcc-cr-confirm'));
+            btns.forEach((b) => { b.disabled = true; });
+            let d = null;
+            try {
+                const r = await fetch('/api/cancel_deduct/recompute', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                d = await r.json();
+            } catch (_) { d = null; }
+            delete card.dataset.recomputing;
+            if (d && d.status === 'already_handled') {
+                await rerenderCard(card);
+                toast('That card was already settled: nothing more to work out on it.', 'info');
+                if (body.querySelector('.fcc-cr-card')) sayOnPanel('That card was already settled: nothing more to work out on it.');
+                return;
+            }
+            if (d && (d.status === 'recomputed' || d.stale)) {
+                const fresh = await rerenderCard(card);
+                if (fresh) {
+                    const back = fresh.querySelector(whole ? '.fcc-cr-whole' : '.fcc-cr-pct') || fresh.querySelector('.fcc-cr-pct');
+                    if (back) { try { back.focus(); } catch (_) { /* noop */ } }
+                    sayOnCard(fresh, d.stale ? (d.msg || 'This card changed since it was drawn: it is drawn again as it is now.')
+                        : (whole ? 'Worked out for the whole print: check the grams, then Confirm.'
+                            : `Worked out at ${fmt(payload.percent)}%: check the grams, then Confirm.`));
+                }
+                // The redraw put new buttons where the pointer is: a double click's second
+                // press reaches nothing (Group 58's rule).
+                if (typeof window.fccShieldNextPress === 'function') window.fccShieldNextPress();
+                return;
+            }
+            btns.forEach((b) => { b.disabled = false; });
+            tell(card, (d && d.msg) || "FCC didn't answer, so the card wasn't worked out again. Try again in a moment.");
+        }
+
         // 43.2: an Apply that couldn't place every gram opened an uncharged-grams
         // card; show it in this overlay, so the next pick is right there.
         async function showNewCard(printer, job) {
@@ -1935,6 +2040,19 @@
         // all start with '#', so digits alone jump nowhere anyway.
         const pickKeys = { el: null, at: [] };
         const PICK_SCAN_GAP_MS = 80;
+        // Group 65.1 (1b): Enter in the percentage box works the card out again and never
+        // applies it. A scan's Enter is the scan's (the weight capture sends a label on to
+        // the scan path, and enterIsAScan says so for the Enter after it).
+        overlay.addEventListener('keydown', (e) => {
+            const t = e.target;
+            if (e.key !== 'Enter' || e.isComposing || !t || !t.classList || !t.classList.contains('fcc-cr-pct')) return;
+            if (typeof window.enterIsAScan === 'function' && window.enterIsAScan()) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.repeat) return;
+            const card = t.closest('.fcc-cr-card');
+            if (card) recompute(card, false);
+        });
         overlay.addEventListener('keydown', (e) => {
             const t = e.target;
             if (!t || !t.classList || !t.classList.contains('fcc-cr-pick') || e.key === 'Enter') return;
@@ -2021,6 +2139,15 @@
             if (!card) return;
             const printer = card.dataset.printer;
             const job = card.dataset.job;
+
+            if (e.target.classList.contains('fcc-cr-whole') || e.target.classList.contains('fcc-cr-workout')) {
+                // Group 65.1 (1b): a double click's second press works nothing out again
+                // (a press from the keyboard has detail 0).
+                if (e.detail > 1) return;
+                sayOnPanel('');
+                await recompute(card, e.target.classList.contains('fcc-cr-whole'));
+                return;
+            }
 
             if (e.target.classList.contains('fcc-cr-confirm')) {
                 if (e.detail <= 1) sayOnPanel('');

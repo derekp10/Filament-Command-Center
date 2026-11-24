@@ -1299,6 +1299,35 @@ def test_lost_contact_review_lines_are_readable(page: Page, base_url: str):
     page.keyboard.press("Escape")
 
 
+def test_review_basis_controls_are_readable(page: Page, base_url: str):
+    """Group 65.1 (1b): a card whose download kept its figures offers Charge the whole
+    print and "How far it got: [ ] %" with Work it out, and says the basis it was worked
+    out at. Each readable on its card. A made-up review in this page only; nothing is
+    written."""
+    import json as _json
+    import conftest
+    figures = {"footer": {"0": 40.0}, "by_pct": {"0": [round(0.4 * i, 4) for i in range(101)]}}
+    row = {"sid": 9001, "toolhead": "ZZ-1", "position": 0, "grams": 24.8, "current_used": 100.0,
+           "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 875.2,
+           "display": "#9001 Contrast PLA", "color": "c0392b", "ambiguous": False}
+    pending = [{"printer_name": "ZZ Contrast XL", "job_id": "b1", "filename": "/usb/BASIS~1.BGC", "progress": 0.62,
+                "seen_progress": 0.3, "basis": 62, "rev": 1, "total_grams": 24.8, "kind": "partial",
+                "ambiguous": True, "spools": [row], "figures": figures}]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="b1"] .fcc-cr-basis', timeout=15000)
+    basis = page.locator('#fcc-cancel-review-overlay .fcc-cr-card[data-job="b1"]')
+    words = ("Charge the whole print", "How far it got", "Work it out", "Worked out at 62%")
+    assert [o for o in conftest.contrast_offenders(basis) if any(w in (o.get("text") or "") for w in words)] == []
+    scored = [o.get("text") or "" for o in conftest.contrast_offenders(basis, min_ratio=100)]
+    for w in words:
+        assert any(w in t for t in scored), (w, scored)
+    page.keyboard.press("Escape")
+
+
 @pytest.mark.usefixtures("require_server")
 def test_scan_holding_pickers_notice_lines_are_readable(page: Page, base_url: str, assert_contrast):
     """Group 61 review: the notice line of each picker that holds scans (the
