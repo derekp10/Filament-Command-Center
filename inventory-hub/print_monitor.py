@@ -82,6 +82,9 @@ _PAUSED_CONDITION_STATES = frozenset({"PAUSED", "PAUSING", "RESUMING", "ATTENTIO
 # Group 65 fix review 3 (WX2 / WX3): the states a print waiting at a park can show. A
 # filament loaded at the printer's prompt shows BUSY (or PAUSED) until the resume.
 _PARK_STATES = _PAUSED_CONDITION_STATES | frozenset({"BUSY"})
+# Group 65 fix review 4 (WY3): the reads of the heads a park of a print FCC has no start
+# snapshot for (one it first met at the park) gets before it gives up, one per tick.
+_PARK_READ_TRIES = 5
 # Terminal states that, reached FROM an in-progress state, mean a CANCEL/abort.
 # Cancel terminal states (reached FROM in-progress = a CANCEL/abort). This set
 # ALSO doubles as the "file still download-locked, don't fetch yet" gate in
@@ -587,6 +590,10 @@ def _on_completion_edge(printer_name, filename, job_id, fb_url, start_spools=Non
             rec, start_spools, swap_log, end_heads = _hold_end_heads(
                 rec, printer_name, filename, job_id, 1.0, "complete", False,
                 start_spools, swap_log, end_heads)
+            if not lost_contact and isinstance(rec, dict) and isinstance(rec.get("lost_contact"), dict):
+                # Group 65 fix review 4 (WY2 / WY5): a record queued before (a finish FCC saw
+                # only after it lost sight of the print, then a restart) keeps its facts.
+                lost_contact = rec["lost_contact"]
             more = _edge_kwargs(end_heads=end_heads, lost_contact=lost_contact)
             if rec is not None:
                 more["before_charge"] = lambda rec=rec: _stamp_charging(rec)
@@ -636,6 +643,24 @@ def _dispatch_completion_edge(printer_name, filename, job_id, fb_url, start_spoo
         _on_completion_edge(printer_name, filename, job_id, fb_url, **kwargs)
 
 
+def _queued_completion(printer_name, job_id, filename=None):
+    """Group 65 fix review 4 (AY1, and fix review 3's known gap): True when FCC queued
+    this print as finished (it saw it finish; its completion's record waits in the
+    fetch queue, no charge begun), so the queue records its deduct and nothing else
+    reviews it. Never for a print with no job id (every one shares one key: an earlier
+    id-less print's queued completion swallowed the next one's end), and only for the
+    same file when `filename` is given. Never raises."""
+    if print_deduct_ledger._is_blank_job(job_id):
+        return False
+    try:
+        rec = cancel_fetch_store.get_pending(printer_name, job_id)
+    except Exception:
+        return False
+    if not (isinstance(rec, dict) and rec.get("kind") == "complete" and not rec.get("charging_since")):
+        return False
+    return filename is None or str(rec.get("filename")) == str(filename)
+
+
 def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                        progress_unknown=False, unmeasured_reason="replaced",
                        start_spools=None, swap_log=None, heads_when=None, park_heads=None,
@@ -667,16 +692,12 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
     # before its reset latch was saved, and the next print was found after the restart)
     # stays the queue's, charged from the heads read at its end: a review stashed over it
     # dropped the queued completion, and an Apply as drawn charged part of the print.
-    try:
-        queued = cancel_fetch_store.get_pending(printer_name, job_id)
-    except Exception:
-        queued = None
-    if isinstance(queued, dict) and queued.get("kind") == "complete" and not queued.get("charging_since"):
+    if _queued_completion(printer_name, job_id, filename):
         try:
+            # Fix review 4 (AY3 / WY4): worded for every door (an idle screen has no next print).
             state.add_log_entry(
-                f"ℹ️ {print_deduct._esc(printer_name)}: '{print_deduct._esc(filename)}' finished before the next "
-                f"print and FCC had already queued it, so it records its deduct once the printer is idle.",
-                "INFO")
+                f"ℹ️ {print_deduct._esc(printer_name)}: FCC had already queued '{print_deduct._esc(filename)}' "
+                f"as finished, so it records its deduct once the printer is idle.", "INFO")
         except Exception:
             pass
         return
@@ -733,7 +754,10 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                 printer_name, filename, job_id, progress, fb_url=fb_url, ambiguous=True,
                 progress_unknown=progress_unknown, unmeasured_reason=unmeasured_reason,
                 **_edge_kwargs(start_spools, swap_log, end_heads=end_heads,
-                               lost_contact=lost_contact))
+                               lost_contact=lost_contact,
+                               # Group 65 fix review 4 (AY2): a job change's review says so,
+                               # whatever its end read gave.
+                               replaced=True if heads_when == "job_change" else None))
             if not progress_unknown:
                 _settle_fetch(printer_name, job_id, result)
         except Exception as e:
@@ -792,6 +816,12 @@ def _track_print_edge(printer_name, state_info, fb_url):
             if entry is not None and entry.get('filename'):
                 entry['misses'] = int(entry.get('misses') or 0) + 1
                 entry.setdefault('lost_at', time.time())
+            elif entry is not None:
+                # Group 65 fix review 4 (WY6): with no print latched, when FCC lost sight of the
+                # printer, so a print FCC first meets at a park knows when FCC last saw the
+                # printer (_met_at_park). No lost-contact stamps (they are a print's). A good
+                # tick drops it (_end_lost_stretch).
+                entry.setdefault('unseen_since', time.time())
         return
     cur = str(state_info.get('state', '')).upper()
     if not cur:
@@ -816,6 +846,9 @@ def _track_print_edge(printer_name, state_info, fb_url):
         need_swap_snapshot = False  # 22.3(b): flag a resume-edge mid-print swap capture
         park_was = None  # Group 64.3 (4): the park's read, spent at a PRINTING tick
         paused_was = None  # Group 64 full review: when the print stopped for this pause
+        unseen_was = None  # Group 65 fix review 4 (WY6): FCC's last sight before a park it met
+        met_was = None     # Group 65 fix review 4 (WY3): a print FCC first met at its park
+        unread_park_job = None  # ... resumed with no read of its heads at that park
         swap_jid = None
         swap_progress = None
         swap_runout = False
@@ -835,6 +868,10 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 # checks for a swap against it (below), and the next park reads afresh.
                 park_was = entry.pop('park_heads', None)
                 entry.pop('park_read', None)
+                entry.pop('park_reads', None)
+                # Group 65 fix review 4 (WY6 / WY3): a park FCC met the print at is spent too.
+                unseen_was = entry.pop('unseen_from', None)
+                met_was = entry.pop('met_at_park', None)
                 paused_was = entry.pop('paused_at', None)
             if job:
                 # Reject blank/zero ids (None/''/'0'/0) — same "blank job" set
@@ -902,6 +939,11 @@ def _track_print_edge(printer_name, state_info, fb_url):
                     entry.pop('park_heads', None)
                     entry.pop('park_read', None)
                     entry.pop('paused_at', None)
+                    # Group 65 fix review 4 (WY3 / WY6): a park FCC met the old job at is its own.
+                    entry.pop('park_reads', None)
+                    entry.pop('unseen_from', None)
+                    entry.pop('met_at_park', None)
+                    unseen_was = met_was = None
                 if job.get('filename'):
                     entry['filename'] = job['filename']
                 if new_jid is not None:
@@ -917,6 +959,11 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         and entry.get('snapshot_job') != str(new_jid)):
                     need_snapshot = True
                     snap_jid = new_jid
+                    if met_was:
+                        # Group 65 fix review 4 (WY3): a print FCC first met at its park whose
+                        # heads it couldn't read there: the start it takes now is after the
+                        # prompt, so it says which charge may be wrong.
+                        unread_park_job = new_jid
                 # 22.3(b): a resume INTO printing from a pause/ATTENTION condition on
                 # the SAME, already-snapshotted job → a mid-print spool swap MAY have
                 # happened (M600 / Color-Change / runout, with an FCC eject/load at the
@@ -996,6 +1043,21 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 if snap and e is not None and str(e.get('job_id')) == str(snap_jid):
                     e['start_spools'] = {str(k): v for k, v in snap.items()}
                     e['snapshot_job'] = str(snap_jid)
+            if unread_park_job is not None and str(unread_park_job) == str(snap_jid):
+                # Group 65 fix review 4 (WY3): FCC met this print at its park and couldn't
+                # read its heads there, so the start it takes is after the prompt: said once.
+                try:
+                    took = ", ".join(f"T{print_deduct._esc(p)} #{print_deduct._esc(s)}"
+                                     for p, s in sorted((snap or {}).items(), key=lambda kv: str(kv[0]))
+                                     if s is not None)
+                    state.add_log_entry(
+                        f"⚠️ {print_deduct._esc(printer_name)}: FCC couldn't read which spools were on the heads "
+                        f"while job {print_deduct._esc(snap_jid)} was parked, so it takes the spools on them now"
+                        f"{f' ({took})' if took else ''} as the print's start. If a spool was changed at that "
+                        f"prompt, the one it replaced is charged nothing for this print: weigh it to true it up.",
+                        "WARNING", "ffaa00")
+                except Exception:
+                    pass
         # 22.3(b) (off-lock, like the start snapshot): a resume from a pause/ATTENTION
         # MAY mean the loaded spool was swapped. Snapshot the live mapping and diff it
         # against the mapping in effect for the segment just printed (start_spools +
@@ -1028,7 +1090,9 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                 _before[str(_pos)] = _sid
                         _added = print_deduct._record_swap_events(
                             e, snap, swap_progress, runout=swap_runout, before=_park_map,
-                            at=paused_was)
+                            at=paused_was,
+                            # Group 65 fix review 4 (WY6): a park FCC met the print at.
+                            **({"unseen_from": unseen_was} if unseen_was is not None else {}))
                         # Say what the diff actually found. A zero here is the
                         # interesting case: FCC looked and the Spoolman mapping
                         # was unchanged, which is what a purely physical roll
@@ -1070,13 +1134,18 @@ def _track_print_edge(printer_name, state_info, fb_url):
             # prompt instead of a misleading 0g computed at 0% (the 1053 bug).
             progress_unknown = not prev_job.get('progress_sampled', False)
             try:
-                detail = ("without measuring its progress — surfacing a review to weigh"
-                          if progress_unknown else
-                          "without a sampled end state — reviewing the previous job "
-                          "(couldn't confirm completed vs cancelled)")
-                state.add_log_entry(
-                    f"❓ {printer_name}: print job changed ({job_changed[0]}→{job_changed[1]}) "
-                    f"{detail}.", "INFO")
+                changed = (f"print job changed ({print_deduct._esc(job_changed[0])}→"
+                           f"{print_deduct._esc(job_changed[1])})")
+                if _queued_completion(printer_name, prev_job['job_id'], prev_job['filename']):
+                    # Group 65 fix review 4 (fix review 3's known gap): FCC queued the outgoing
+                    # print as finished, so nothing reviews it: the queue's line says so.
+                    state.add_log_entry(f"ℹ️ {print_deduct._esc(printer_name)}: {changed}.", "INFO")
+                else:
+                    detail = ("without measuring its progress — surfacing a review to weigh"
+                              if progress_unknown else
+                              "without a sampled end state — reviewing the previous job "
+                              "(couldn't confirm completed vs cancelled)")
+                    state.add_log_entry(f"❓ {print_deduct._esc(printer_name)}: {changed} {detail}.", "INFO")
             except Exception:
                 pass
             _dispatch_ambiguous_edge(printer_name, prev_job['filename'],
@@ -1139,6 +1208,9 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 end_job = prusalink_api.get_printer_job(fb_url, printer_name) or {}
             except Exception:
                 end_job = {}
+    # Group 65 fix review 4 (WY1 / WY7): a print FCC first meets at a park, with nothing
+    # latched, is latched there (below), so its park's read takes its start.
+    first_met = _first_met_at_park(printer_name, cur, pause_job)
     other_end = None
     park_change = None
     with _PRINT_TRACKER_LOCK:
@@ -1242,6 +1314,10 @@ def _track_print_edge(printer_name, state_info, fb_url):
         else:
             if is_cancel_edge:
                 cancel_without_latch = True
+            if first_met is not None and not (entry or {}).get('filename'):
+                # Group 65 fix review 4 (WY1 / WY7): latched at its park; the park block
+                # below reads its heads, and the read stands for its start (WX1).
+                entry = _PRINT_TRACKER[printer_name] = _met_at_park(entry, first_met, pause_progress)
             if entry is not None:
                 entry['state'] = cur
                 # Group 65.1 (1): FCC sees the printer: its print is seen, any lost
@@ -1269,9 +1345,7 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         'swap_log': print_deduct._validated_swap_log(entry, entry.get('job_id')),
                         'lost_contact': _lost_contact_from(entry, cur),
                     }
-                    entry = _PRINT_TRACKER[printer_name] = {
-                        'state': cur, 'job_id': pause_job.get('job_id'), 'filename': pause_job.get('filename'),
-                        'seen_at': time.time()}
+                    entry = _PRINT_TRACKER[printer_name] = _met_at_park(entry, pause_job, None)
                     if pause_progress is not None:
                         # Group 65 fix review 3 (WX7): the park's frozen progress is a real
                         # sample of the new print, so an end from this prompt is measured there.
@@ -1338,6 +1412,19 @@ def _track_print_edge(printer_name, state_info, fb_url):
                         if first and any(v is not None for v in first.values()):
                             e['start_spools'] = dict(first)
                             e['snapshot_job'] = str(park_read_job)
+        if not park:
+            # Group 65 fix review 4 (WY3): a read that kept nothing (a Spoolman blip), of a
+            # print FCC has no start snapshot for (one it first met at this park): read again
+            # at the next tick at the prompt, so its start isn't taken after the prompt. Five
+            # reads a park at most: a Spoolman that stays down mustn't hold up the watcher.
+            with _PRINT_TRACKER_LOCK:
+                e = _PRINT_TRACKER.get(printer_name)
+                if (e is not None and e.get('filename') and str(e.get('job_id')) == str(park_read_job)
+                        and e.get('snapshot_job') != str(park_read_job)):
+                    tries = int(e.get('park_reads') or 0) + 1
+                    e['park_reads'] = tries
+                    if tries < _PARK_READ_TRIES:
+                        e.pop('park_read', None)
     if cancel_without_latch:
         state.add_log_entry(
             f"🛑 Cancel detected on {printer_name}, but no active job was latched "
@@ -1346,11 +1433,20 @@ def _track_print_edge(printer_name, state_info, fb_url):
     if park_change is not None:
         try:
             # Group 65 fix review 3 (AX4): "after losing sight of the printer" only when it did.
-            found = (" FCC found after losing sight of the printer" if park_change.get('lost_contact') else "")
-            state.add_log_entry(
-                f"❓ {print_deduct._esc(printer_name)}: print job changed ({print_deduct._esc(park_change['from'])}→"
-                f"{print_deduct._esc(park_change['to'])}) at a park{found} — "
-                f"reviewing the previous job (couldn't confirm completed vs cancelled).", "INFO")
+            # Fix review 4 (WY8): after a restart, said as one (FCC itself was down).
+            lc = park_change.get('lost_contact') or {}
+            found = ("" if not lc else " FCC found after it restarted" if lc.get('why') == 'restart'
+                     else " FCC found after losing sight of the printer")
+            changed = (f"print job changed ({print_deduct._esc(park_change['from'])}→"
+                       f"{print_deduct._esc(park_change['to'])}) at a park{found}")
+            if _queued_completion(printer_name, park_change['job_id'], park_change['filename']):
+                # Fix review 4 (fix review 3's known gap): FCC queued the outgoing print as
+                # finished, so nothing reviews it: the queue's line says so.
+                state.add_log_entry(f"ℹ️ {print_deduct._esc(printer_name)}: {changed}.", "INFO")
+            else:
+                state.add_log_entry(
+                    f"❓ {print_deduct._esc(printer_name)}: {changed} — "
+                    f"reviewing the previous job (couldn't confirm completed vs cancelled).", "INFO")
         except Exception:
             pass
         _dispatch_ambiguous_edge(printer_name, park_change['filename'], park_change['job_id'],
@@ -1683,11 +1779,59 @@ def _end_lost_stretch(entry, job=None):
         if not still:
             entry.pop('park_heads', None)
             entry.pop('park_read', None)
+            entry.pop('park_reads', None)
     entry.pop('misses', None)
     entry.pop('lost_at', None)
     entry.pop('lost_why', None)
     if entry.get('filename'):
         entry['seen_at'] = time.time()
+    else:
+        # Group 65 fix review 4 (WY6): a restart's bound for a print it would meet at a park,
+        # and when FCC lost sight of an idle printer, spent once FCC sees the printer with no
+        # such print.
+        entry.pop('unseen_from', None)
+        entry.pop('unseen_since', None)
+
+
+def _met_at_park(entry, job, progress):
+    """Group 65 fix review 4 (WY1 / WY7): the latch of a print FCC first meets at a park
+    with nothing latched (the printer was idle when FCC lost sight of it, or FCC was down
+    when the print started; a restart that found FCC held the print before it): latched
+    as a park's job change latches the print it finds (WA1), so the park's read runs and
+    takes the spools there as its start (WX1), and the frozen progress is its sample
+    (WX7). `met_at_park` marks it until its start is read. `unseen_from` (WY6): when FCC
+    last saw the printer before, from the old latch, so a weighing at the prompt before
+    FCC saw the park is one FCC can't place."""
+    new = {'state': 'ATTENTION', 'job_id': job.get('job_id'), 'filename': job.get('filename'),
+           'seen_at': time.time(), 'met_at_park': True}
+    if progress is not None:
+        new['progress'] = float(progress)
+    old = entry or {}
+    since = next((old.get(k) for k in ('unseen_from', 'seen_at', 'lost_at', 'unseen_since')
+                  if old.get(k) is not None), None)
+    try:
+        if since is not None:
+            new['unseen_from'] = float(since)
+    except (TypeError, ValueError):
+        pass
+    return new
+
+
+def _first_met_at_park(printer_name, cur, job):
+    """The job read of a print FCC first meets at a park (Group 65 fix review 4, WY1 /
+    WY7), or None: the printer at ATTENTION with nothing latched, the read naming a print
+    (a real job id and its file) that FCC holds nothing for (_held_for_restart: no
+    ledger entry, review or queued record). Off the tracker lock: the stores are read."""
+    if cur != 'ATTENTION' or not isinstance(job, dict) or _latched(printer_name):
+        return None
+    if job.get('job_id') in (None, '', '0', 0) or not job.get('filename'):
+        return None
+    try:
+        if _held_for_restart(printer_name, job.get('job_id')) is not None:
+            return None
+    except Exception:
+        return None
+    return job
 
 
 def _say_other_end(name, fire, job, cur, restart=False, held=False):
@@ -2472,16 +2616,29 @@ def _recover_one_print_latch(name, entry, fb_url):
             # during the restart. Still FINISHED, and the job read names it: a
             # completion. Idempotent via the (printer, job_id) ledger, so a double
             # restart can't double-deduct.
-            state.add_log_entry(
-                f"✅ Recovering a completion missed during an FCC restart on {name} "
-                f"('{print_deduct._esc(filename)}') — printer still FINISHED.", "INFO")
+            if queued_complete:
+                # Group 65 fix review 4 (WY5): FCC saw this print finish before it restarted
+                # (the finished screen may be another print's, said above): its queued deduct
+                # goes on, from the spools read when it finished.
+                state.add_log_entry(
+                    f"✅ {print_deduct._esc(name)}: FCC saw '{print_deduct._esc(filename)}' finish before it "
+                    f"restarted and had queued its deduct, so it records it now, from the spools read "
+                    f"when it finished.", "INFO")
+            else:
+                state.add_log_entry(
+                    f"✅ Recovering a completion missed during an FCC restart on {name} "
+                    f"('{print_deduct._esc(filename)}') — printer still FINISHED.", "INFO")
+            # Group 65 fix review 4 (WY2): FCC had lost sight of the print before it restarted
+            # (the persisted latch keeps the stamps), so a spool it weighed meanwhile is held,
+            # as the live door holds it (RX2). A queued record keeps its own facts.
+            lost = None if queued_complete else _lost_contact_from(entry, cur)
             # 22.3: the persisted entry round-trips start_spools/snapshot_job/swap_log,
             # so a restart AFTER the snapshot was captured still detects a mid-print
             # swap; a restart BEFORE capture has no snapshot → None → auto-apply.
             _dispatch_completion_edge(name, filename, job_id, fb_url,
                                       start_spools=print_deduct._validated_start_spools(entry, job_id),
                                       swap_log=print_deduct._validated_swap_log(entry, job_id),
-                                      heads_when="restart")
+                                      heads_when="restart", **_edge_kwargs(lost_contact=lost))
             with _PRINT_TRACKER_LOCK:
                 _PRINT_TRACKER[name] = {'state': cur}
             return True
@@ -2498,6 +2655,20 @@ def _recover_one_print_latch(name, entry, fb_url):
         # telling Derek to weigh. Same machinery + wording as the live ambiguous
         # edge; idempotent via the (printer, job_id) ledger + review store, so a
         # double restart can't double-surface. NEVER auto-deducts.
+        # Group 65 fix review 4 (AY3 / WY4): what FCC already holds for the print comes first,
+        # as at the other doors (a completion it queued is the queue's: no review is opened).
+        # A queued cancel is fired again below: the printer is idle, and the edge computes it
+        # with its record's print-end read (the first read wins).
+        held = _held_for_restart(name, job_id)
+        queued = cancel_fetch_store.get_pending(name, job_id) if held else None
+        if held and not (isinstance(queued, dict) and queued.get("kind") != "complete"):
+            state.add_log_entry(
+                f"⚠️ {print_deduct._esc(name)}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in "
+                f"progress when FCC restarted, and the printer is {_state_said(cur)} now. {held}",
+                "WARNING", "ffaa00")
+            with _PRINT_TRACKER_LOCK:
+                _PRINT_TRACKER[name] = {'state': cur}
+            return True
         state.add_log_entry(
             f"❓ A print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress on {name} when FCC "
             f"restarted and it's now {print_deduct._esc(cur or 'idle')} — surfacing a review (couldn't "
@@ -2527,8 +2698,15 @@ def _recover_one_print_latch(name, entry, fb_url):
             f"⚠️ {print_deduct._esc(name)}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress "
             f"when FCC restarted, and the printer is at {print_deduct._esc(cur)} with another print now. {held}",
             "WARNING", "ffaa00")
+        # Group 65 fix review 4 (WY1): the print at this prompt is latched at its park by the
+        # first tick (_first_met_at_park), so its park read takes its start; it began after
+        # FCC last saw the held print, which bounds a weighing FCC can't place (WY6).
+        bare = {'state': cur}
+        since = entry.get('seen_at') if entry.get('seen_at') is not None else entry.get('lost_at')
+        if since is not None:
+            bare['unseen_from'] = since
         with _PRINT_TRACKER_LOCK:
-            _PRINT_TRACKER[name] = {'state': cur}
+            _PRINT_TRACKER[name] = bare
         return True
     # Group 65 fix review 2 (WA1): stamped as lost across the restart, as a silent
     # printer's is (WD11), so the live edge reads which print a park is, and an end

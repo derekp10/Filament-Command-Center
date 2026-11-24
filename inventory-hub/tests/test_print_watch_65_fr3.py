@@ -99,7 +99,9 @@ def test_recovery_at_a_prompt_leaves_a_queued_completion_to_the_queue(monkeypatc
     cancel_fetch_store.add_pending({"printer_name": "XL", "job_id": "7", "filename": "/usb/A.BGC",
                                     "kind": "complete", "end_heads": {"heads": [], "source": "print_end"}})
     assert _recover(monkeypatch, "ATTENTION", {"job_id": 8, "filename": "/usb/B.BGC", "progress": 0.2}) is True
-    assert print_monitor._PRINT_TRACKER["XL"] == {"state": "ATTENTION"}, print_monitor._PRINT_TRACKER
+    # Fix review 4 (WY1): bare, with when FCC last saw the held print, for the print it meets here.
+    assert print_monitor._PRINT_TRACKER["XL"] == {"state": "ATTENTION", "unseen_from": 900.0}, \
+        print_monitor._PRINT_TRACKER
     assert any("records its deduct once the printer is idle" in w for w in words), words
 
 

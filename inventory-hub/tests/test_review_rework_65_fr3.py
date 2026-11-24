@@ -78,7 +78,9 @@ def test_worked_out_for_the_whole_print_only_the_grams_past_what_fcc_saw_are_fil
     now = time.time()
     seen_at, back_at = now - 7200, now - 60
     weigh_stamps.note(57, "Quick Weigh", at=seen_at + 600)
-    _card(lost_contact=_lost(seen_at, back_at))
+    # Fix review 4 (RY2): the start snapshot FCC took names #57 on XL-1, so the share FCC saw
+    # printed is #57's.
+    _card(lost_contact=_lost(seen_at, back_at), start_spools={"0": 57})
     with _spoolman({57: 100.0, 58: 50.0}):
         ans = _recompute(rev=0, whole=True)
     row = next(r for r in ans["record"]["spools"] if r["sid"] == 57)
@@ -92,7 +94,7 @@ def test_the_applys_hold_splits_the_same_way(logs):
     now = time.time()
     seen_at, back_at = now - 7200, now - 60
     weigh_stamps.note(57, "Quick Weigh", at=seen_at + 600)
-    rec = _card(lost_contact=_lost(seen_at, back_at), progress=1.0, basis="whole",
+    rec = _card(lost_contact=_lost(seen_at, back_at), progress=1.0, basis="whole", start_spools={"0": 57},
                 spools=[{"sid": 57, "toolhead": "XL-1", "position": 0, "grams": 40.0}])
     held = print_deduct._held_at_apply(rec, rec["spools"][0], 57, 100.0)
     mark = print_deduct._held_mark(held, 40.0)

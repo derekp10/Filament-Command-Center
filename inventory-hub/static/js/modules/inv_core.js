@@ -1572,6 +1572,15 @@ const installWeightScanCapture = ({ match, onScan }) => {
         if (lettersLeft && window.clearScanBuffer) window.clearScanBuffer();
         putBack(el, label.restore);
     }, true);   // capture: before the box's own Enter handler and its window's keys
+    // Group 65 fix review 4 (CY3): whether this capture holds a label's keys still arriving:
+    // one proved by its ':' or '/', or letters typed in a weight box (a label's prefix, a
+    // scanner stalled after "ID"), within the accumulator's 2 s. A 🛑 card's redraw waits
+    // for it (cancel_review.js keysQuiet), or the label's last keys went to the fresh card.
+    window.fccWeightKeysHeld = () => {
+        const now = Date.now();
+        if (label && now - label.lastAt <= RESET_MS) return true;
+        return keys.some((x) => LETTER.test(x.k) && now - x.t <= RESET_MS);
+    };
     document.addEventListener('focusout', (e) => {
         if (e.target !== box || !label || Date.now() - label.lastAt > RESET_MS) return;
         // The focus left mid-label (to anything, a box a redraw put in its

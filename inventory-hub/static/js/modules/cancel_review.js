@@ -1074,8 +1074,14 @@
         const once = (xs) => xs.filter((x, i) => xs.findIndex((y) => String(y) === String(x)) === i);
         const sids = once(lines.map((p) => causes[p].sid).concat(rows.map((s) => s.sid)).filter((s) => s != null));
         const held = lines.concat(rows.map((s) => `row:${s.sid}`));
+        // Group 65 (fix review 3's known gap): the kinds of the held lines and rows, for the
+        // title's and the banner's words: weighed after the print ('known'), a change FCC
+        // can't place ('unsure'), weighed after FCC last saw the print with every gram on its
+        // line printed before that ('seen'), or weighed while FCC couldn't see it ('unseen').
+        const kindOf = (w) => (w.unseen ? 'unseen' : (w.seen ? 'seen' : (w.known_order ? 'known' : 'unsure')));
+        const kinds = once(lines.map((p) => kindOf(causes[p])).concat(rows.map((s) => kindOf(s.weighed))));
         return {
-            held, heldG, otherG: Math.max(0, total - heldG - retryG), sids,
+            held, heldG, otherG: Math.max(0, total - heldG - retryG), sids, kinds,
             retry, retryG, retryWho: spoolListWords(once(retry.map((s) => s.sid))),
             retryMany: once(retry.map((s) => s.sid)).length > 1,
             who: spoolListWords(sids), many: sids.length > 1,
@@ -1083,11 +1089,53 @@
             onlyHeld: held.length > 0 && lines.length === Object.keys(un).length && rows.length === allRows.length,
         };
     }
+    // What the card says its held spools did, after their names (`ended`: the banner's
+    // "after this print ended"). Group 64's two kinds keep their words; a spool FCC weighed
+    // while it couldn't see the print (Group 65, RX2 / RX4) is never said as weighed after
+    // the print ended.
+    function heldDid(h, ended) {
+        const was = h.many ? 'were weighed' : 'was weighed';
+        const k = h.kinds || [];
+        if (k.length === 1 && k[0] === 'seen') return `${was} after FCC last saw this print`;
+        if (k.length === 1 && k[0] === 'unseen') return `${was} while FCC couldn’t see this print`;
+        if (k.includes('seen') || k.includes('unseen')) return 'changed weight during or after this print';
+        return `${h.known ? was : 'changed weight'} ${ended ? 'after this print ended' : 'after this print'}`;
+    }
+    // The banner of a card of held lines only, one of them weighed while FCC couldn't see
+    // the print: when each weighing was, and what FCC knows of its order.
+    function unseenBanner(h) {
+        const who = esc(h.who);
+        const it = h.many ? 'them' : 'it';
+        const was = h.many ? 'were' : 'was';
+        const k = h.kinds || [];
+        if (k.length === 1 && k[0] === 'seen') {
+            return `FCC held these grams instead of charging them: ${who} ${was} weighed on FCC after FCC last
+                    saw this print, and the grams on ${h.many ? 'their lines' : 'its line'} were all printed
+                    before that, so the scale already counted them. <b>Apply</b> with the 0 g filled in to leave
+                    ${it} uncharged, or type the grams if that weighing came before them. Or <b>Discard</b>.`;
+        }
+        if (k.length === 1 && k[0] === 'unseen') {
+            return `FCC held these grams instead of charging them: ${who} ${was} weighed on FCC while FCC
+                    couldn’t see this print, so FCC can’t tell whether the scale counted all of
+                    ${h.many ? 'their' : 'its'} grams. Check each line, then <b>Apply</b>: the grams filled in
+                    if the weighing came before them, or 0 g if the scale already counted them. Or
+                    <b>Discard</b>.`;
+        }
+        if (h.known) {
+            return `FCC held these grams instead of charging them: ${who} ${was} weighed on FCC after the grams
+                    on ${h.many ? 'their lines' : 'its lines'} were printed, as each line says, so the scale
+                    already counted them. <b>Apply</b> with the 0 g filled in to leave ${it} uncharged, or type
+                    the grams if a weighing came before them. Or <b>Discard</b>.`;
+        }
+        return `FCC held these grams instead of charging them: ${who} changed weight during or after this print,
+                and FCC can’t tell for every line whether the scale counted its grams. Check each line, then
+                <b>Apply</b>: the grams filled in where the change came before them, or 0 g where the scale
+                already counted them. Or <b>Discard</b>.`;
+    }
     function shortfallTitle(rec, h) {
         const total = fmtG(rec.total_grams);
         if (h.onlyHeld) {
-            return `${fmtG(h.heldG)}g held: ${h.who} ${h.known ? (h.many ? 'were weighed' : 'was weighed')
-                : 'changed weight'} after this print`;
+            return `${fmtG(h.heldG)}g held: ${h.who} ${heldDid(h, false)}`;
         }
         if (!h.held.length && !h.retry.length) return `${total}g went to no spool`;
         const parts = [];
@@ -1098,6 +1146,7 @@
     }
     function shortfallBanner(rec, h) {
         const it = h.many ? 'them' : 'it';
+        if (h.onlyHeld && (h.kinds || []).some((k) => k === 'seen' || k === 'unseen')) return unseenBanner(h);
         if (h.onlyHeld && h.known) {
             return `FCC held these grams instead of charging them: ${esc(h.who)} ${h.many ? 'were' : 'was'} weighed
                     on FCC after this print ended, so the scale already counted ${it}. <b>Apply</b> with the
@@ -1133,8 +1182,7 @@
         }
         if (h.held.length) {
             parts.push(`The <b>${fmtG(h.heldG)}g</b> on ${esc(h.who)} ${h.many ? 'are' : 'is'} held, not charged:
-               ${h.many ? 'they' : 'it'} ${h.known ? (h.many ? 'were weighed' : 'was weighed') : 'changed weight'}
-               after this print ended, as ${h.many ? 'their lines say' : 'its line says'}.`);
+               ${h.many ? 'they' : 'it'} ${heldDid(h, true)}, as ${h.many ? 'their lines say' : 'its line says'}.`);
         }
         return parts.join(' ');
     }
@@ -1308,10 +1356,20 @@
             }
         }, true);
     }
+    // Group 65 fix review 4 (CY3): a scan that pauses inside its label for longer than 300 ms
+    // (a scanner stalled after "ID") is still arriving while the scan buffer holds its first
+    // keys, or the weight capture holds a label's letters (a scan typed into a grams box or
+    // How far it got never reaches the scan buffer): drawn under it, ":57" went out without
+    // its "ID". Both clear within the accumulator's 2 s, the wait's own cap.
+    function scanHeld() {
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+        return !!buf || (typeof window.fccWeightKeysHeld === 'function' && !!window.fccWeightKeysHeld());
+    }
     async function keysQuiet() {
         const start = Date.now();
         for (;;) {
-            const arriving = typeof window.scanIsArriving === 'function' && window.scanIsArriving();
+            const arriving = (typeof window.scanIsArriving === 'function' && window.scanIsArriving()) || scanHeld();
             if (!arriving && Date.now() - lastCharAt >= KEYS_QUIET_MS) return;
             if (Date.now() - start >= KEYS_QUIET_CAP_MS) return;
             await new Promise((r) => setTimeout(r, 50));
@@ -1924,7 +1982,12 @@
                 card.dataset.stale = '1';
                 return card;
             }
-            if (!rec) { card.remove(); updateCount(); refreshBadge(); closeIfEmpty(); return null; }
+            if (!rec) {
+                // Group 65 fix review 4 (CY1): settled, as its caller may say; a card that left
+                // the page meanwhile (the panel closed, or drawn again) returns null unmarked.
+                card._fccSettled = true;
+                card.remove(); updateCount(); refreshBadge(); closeIfEmpty(); return null;
+            }
             if (freshHeads) liveHeads[printer] = await fetchCandidates(printer);
             // Fix review 3 (CX2 / CX3 / CX4): never under a scan still arriving.
             if (keep) await keysQuiet();
@@ -1938,6 +2001,7 @@
             tmp.innerHTML = cardHtml(rec).trim();
             const fresh = tmp.firstElementChild;
             card.replaceWith(fresh);
+            fresh.dataset.drawnAt = String(Date.now());      // fix review 4 (CY4)
             if (liveHeads[printer]) withHeads(fresh, liveHeads[printer]);
             if (kept) {
                 fresh._fccKept = restoreCard(fresh, kept, keep);
@@ -2055,7 +2119,7 @@
             // Fix review 3: the card stays busy until it is drawn again (its redraw can wait for a
             // scan to finish), so an Enter in How far it got meanwhile works nothing out twice.
             const settled = (d && (d.status === 'recomputed' || d.stale || d.status === 'already_handled'));
-            if (!settled) delete card.dataset.recomputing;
+            if (!settled) { delete card.dataset.recomputing; delete card.dataset.queuedPct; }
             if (d && d.status === 'already_handled') {
                 // Group 65 review (PI1): the card goes from under the pointer (and the panel
                 // with it, when it was the only card): a double click's second press reaches
@@ -2078,6 +2142,7 @@
                     // to draw it: every button back (Discard too), and what the answer was (the
                     // card's own words then say the list couldn't be read).
                     delete card.dataset.recomputing;
+                    delete card.dataset.queuedPct;
                     btns.forEach((b) => { b.disabled = false; });
                     tell(card, d.stale ? 'This card changed since it was drawn, and FCC couldn’t draw it again here.'
                         : 'FCC worked it out, but couldn’t draw it here.');
@@ -2097,10 +2162,27 @@
                         : (kept ? 'your picks are kept: check the grams, then Confirm.' : 'check the grams, then Confirm.');
                     const gone = lost.length ? ' A pick on a line the card no longer has couldn’t be kept: pick it again.' : '';
                     // Fix review 3 (CX5): a percentage refused as stale is said as not worked out.
-                    const notDone = whole ? '' : ` ${fmt(payload.percent)}% wasn’t worked out: type it again if you still mean it.`;
+                    // Fix review 4 (CY4): unless the card FCC holds is at that percentage already
+                    // (another device worked it out there): it said both, and typing it again did nothing.
+                    const freshBox = fresh.querySelector('.fcc-cr-pct');
+                    const at = freshBox ? pctNumber(freshBox.getAttribute('value')) : NaN;
+                    const notDone = whole ? ''
+                        : (Number.isFinite(at) && at === Number(payload.percent))
+                            ? ` It is worked out at ${fmt(payload.percent)}% already: ${next}`
+                            : ` ${fmt(payload.percent)}% wasn’t worked out: type it again if you still mean it.`;
                     sayOnCard(fresh, d.stale
                         ? (d.msg || 'This card changed since it was drawn: it is drawn again as it is now.') + notDone
                         : `${how}: ${next}${gone}`);
+                    if (card.dataset.queuedPct === '1') {
+                        // Fix review 4 (CY2): an Enter in How far it got while the card was being
+                        // worked out: the figure it was pressed on (carried over the redraw) is
+                        // worked out now, as the person asked; it was dropped without a word.
+                        delete card.dataset.queuedPct;
+                        const typed = freshBox ? pctNumber(freshBox.value) : NaN;
+                        if (freshBox && PCT_FIGURE.test(freshBox.value) && Number.isFinite(typed) && typed !== at) {
+                            recompute(fresh, false);
+                        }
+                    }
                 }
                 // The redraw put new buttons where the pointer is: a double click's second
                 // press reaches nothing (Group 58's rule).
@@ -2328,10 +2410,26 @@
             // works nothing out (the card is that already). After a redraw the keyboard lands
             // here with that figure selected, and a double press's second Enter worked the card
             // out again ("whole" became "100%", a second log line).
-            const drawn = pctNumber(t.getAttribute('value'));
-            if (Number.isFinite(drawn) && pctNumber(t.value) === drawn) return;
             const card = t.closest('.fcc-cr-card');
-            if (card) recompute(card, false);
+            if (!card) return;
+            const drawn = pctNumber(t.getAttribute('value'));
+            if (Number.isFinite(drawn) && pctNumber(t.value) === drawn) {
+                // Fix review 4 (CY4): said, but not to a double press's second Enter right after
+                // the card was drawn (its own words stand).
+                if (card.dataset.recomputing !== '1' && Date.now() - Number(card.dataset.drawnAt || 0) >= 700) {
+                    const verb = card.dataset.kind === 'no_spool' ? 'Apply' : 'Confirm';
+                    sayOnCard(card, `It is worked out at ${fmt(drawn)}% already: check the grams, then ${verb}.`);
+                }
+                return;
+            }
+            if (card.dataset.recomputing === '1') {
+                // Fix review 4 (CY2): the card is still being worked out: the figure is worked
+                // out once it is drawn again (recompute), never dropped without a word.
+                card.dataset.queuedPct = '1';
+                sayOnCard(card, `Still working this card out: ${fmt(pctNumber(t.value))}% is worked out once it is drawn again.`);
+                return;
+            }
+            recompute(card, false);
         });
         overlay.addEventListener('keydown', (e) => {
             const t = e.target;
@@ -2441,19 +2539,27 @@
                 // (its next Apply posts what that shows), or still said to be unread. Posted
                 // as drawn, a spool an earlier Apply had charged read as a failure.
                 if (card.dataset.stale === '1') {
-                    e.target.disabled = true;
+                    // Group 65 fix review 4 (CY1): the card's other buttons wait too, as a
+                    // recompute's do: a basis press meanwhile drew it again under this read,
+                    // which then said a card FCC still holds was settled.
+                    const held = Array.from(card.querySelectorAll(
+                        '.fcc-cr-confirm, .fcc-cr-whole, .fcc-cr-workout, .fcc-cr-discard'));
+                    held.forEach((b) => { b.disabled = true; });
                     // Group 65 fix review (CD2) and fix review 2 (CA2): the picks, read right
                     // before the fresh card takes its place, after the redraw's own reads.
                     const fresh = await rerenderCard(card, true, { from: 'confirm' });
                     if (fresh && fresh !== card) {
                         sayOnCard(fresh, 'Drawn again as FCC holds this card now: check it, then Apply.');
                     } else if (fresh) {
+                        held.forEach((b) => { b.disabled = false; });
                         sayOnCard(card, '');
                         toast(STALE_CARD_WORDS, 'warning', 7000);
-                    } else {
+                    } else if (card._fccSettled) {
                         toast('That card was already settled: nothing more to apply on it.', 'info');
                         if (body.querySelector('.fcc-cr-card')) sayOnPanel('That card was already settled: nothing more to apply on it.');
                     }
+                    // Else the card left the page meanwhile (🛑 Review closed): nothing was
+                    // applied, FCC still holds it, and there is nothing to say.
                     return;
                 }
                 // 43.3: explicit picks become `charges`; a card whose rows all keep

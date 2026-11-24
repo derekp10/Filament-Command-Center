@@ -104,9 +104,11 @@ def test_failed_probes_stamp_the_latch_and_a_good_one_clears_the_stamps(monkeypa
 
 
 def test_an_idle_printer_with_no_print_gets_no_stamps(clock):
+    # Group 65 fix review 4 (WY6): no lost-contact stamps, only when FCC first missed the idle
+    # printer (`unseen_since`), for a print it then meets at a park.
     print_monitor._PRINT_TRACKER["XL"] = {"state": "IDLE"}
     _miss(4, clock)
-    assert print_monitor._PRINT_TRACKER["XL"] == {"state": "IDLE"}
+    assert print_monitor._PRINT_TRACKER["XL"] == {"state": "IDLE", "unseen_since": 1000.0}
 
 
 def test_the_stamps_ride_the_latch_file(clock):
