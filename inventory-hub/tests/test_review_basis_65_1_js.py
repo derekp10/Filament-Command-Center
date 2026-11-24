@@ -170,3 +170,39 @@ return { refused, staleRev: cardOf('a').dataset.rev, staleNotice: notice('a') };
 """, {"pending": _cards(), "spools": SPOOLS})
     assert "already charged" in res["refused"]["notice"] and res["refused"]["enabled"] is True, res
     assert res["staleRev"] == "3" and "drawn again" in res["staleNotice"], res
+
+
+# ---- 65.1 (1c): the "couldn't measure" card ---------------------------------------------------------
+
+UNMEASURED_LOOK_JS = r"""
+const out = {};
+for (const j of ['u', 'f', 'w', 'x']) {
+  const c = cardOf(j);
+  const box = c.querySelector('.fcc-cr-pct');
+  out[j] = { whole: !!c.querySelector('.fcc-cr-whole'), pct: box ? box.value : null,
+             apply: !!c.querySelector('.fcc-cr-confirm'), text: c.textContent.replace(/\s+/g, ' ') };
+}
+return out;
+"""
+
+
+def test_the_couldnt_measure_card_offers_what_its_file_can_give(tmp_path):
+    cards = [
+        _base("u", "progress_unknown", ambiguous=True, progress=0.0, total_grams=0.0, unmeasured_reason="unsampled",
+              usage_map=None, figures=FIG, rev=1),
+        _base("f", "progress_unknown", ambiguous=True, progress=0.5, total_grams=0.0,
+              unmeasured_reason="unreadable_moves", usage_map=None, figures={"footer": {"0": 40.0}}),
+        _base("w", "no_spool", ambiguous=True, progress=1.0, total_grams=50.0, usage_map={"0": 40.0, "1": 10.0},
+              unmeasured_was="unsampled", basis="whole", rev=2, figures=FIG),
+        _base("x", "progress_unknown", ambiguous=True, progress=0.0, total_grams=0.0, unmeasured_reason="no_footer",
+              usage_map=None),
+    ]
+    res = run(tmp_path, RESPOND_JS + UNMEASURED_LOOK_JS, {"pending": cards, "spools": SPOOLS})
+    assert (res["u"]["whole"], res["u"]["pct"], res["u"]["apply"]) == (True, "", False), res["u"]
+    assert "FCC read the print's file afterwards" in res["u"]["text"], res["u"]
+    assert (res["f"]["whole"], res["f"]["pct"]) == (True, None), res["f"]                 # no percent: moves unread
+    assert "can't read this file's moves" in res["f"]["text"], res["f"]
+    assert (res["w"]["whole"], res["w"]["pct"], res["w"]["apply"]) == (True, "100", True), res["w"]
+    assert "TESTER — 50g for the whole print, spools to pick" in res["w"]["text"], res["w"]
+    assert "FCC couldn't tell how far this print got, so it's worked out for the whole print" in res["w"]["text"], res["w"]
+    assert (res["x"]["whole"], res["x"]["pct"]) == (False, None), res["x"]                # no figures: as before

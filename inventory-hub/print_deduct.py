@@ -2746,6 +2746,18 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
                       and not prusalink_api.parse_footer_usage(content) else "no_footer")
         elif not measured.get("whole"):
             reason = "unreadable_moves"
+            if figures_out is not None:
+                # Group 65.1 (1c): the footer alone (no percent can be placed in moves
+                # FCC can't read), for Charge the whole print.
+                try:
+                    footer = {t: float(g) for t, g in (measured.get("footer") or {}).items() if (g or 0) > 0}
+                    sole = _sole_position(printer_name, list(footer)) if len(footer) == 1 else None
+                    if sole is not None:
+                        footer = {sole: next(iter(footer.values()))}
+                    if footer:
+                        figures_out["footer"] = {str(_norm_pos(k)): round(v, 4) for k, v in footer.items()}
+                except Exception:
+                    pass
         else:
             reason = "nothing_reached"
         terminal = {"status": "no_usage", "job_id": job_id, "reason": reason}
@@ -4615,10 +4627,16 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         # fold to a misleading no_usage 0g and permanently lose it; the footer would
         # massively over-deduct. So don't compute or download — stash a
         # non-destructive "couldn't measure usage — weigh the spool" review.
-        return _stash_unresolved_review(printer_name, filename, job_id,
-                                        reached_fraction, usage_map=None,
-                                        progress_unknown=True, ambiguous=ambiguous,
-                                        reason=unmeasured_reason, **seen)
+        out = _stash_unresolved_review(printer_name, filename, job_id,
+                                       reached_fraction, usage_map=None,
+                                       progress_unknown=True, ambiguous=ambiguous,
+                                       reason=unmeasured_reason, **seen)
+        if unmeasured_reason == "unsampled" and ambiguous:
+            # Group 65.1 (1c): the print ended (or FCC restarted) before FCC read its
+            # progress, and the printer is idle: its file is read once for the card's
+            # figures, so the card can charge the whole print or a percentage typed.
+            _figures_for_unmeasured(printer_name, filename, job_id, fb_url)
+        return out
 
     # Group 64.2 (10): the print reached its last recorded swap, so the partial is
     # computed at least that far (a fetch record queued before the live edge did
@@ -4665,7 +4683,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
                     return terminal
                 return _stash_unresolved_review(
                     printer_name, filename, job_id, reached_fraction, usage_map=None,
-                    progress_unknown=True, ambiguous=True, reason=reason, **seen)
+                    progress_unknown=True, ambiguous=True, reason=reason, **kept)
             print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                               scale=reached_fraction, grams=0)
         elif terminal["status"] == "error":
@@ -4761,6 +4779,43 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
               "printer_name": printer_name, "job_id": str(job_id)})
     return {"status": "pending", "spools": len(rows), "total_grams": total,
             "job_id": str(job_id)}
+
+
+def _figures_for_unmeasured(printer_name, filename, job_id, fb_url):
+    """Group 65.1 (1c): one download of an unsampled end's file, for its "couldn't
+    measure" card's figures (the end's own thread, off the watcher; the card was stashed
+    first, so a restart during the download loses nothing). Added to the card only while
+    it is still that card with no figures (claimed by a pop, as an Apply claims it: one
+    applied or discarded meanwhile is left alone). A download that fails, or a file with
+    no footer, leaves the card as it was ("weigh the spool"). Never raises."""
+    try:
+        if fb_url is None:
+            _, fb_url = config_loader.get_api_urls()
+        creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
+        if not creds:
+            return
+        figs = {}
+        _compute_cancel_usage(printer_name, filename, job_id, 1.0, creds.get('ip_address'),
+                              creds.get('api_key'), ambiguous=True, figures_out=figs)
+        if not figs.get("footer"):
+            return
+        rec = cancel_review_store.pop_pending(printer_name, job_id)
+        if rec is None:
+            return
+        if rec.get("kind") == "progress_unknown" and not rec.get("figures"):
+            rec["figures"] = figs
+            rec["rev"] = int(rec.get("rev") or 0) + 1
+        cancel_review_store.add_pending(rec)
+        if rec.get("figures") is figs:
+            state.add_log_entry(
+                f"📝 {_esc(printer_name)}: read '{_esc(filename)}' for its review: Charge the whole print, or the "
+                f"percentage it got to, can now be worked out on its card.", "INFO", "6cb2eb",
+                meta={"type": "cancel_deduct_pending", "printer_name": printer_name, "job_id": str(job_id)})
+    except Exception as e:
+        try:
+            state.logger.warning(f"65.1 (1c): no figures for {printer_name} job {job_id}: {e}")
+        except Exception:
+            pass
 
 
 def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_fraction, fb_url,
@@ -5677,8 +5732,16 @@ def api_cancel_deduct_recompute():
     if rec.get("requested_total") is not None:
         return refuse("Part of this print is already charged, so it can't be worked out again: charge the rest "
                       "as shown, or Discard and weigh the spools.")
+    if not whole and not (figures.get("by_pct") or {}):
+        return refuse("FCC can't read this file's moves, so it can only charge the whole print.")
+    base = rec
+    if rec.get("kind") == "progress_unknown":
+        # Group 65.1 (1c): a "couldn't measure" card becomes a card to pick on, each
+        # head's line unpicked (FCC never read the heads for such an end).
+        base = dict(rec, kind="no_spool", usage_map={}, spools=[], unmeasured_was=rec.get("unmeasured_reason"))
+        base.pop("unmeasured_reason", None)
     try:
-        fresh = _rescale_review(rec, _grams_at_basis(figures, None if whole else percent))
+        fresh = _rescale_review(base, _grams_at_basis(figures, None if whole else percent))
     except _RescaleRefused as e:
         return refuse(str(e))
     seen = rec.get("seen_progress", rec.get("progress"))

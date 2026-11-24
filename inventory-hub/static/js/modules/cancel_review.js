@@ -1228,7 +1228,15 @@
     function basisPct(rec) {
         if (rec.basis === 'whole') return 100;
         if (typeof rec.basis === 'number') return rec.basis;
+        // Group 65.1 (1c): an end FCC never sampled has no last percentage to offer.
+        if (rec.kind === 'progress_unknown' || rec.unmeasured_was) return '';
         return Math.round((Number(rec.progress) || 0) * 1000) / 10;
+    }
+    // Group 65.1 (1c): figures for every percent, or only the footer (a file whose
+    // moves FCC can't read: Charge the whole print only).
+    function hasPercents(rec) {
+        const b = rec && rec.figures && rec.figures.by_pct;
+        return !!(b && typeof b === 'object' && Object.keys(b).length);
     }
     function basisWords(rec) {
         const seen = Math.round((Number(rec.seen_progress != null ? rec.seen_progress : rec.progress) || 0) * 100);
@@ -1241,17 +1249,20 @@
         const id = `fcc-cr-pct-${String(rec.printer_name)}-${String(rec.job_id)}`.replace(/[^A-Za-z0-9_-]/g, '-');
         const said = rec.basis === 'whole' ? 'Worked out for the whole print.'
             : (typeof rec.basis === 'number' ? `Worked out at ${fmt(rec.basis)}%.` : '');
-        return `
-            <div class="fcc-cr-basis" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px 0;">
-                ${offerWhole ? `<button type="button" class="btn btn-sm btn-outline-info fcc-cr-whole">Charge the whole print</button>` : ''}
+        const pct = basisPct(rec);
+        const box = !hasPercents(rec) ? '' : `
                 <label for="${id}" style="color:#ddd;margin:0;">How far it got:</label>
                 <div class="input-group input-group-sm" style="width:auto;flex:none;">
                     <input type="text" inputmode="decimal" id="${id}" autocomplete="off"
                            class="form-control bg-dark text-white border-secondary fcc-cr-pct fcc-weight-box"
-                           value="${fmt(basisPct(rec))}" style="width:4.5rem;" placeholder="e.g. 62" />
+                           value="${pct === '' ? '' : fmt(pct)}" style="width:4.5rem;" placeholder="e.g. 62" />
                     <span class="input-group-text bg-dark text-light border-secondary">%</span>
                 </div>
-                <button type="button" class="btn btn-sm btn-outline-info fcc-cr-workout">Work it out</button>
+                <button type="button" class="btn btn-sm btn-outline-info fcc-cr-workout">Work it out</button>`;
+        return `
+            <div class="fcc-cr-basis" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px 0;">
+                ${offerWhole ? `<button type="button" class="btn btn-sm btn-outline-info fcc-cr-whole">Charge the whole print</button>` : ''}
+                ${box}
                 ${said ? `<span class="fcc-cr-basis-said" style="color:#9fd3ff;">${said}</span>` : ''}
             </div>`;
     }
@@ -1309,7 +1320,13 @@
         const noted = Object.keys(rec.unresolved_notes || {}).length > 0;
         // Review fix: such a card's heads may well have had a spool (one that
         // changed during the print), so its header says what its banner says.
-        const header = isNoSpool
+        // Group 65.1 (1c): a "couldn't measure" card FCC read the file for afterwards has
+        // figures; worked out, it is a card to pick on that says what it was worked out at.
+        const fromUnmeasured = isNoSpool && !!rec.unmeasured_was;
+        const header = fromUnmeasured
+            ? `❓ ${esc(rec.printer_name)} — ${total}g ${rec.basis === 'whole' ? 'for the whole print'
+                : `at ${fmt(rec.basis)}%`}, spools to pick`
+            : isNoSpool
             ? `⚠️ ${esc(rec.printer_name)} — ${total}g computed, ${noted ? 'spool not certain' : 'no spool bound'}`
             : `❓ ${esc(rec.printer_name)} — couldn't measure usage`;
         // Review fix: a line that is a set of spools asks for each one's grams.
@@ -1319,7 +1336,19 @@
             : sets === keys.length ? `<b>Type the grams each spool used</b> (or put them all on one)`
             : `<b>Pick the spool each head used</b> (on a head with several spools, <b>type the grams each
                one used</b>)`;
-        const banner = isNoSpool && noted
+        const banner = fromUnmeasured
+            ? `FCC couldn't tell how far this print got, so it's worked out
+               ${rec.basis === 'whole' ? '<b>for the whole print</b>' : `at <b>${fmt(rec.basis)}%</b>`}:
+               <b>${total}g</b>. FCC didn't read the heads when it ended, so ${ask.charAt(0) === '<'
+                ? ask.replace('<b>Pick', '<b>pick').replace('<b>Type', '<b>type') : ask}, then <b>Apply</b>.
+               You can work it out again above. Or <b>Discard</b> if you've already trued it up.`
+            : !isNoSpool && hasFigures(rec)
+            ? `${unmeasuredBanner(rec)} ${hasPercents(rec)
+                ? `FCC read the print's file afterwards: press <b>Charge the whole print</b> if it finished, or
+                   type how far it got and press <b>Work it out</b>, then pick the spool each head used.`
+                : `FCC can't read this file's moves, but its slicer total is known: press <b>Charge the whole
+                   print</b> if it finished, then pick the spool each head used.`}`
+            : isNoSpool && noted
             ? `FCC computed this print used <b>${total}g</b>, but isn't sure which spool it came from
                on the heads below. ${ask}, then <b>Apply</b>. Or
                <b>Discard</b> if you've already trued it up.`
@@ -1351,7 +1380,7 @@
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
                     ${banner}
                 </div>
-                ${isNoSpool ? basisHtml(rec, !!rec.ambiguous) : ''}
+                ${isNoSpool ? basisHtml(rec, !!rec.ambiguous || fromUnmeasured) : basisHtml(rec, true)}
                 ${lines}
                 <div style="display:flex;flex-direction:row-reverse;justify-content:flex-start;gap:8px;margin-top:10px;">
                     ${applyBtn}
