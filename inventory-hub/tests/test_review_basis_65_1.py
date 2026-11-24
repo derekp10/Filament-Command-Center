@@ -196,7 +196,9 @@ def test_the_whole_print_is_each_footer_head_one_the_walk_cant_see_included():
 
 def test_a_head_with_grams_only_at_the_new_basis_gets_the_spool_the_end_read_found(monkeypatch):
     heads = HEADS + [{"toolhead": "XL-3", "position": 2, "sid": 60, "sids": [60]}]
-    _card(heads_at_end=heads)
+    # The start snapshot the builder kept (Group 65 review, RW4): #60 was on XL-3 when the
+    # print started too, so the builder's rule makes it a row.
+    _card(heads_at_end=heads, start_spools={"0": 57, "2": 60}, swap_log=[])
     monkeypatch.setattr(print_deduct, "_spool_read",
                         lambda sid: {"id": sid, "used_weight": 300.0, "initial_weight": 1000.0} if sid == 60 else None)
     monkeypatch.setattr(print_deduct.spoolman_api, "format_spool_display",
@@ -222,10 +224,17 @@ def test_a_split_head_moves_only_its_last_stretch_and_refuses_a_basis_before_it(
     assert cancel_review_store.get_pending("XL", "J-1")["rev"] == 1         # left as it was
 
 
-def test_a_weighed_rows_0g_stays_and_an_unsure_holds_figure_follows():
+def test_a_weighed_rows_0g_stays_and_an_unsure_holds_figure_follows(monkeypatch):
+    # Group 65 review (CM3): the marks are worked out again from Decision 1's own check.
+    at = 1795000000.0
+    found = {0: {"sid": 57, "toolhead": "XL-1", "then": 100.0, "now": 160.0, "ours": 0.0,
+                 "stamp": {"at": at + 60, "how": "Quick Weigh"}, "ended": at, "source": "print_end"},
+             1: {"sid": 58, "toolhead": "XL-2", "then": 50.0, "now": 53.0, "ours": 0.0, "stamp": None,
+                 "ended": at, "source": "print_end"}}
+    monkeypatch.setattr(print_deduct, "_weighed_since_end", lambda heads, end_at, source=None: found)
     rows = [_row(57, 0, 12.0, prefill=0.0, weighed={"words": "w", "known_order": True}),
             _row(58, 1, 3.0, prefill=3.0, weighed={"words": "w", "known_order": False})]
-    _card(spools=rows, unresolved_usage={})
+    _card(spools=rows, unresolved_usage={}, end_at_s=at)
     _post(percent=62)
     by = {r["sid"]: r for r in cancel_review_store.get_pending("XL", "J-1")["spools"]}
     assert (by[57]["grams"], by[57]["prefill"]) == (24.8, 0.0), by[57]
@@ -242,7 +251,7 @@ def test_a_no_spool_cards_lines_take_their_new_totals():
 @pytest.mark.parametrize("more,body,words", [
     ({"rev": 2}, {"percent": 62, "rev": 1}, "changed since it was drawn"),
     ({"figures": None}, {"percent": 62}, "kept no figures"),
-    ({"requested_total": 15.0}, {"percent": 62}, "already charged"),
+    ({"requested_total": 15.0, "applied_g": 4.0}, {"percent": 62}, "already charged"),
     ({"kind": "shortfall"}, {"percent": 62}, "kept no figures"),
 ], ids=["stale rev", "no figures", "part-applied", "uncharged-grams card"])
 def test_a_card_that_cant_be_worked_out_again_is_left_as_it_was(more, body, words):

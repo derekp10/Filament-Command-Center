@@ -27,6 +27,7 @@ import copy
 import functools
 import html
 import math
+import re
 import requests  # type: ignore
 import time
 
@@ -1161,6 +1162,9 @@ _HEADS_WORDS = {
     # the spools read when it saw the printer again, never "when the print ended".
     "back": "when FCC saw the printer again",
     "during": "during the print",
+    # Group 65 review (OR1): a card with no print-end read, whose Decision 1 moment is
+    # the last time FCC saw the print (an end it saw only after losing contact).
+    "seen": "when FCC last saw the print",
 }
 
 
@@ -2195,7 +2199,7 @@ def _held_at_apply(rec, row, sid, used_now, shown=None):
         return dict(info, toolhead=_hold_head(rec, row, sid))
     left = (rec.get("swap_left_at") or {}).get(str(sid))
     if left is None:
-        return None
+        return _held_by_stamp(rec, row, sid, used_now, end_at, mark)
     stamp = weigh_stamps.weighed_after(sid, left)
     if not stamp:
         return None
@@ -2206,6 +2210,28 @@ def _held_at_apply(rec, row, sid, used_now, shown=None):
         pass
     return {"sid": sid, "toolhead": _hold_head(rec, row, sid), "then": None,
             "now": round(used_now, 2), "ours": 0.0, "stamp": stamp, "ended": float(left), "left": True}
+
+
+def _held_by_stamp(rec, row, sid, used_now, end_at, mark):
+    """Decision 1 at the Apply for a spool the card kept no print-end weight for (Group
+    65 review, OR1): a card with no print-end read (a "couldn't measure" card worked
+    out from its file), or a spool the read didn't name. Only a weighing FCC itself
+    made after the card's end moment can be seen: it counted the spool's share, so the
+    row is held at 0 g. Any other change can't be told without the weight then."""
+    if end_at is None:
+        return None
+    stamp = weigh_stamps.weighed_after(sid, end_at)
+    if not stamp:
+        return None
+    try:
+        if (mark is not None and mark.get("stamp_at") is not None
+                and stamp["at"] <= float(mark["stamp_at"]) + 0.001):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return {"sid": sid, "toolhead": _hold_head(rec, row, sid), "then": None, "now": round(used_now, 2),
+            "ours": 0.0, "stamp": stamp, "ended": float(end_at),
+            "source": rec.get("heads_source") or rec.get("end_at_source")}
 
 
 def _held_mark(late, grams):
@@ -4104,7 +4130,8 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                              progress_unknown=False, ambiguous=False, reason=None,
                              heads=None, heads_source=None, heads_read_at=None,
                              notes=None, phrases=None, sets=None, swap_left_at=None, end_at_s=None,
-                             mmu_shared=None, lost_contact=None, figures=None):
+                             mmu_shared=None, lost_contact=None, figures=None,
+                             start_spools=None, swap_log=None, end_at_source=None):
     """Stash a persistent, RECOVERABLE review for a print whose usage couldn't be
     finalized — INSTEAD of writing a destructive terminal grams=0 ledger entry that
     would permanently block recovery (the 2026-06-13 silent-loss bug). Two kinds:
@@ -4140,7 +4167,11 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
     `swap_left_at` and `end_at_s` (Group 64 full review, FX2): what its Apply checks
     Decision 1 against, as a card with rows keeps them (_swap_left_at, the print-end
     read's moment): a set's spool that left its head at a swap and was weighed on FCC
-    after that is held at the Apply, not charged its share on top.
+    after that is held at the Apply, not charged its share on top. A "couldn't
+    measure" card keeps `end_at_s` too (Group 65 review, OR1), with `end_at_source`
+    "seen" when it is the last time FCC saw the print, for its Apply once its file
+    gives it figures. `start_spools` and `swap_log` (Group 65 review, RW4 / CM2): what
+    a card with figures judges a head it hadn't judged by when it is worked out again.
 
     Writes NO ledger entry — the review stays recoverable until confirm/dismiss.
     Idempotent: no-ops if a review is already pending or the job was already settled.
@@ -4234,6 +4265,17 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
             record["unresolved_notes"] = kept
     if figures:
         record["figures"] = figures               # Group 65.1 (1b)
+        # Group 65 review (RW4 / CM2): what the rescale judges a newly used head by.
+        if start_spools is not None:
+            record["start_spools"] = start_spools
+        if swap_log is not None:
+            record["swap_log"] = swap_log
+    if not no_spool and end_at_s is not None:
+        # Group 65 review (OR1): a "couldn't measure" card's Decision 1 moment, for its
+        # Apply once its file gives it figures (_held_by_stamp).
+        record["end_at_s"] = end_at_s
+        if end_at_source:
+            record["end_at_source"] = end_at_source
     if lost_contact:
         # Group 65.1 (1): FCC lost sight of the print before it ended; the card says so.
         record["lost_contact"] = lost_contact
@@ -4612,6 +4654,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     # Group 65.1 (1): an end FCC saw only after it lost sight of the print; every
     # review this opens keeps it, and its card and log line say so.
     seen = _given(lost_contact=lost_contact or None)
+    # Group 65 review (OR1): a "couldn't measure" card's Decision 1 moment.
+    unmeasured_end = _unmeasured_end(end_heads, lost_contact)
 
     if print_deduct_ledger.was_deducted(printer_name, job_id):
         # Already confirmed/dismissed. Clear any stale pending so the invariant
@@ -4630,7 +4674,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         out = _stash_unresolved_review(printer_name, filename, job_id,
                                        reached_fraction, usage_map=None,
                                        progress_unknown=True, ambiguous=ambiguous,
-                                       reason=unmeasured_reason, **seen)
+                                       reason=unmeasured_reason, **seen, **unmeasured_end)
         if unmeasured_reason == "unsampled" and ambiguous:
             # Group 65.1 (1c): the print ended (or FCC restarted) before FCC read its
             # progress, and the printer is idle: its file is read once for the card's
@@ -4683,7 +4727,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
                     return terminal
                 return _stash_unresolved_review(
                     printer_name, filename, job_id, reached_fraction, usage_map=None,
-                    progress_unknown=True, ambiguous=True, reason=reason, **kept)
+                    progress_unknown=True, ambiguous=True, reason=reason, **kept, **unmeasured_end)
             print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                               scale=reached_fraction, grams=0)
         elif terminal["status"] == "error":
@@ -4781,13 +4825,32 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
             "job_id": str(job_id)}
 
 
+def _unmeasured_end(end_heads, lost_contact):
+    """{end_at_s[, end_at_source]} for a "couldn't measure" card (Group 65 review, OR1):
+    the last time FCC saw the print when it ended unseen ("seen": a weighing FCC made
+    after that came after the print's share), else the print-end read's moment, else
+    now (the edge itself: FCC saw the printer idle, the print over)."""
+    lc = lost_contact if isinstance(lost_contact, dict) else {}
+    for key in ("seen_at", "lost_at"):
+        try:
+            if lc.get(key) is not None:
+                return {"end_at_s": float(lc[key]), "end_at_source": "seen"}
+        except (TypeError, ValueError):
+            continue
+    at = _end_epoch(end_heads) if end_heads else None
+    return {"end_at_s": at if at is not None else time.time()}
+
+
 def _figures_for_unmeasured(printer_name, filename, job_id, fb_url):
     """Group 65.1 (1c): one download of an unsampled end's file, for its "couldn't
     measure" card's figures (the end's own thread, off the watcher; the card was stashed
     first, so a restart during the download loses nothing). Added to the card only while
-    it is still that card with no figures (claimed by a pop, as an Apply claims it: one
-    applied or discarded meanwhile is left alone). A download that fails, or a file with
-    no footer, leaves the card as it was ("weigh the spool"). Never raises."""
+    it is still exactly the card read with no figures (cancel_review_store.replace_if:
+    one applied, discarded or changed meanwhile is left alone, and a Discard in that
+    window acts on the card it finds; Group 65 review, OR2). A download that fails, or a
+    file with no footer, leaves the card as it was ("weigh the spool"). Its line says
+    what the card can now work out (Group 65 review, RW5: a percentage only when FCC
+    can read the file's moves). Never raises."""
     try:
         if fb_url is None:
             _, fb_url = config_loader.get_api_urls()
@@ -4799,18 +4862,19 @@ def _figures_for_unmeasured(printer_name, filename, job_id, fb_url):
                               creds.get('api_key'), ambiguous=True, figures_out=figs)
         if not figs.get("footer"):
             return
-        rec = cancel_review_store.pop_pending(printer_name, job_id)
-        if rec is None:
+        rec = cancel_review_store.get_pending(printer_name, job_id)
+        if rec is None or rec.get("kind") != "progress_unknown" or rec.get("figures"):
             return
-        if rec.get("kind") == "progress_unknown" and not rec.get("figures"):
-            rec["figures"] = figs
-            rec["rev"] = int(rec.get("rev") or 0) + 1
-        cancel_review_store.add_pending(rec)
-        if rec.get("figures") is figs:
-            state.add_log_entry(
-                f"📝 {_esc(printer_name)}: read '{_esc(filename)}' for its review: Charge the whole print, or the "
-                f"percentage it got to, can now be worked out on its card.", "INFO", "6cb2eb",
-                meta={"type": "cancel_deduct_pending", "printer_name": printer_name, "job_id": str(job_id)})
+        fresh = dict(rec, figures=figs, rev=int(rec.get("rev") or 0) + 1)
+        if not cancel_review_store.replace_if(printer_name, job_id, rec, fresh):
+            return
+        can = ("Charge the whole print, or the percentage it got to, can now be worked out on its card."
+               if figs.get("by_pct") else
+               "Charge the whole print can now be worked out on its card (FCC can't read this file's moves, "
+               "so not a percentage).")
+        state.add_log_entry(
+            f"📝 {_esc(printer_name)}: read '{_esc(filename)}' for its review: {can}", "INFO", "6cb2eb",
+            meta={"type": "cancel_deduct_pending", "printer_name": printer_name, "job_id": str(job_id)})
     except Exception as e:
         try:
             state.logger.warning(f"65.1 (1c): no figures for {printer_name} job {job_id}: {e}")
@@ -4863,7 +4927,8 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
                                         phrases=phrases, **_given(heads_read_at=read_at, sets=sets or None,
                                                                   swap_left_at=_swap_left_at(swap_log) or None,
                                                                   end_at_s=end_at, lost_contact=lost_contact,
-                                                                  figures=figures))
+                                                                  figures=figures),
+                                        **_rework_facts(figures, start_spools, swap_log))
     # Re-check after the (slow) gcode download+parse — if the job was processed
     # in the meantime, don't stash a stale pending.
     if print_deduct_ledger.was_deducted(printer_name, job_id):
@@ -4900,6 +4965,7 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
         record["lost_contact"] = lost_contact     # Group 65.1 (1)
     if figures:
         record["figures"] = figures               # Group 65.1 (1b)
+        record.update(_rework_facts(figures, start_spools, swap_log))
     cancel_review_store.add_pending(record)
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
     lead = ("❓ Print on {p} reached idle (~{pct:.0f}%, couldn't confirm cancel vs "
@@ -4920,8 +4986,15 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
 def api_cancel_deduct_pending():
     """All pending cancelled-print partial-deduct reviews awaiting confirm/
     dismiss. Drives the preview overlay (§9.7) and survives log scroll-off /
-    restart."""
-    return jsonify({"pending": cancel_review_store.list_pending()})
+    restart. A card with figures says whether it can be worked out again
+    (`rework_refused`: the recompute's refusal in words, or None; Group 65 review,
+    PI5), so it offers its controls only when the recompute takes them."""
+    out = []
+    for rec in cancel_review_store.list_pending():
+        if isinstance(rec, dict) and rec.get("figures"):
+            rec = dict(rec, rework_refused=_rework_refusal(rec))
+        out.append(rec)
+    return jsonify({"pending": out})
 
 
 @app.route('/api/cancel_deduct/candidates', methods=['GET'])
@@ -5628,16 +5701,161 @@ def _new_row_for(sid, pos, toolhead, grams):
             "ambiguous": False, "at_new_basis": True}
 
 
-def _rescale_review(rec, grams_at):
+def _final_stretch(segs, end_point):
+    """A split head's last stretch, (row, segment), or None when its shares don't name
+    one (Group 65 review, CM1): the stretch ending at the card's own end (`to` None for
+    a completion's split, else the cut at the card's progress, the `end` the builder's
+    _split_held_swaps gave a cancel's or an ambiguous end's split) that starts last."""
+    def _ends_here(seg):
+        to = seg.get("to")
+        if to is None:
+            return True
+        try:
+            return end_point is not None and abs(float(to) - end_point) < 1e-6
+        except (TypeError, ValueError):
+            return False
+
+    def _start(item):
+        start = item[1].get("from")
+        try:
+            return -1.0 if start is None else float(start)
+        except (TypeError, ValueError):
+            return -2.0
+    ends = sorted((item for item in segs if _ends_here(item[1])), key=_start)
+    if not ends or (len(ends) > 1 and _start(ends[-1]) == _start(ends[-2])):
+        return None
+    return ends[-1]
+
+
+def _seg_path_g(seg, printer_name):
+    """The run-out remnant a split's stretch carries on top of its walked grams
+    (_compute_swap_split adds the printer's setting to a stretch a run-out swap
+    ended), left out of the walk's grams before a head's last stretch (Group 65
+    review, CM1: counted, the last spool lost it, and a basis just past the swap was
+    refused)."""
+    return _path_filament_g(printer_name) if seg.get("runout") else 0.0
+
+
+def _rework_facts(figures, start_spools, swap_log):
+    """What a card with figures keeps so its rescale can judge a head it hadn't judged
+    by the builder's own rule (Group 65 review, RW4 / CM2): the start snapshot and the
+    swap log as the builder had them; {} for a card with no figures."""
+    if not figures:
+        return {}
+    return {"start_spools": ({str(k): v for k, v in start_spools.items()}
+                             if isinstance(start_spools, dict) else {}),
+            "swap_log": [e for e in swap_log if isinstance(e, dict)] if isinstance(swap_log, list) else []}
+
+
+_SPLIT_THE = re.compile(r"split the [0-9]+(?:\.[0-9]+)? g")
+
+
+def _reword_line_note(rec, key, old, new):
+    """A held line's note names its grams ("split the 37.93 g between them"): at a new
+    basis it names the new ones (Group 65 review, CM3)."""
+    notes = rec.get("unresolved_notes")
+    if not isinstance(notes, dict) or abs(float(old) - float(new)) < 0.005:
+        return
+    note = notes.get(str(key))
+    if isinstance(note, str):
+        notes[str(key)] = _SPLIT_THE.sub(f"split the {_g_words(new)} g", note, count=1)
+
+
+def _added_line_notes(added, lines, heads, held, start_spools, unread, words, no_spool, facts):
+    """{line: note} for the lines a rescale gave the heads newly used at its basis
+    (Group 65 review, RW4 / CM2): the builder's own (_explain_unresolved) for a head it
+    holds (its spool changed, was swapped, or it holds two), an empty head, or a spool
+    FCC couldn't read; on a no-spool card, a head's one spool named; on a card that
+    kept no start snapshot, that FCC can't vouch for a spool there."""
+    notes = {}
+    by_pos = {_norm_pos(h.get("position")): h for h in heads}
+    for line in added:
+        pos = _norm_pos(line)
+        head = by_pos.get(pos)
+        th = (head or {}).get("toolhead") or f"T{line}"
+        sids = _head_sids(head)
+        if not facts:
+            if heads:
+                notes[line] = (f"FCC hadn't seen {th} print when it last saw this print, and this card keeps "
+                               f"no record of the spools it had then: pick the spool it used.")
+            continue
+        if pos not in held and pos not in unread and len(sids) == 1 and no_spool:
+            notes[line] = f"#{sids[0]} was on {th} {words['end']}: pick it if that's the spool it used."
+            continue
+        got, _phrases = _explain_unresolved({line: lines[line]}, heads, held, start_spools, unread, words)
+        if got.get(line):
+            notes[line] = got[line]
+    return notes
+
+
+def _note_added_lines(rec, added, lines, heads, held, start_spools, swap_log, unread, words, no_spool, facts):
+    """Notes, sets and offers for the lines a rescale gave the heads newly used at its
+    basis (Group 65 review, RW4 / CM2), as the builder makes them for its own lines:
+    a held head is a set of every spool it had, and the start snapshot's and the swaps'
+    spools are offered in its picker."""
+    notes = _added_line_notes(added, lines, heads, held, start_spools, unread, words, no_spool, facts)
+    if notes:
+        rec["unresolved_notes"] = dict(rec.get("unresolved_notes") or {}, **{str(k): v for k, v in notes.items()})
+    if not facts:
+        return
+    new_lines = {str(p): lines[p] for p in added}
+    sets = _held_sets(new_lines, heads, held)
+    if sets:
+        rec["unresolved_sets"] = dict(rec.get("unresolved_sets") or {}, **sets)
+    have = set()
+    for h in rec.get("heads_at_end") or []:
+        if isinstance(h, dict):
+            for s in ([h.get("sid")] if "when" in h else _head_sids(h)):
+                have.add((str(_norm_pos(h.get("position"))), str(s)))
+    offers = [h for h in _card_heads(heads, start_spools, swap_log, new_lines)
+              if "when" in h and (str(_norm_pos(h.get("position"))), str(h.get("sid"))) not in have]
+    if offers:
+        rec["heads_at_end"] = list(rec.get("heads_at_end") or []) + offers
+
+
+def _mark_rows_again(rec, rows, heads, swap_log, facts):
+    """Every row's Decision 1 mark worked out again, as the builder works it out, at the
+    row's new grams (Group 65 review, CM3 / OR7): its words name them, its box follows
+    them, and a row the rescale added says a weighing before Confirm. A back mark (a
+    spool weighed while off its head between two swaps) on a card that kept no swap log
+    can't be worked out again, and is kept as it was. A list Spoolman doesn't answer
+    leaves a row unmarked; its Apply still holds it (_held_at_apply)."""
+    redo = []
+    for r in rows:
+        mark = r.get("weighed")
+        if isinstance(mark, dict) and mark.get("back") and not facts:
+            continue
+        r.pop("weighed", None)
+        r.pop("prefill", None)
+        redo.append(r)
+    if redo:
+        _mark_weighed_rows(redo, heads, _card_end_at(rec), rec.get("swap_left_at"), rec.get("heads_source"),
+                           _swap_back_spans(swap_log))
+
+
+def _rescale_review(rec, grams_at, to_point=None):
     """The card at a new basis: each head's grams from `grams_at` ({position: grams}),
-    the card's own rows and lines kept (the spools it names, its holds, sets and notes;
-    never a spool read from the heads now, the job-1141 rule). One row on a head takes
-    the new figure; a head split at its swaps keeps its earlier spools' shares, and only
-    the stretch ending at the print's end moves (a basis before that stretch began is
-    refused); a held line, set or MMU line takes its new total; a head with grams at the
-    new basis and nothing on the card before gets a row for the one spool the print-end
-    read found there, else a line to pick on. Returns the new record (a copy)."""
+    `to_point` where the print now ends (_swap_point's form; None for the whole print).
+    The card's own rows and lines are kept, with the spools they name, and nothing is
+    read from the heads now (the job-1141 rule). One row on a head takes the new figure.
+    A head split at its swaps keeps its earlier stretches, and only its last stretch
+    moves, the one ending at the card's own end (_final_stretch), from the walk's grams
+    at the last swap, its run-out remnants left out (a basis before that stretch began
+    is refused). A held line, set or MMU line takes its new total, and a note naming
+    its grams names the new ones (Group 65 review, CM1 / CM3).
+
+    A head with grams at the new basis and nothing on the card before is judged by the
+    builder's own rule, from the start snapshot and swap log the card keeps
+    (_rework_facts; Derek's D1, a change during the print always asks; Group 65 review,
+    RW4 / CM2): a head whose spool changed, was swapped or holds two is a held line,
+    its set and note made as the builder makes them and the spools it had offered; else
+    the one spool the print-end read found there is a row (on a no-spool card, a line
+    naming it). A card that kept no start snapshot gives such a head a line, never a row.
+
+    Every row's Decision 1 mark is worked out again at its new grams (_mark_rows_again).
+    Returns the new record (a copy)."""
     rec = copy.deepcopy(rec)
+    printer = rec.get("printer_name")
     no_spool = rec.get("kind") == "no_spool"
     rows = [r for r in rec.get("spools") or [] if isinstance(r, dict)]
     line_key = "usage_map" if no_spool else "unresolved_usage"
@@ -5646,43 +5864,60 @@ def _rescale_review(rec, grams_at):
     for r in rows:
         by_pos.setdefault(str(_norm_pos(r.get("position"))), []).append(r)
     positions = set(by_pos) | {str(_norm_pos(k)) for k in lines} | {str(_norm_pos(k)) for k in grams_at}
-    heads = rec.get("heads_at_end") if isinstance(rec.get("heads_at_end"), list) else []
+    heads = [h for h in rec.get("heads_at_end") or [] if isinstance(h, dict) and "when" not in h]
+    facts = isinstance(rec.get("start_spools"), dict) and isinstance(rec.get("swap_log"), list)
+    start_spools = rec.get("start_spools") if facts else {}
+    swap_log = rec.get("swap_log") if facts else []
+    words = _heads_words(rec.get("heads_source"))
+    end_point = _swap_point({"progress": rec.get("progress")})
+    held, unread, added = {}, set(), []
     for pos in sorted(positions, key=_pos_order):
         grams = max(0.0, float(grams_at.get(pos, 0.0) or 0.0))
         at = by_pos.get(pos, [])
         keys = [k for k in lines if str(_norm_pos(k)) == pos]
         if at:
-            finals = [(r, s) for r in at for s in (r.get("segments") or []) if s.get("to") is None]
-            if len(at) == 1 and not finals:
+            segs = [(r, s) for r in at for s in (r.get("segments") or []) if isinstance(s, dict)]
+            if len(at) == 1 and not segs:
                 _set_row_grams(at[0], grams)
                 continue
-            if len(finals) != 1:
+            final = _final_stretch(segs, end_point)
+            if final is None:
                 raise _RescaleRefused(f"FCC can't work out T{pos} again: its spools' shares don't say which "
                                       f"one was printing at the end.")
-            row, seg = finals[0]
-            earlier = sum(float(s.get("grams") or 0.0) for r in at for s in (r.get("segments") or [])
-                          if s is not seg)
+            row, seg = final
+            earlier = sum(float(s.get("grams") or 0.0) - _seg_path_g(s, printer)
+                          for _r, s in segs if s is not seg)
             last = round(grams - earlier, 2)
             if last < -0.005:
                 raise _RescaleRefused(f"T{pos}'s spool was changed later in the print than that, so it got "
                                       f"further: type a higher percentage.")
             seg["grams"] = max(0.0, last)
+            seg["to"] = to_point
             _set_row_grams(row, sum(float(s.get("grams") or 0.0) for s in row.get("segments") or []))
             continue
         if keys:
+            old = lines[keys[0]]
             lines[keys[0]] = round(grams, 2)
+            _reword_line_note(rec, keys[0], old or 0.0, lines[keys[0]])
             continue
         if grams <= 0:
             continue
         head = next((h for h in heads if str(_norm_pos(h.get("position"))) == pos), None)
         sids = _head_sids(head) if head else []
-        new = (_new_row_for(sids[0], pos, head.get("toolhead"), grams)
-               if (len(sids) == 1 and not no_spool) else None)
-        if new:
-            rows.append(new)
-        else:
-            lines[pos] = round(grams, 2)
+        judged = _held_heads(heads, start_spools, swap_log, {pos: grams}) if facts else {}
+        if facts and not judged and len(sids) == 1 and not no_spool:
+            new = _new_row_for(sids[0], pos, head.get("toolhead"), grams)
+            if new:
+                rows.append(new)
+                continue
+            unread.add(_norm_pos(pos))
+        held.update(judged)
+        lines[pos] = round(grams, 2)
+        added.append(pos)
+    if added:
+        _note_added_lines(rec, added, lines, heads, held, start_spools, swap_log, unread, words, no_spool, facts)
     rows.sort(key=lambda r: _pos_order(r.get("position")))
+    _mark_rows_again(rec, rows, heads, swap_log, facts)
     rec["spools"] = rows
     rec[line_key] = lines
     rec["total_grams"] = round(sum(float(r.get("grams") or 0.0) for r in rows)
@@ -5690,17 +5925,75 @@ def _rescale_review(rec, grams_at):
     return rec
 
 
+def _ask_matches_card(rec):
+    """Whether a card an earlier Apply kept still holds exactly what that Apply asked
+    (`requested_keys`: "<line>:<spool>" for each row it posted, "<line>:*" for each
+    line it held), with no head both a row and a line, so working it out again redoes
+    the whole ask (Group 65 review, RW6)."""
+    keys = rec.get("requested_keys")
+    if not isinstance(keys, list):
+        return False
+    rows = {f"{_norm_pos(r.get('position'))}:{r.get('sid')}" for r in rec.get("spools") or [] if isinstance(r, dict)}
+    lines = {f"{_norm_pos(k)}:*" for k in (rec.get("unresolved_usage") or {})}
+    row_heads = {k.rpartition(":")[0] for k in rows}
+    line_heads = {k.rpartition(":")[0] for k in lines}
+    return {str(k) for k in keys} == rows | lines and not (row_heads & line_heads)
+
+
+def _rework_refusal(rec):
+    """Why a card can't be worked out again, in words for the person, else None (Group
+    65.1 (1b); Group 65 review, RW6 / PI5). It can't when it kept no figures (an
+    uncharged-grams card never has them), or when an earlier Apply charged part of it,
+    made a write that may still have landed, or held or settled a spool so that the
+    card no longer holds exactly what that Apply asked. A card an Apply kept that
+    charged nothing and still holds its whole ask (a Decision 1 hold on its rows) can."""
+    figures = rec.get("figures")
+    if rec.get("kind") == "shortfall" or not isinstance(figures, dict) or not figures.get("footer"):
+        return ("FCC kept no figures for this print, so it can't be worked out again: nudge each spool's grams "
+                "instead.")
+    if rec.get("requested_total") is None:
+        return None
+    try:
+        charged = float(rec.get("applied_g") or 0.0)
+    except (TypeError, ValueError):
+        charged = 0.0
+    if charged > 0.005:
+        return (f"{charged:.2f}g of this print is already charged, so it can't be worked out again: charge the "
+                f"rest as shown, or Discard and weigh the spools.")
+    if any(isinstance(r, dict) and r.get("attempt_used_before") is not None for r in rec.get("spools") or []):
+        return ("An earlier Apply's write may still have landed, so this card can't be worked out again: Apply "
+                "it as shown (FCC checks that write first), or Discard and weigh the spools.")
+    if rec.get("kind") == "no_spool" or not _ask_matches_card(rec):
+        return ("An earlier Apply on this card held or settled a spool, so it can't be worked out again: Apply "
+                "it as shown, or Discard and weigh the spools.")
+    return None
+
+
+def _seen_words(seen):
+    """What FCC saw of a print worked out again (Group 65 review, CM6): "FCC last saw
+    ~30%", or "FCC never read its progress" for an end it never sampled."""
+    if seen is None:
+        return "FCC never read its progress"
+    try:
+        return f"FCC last saw ~{max(0.0, min(1.0, float(seen))) * 100:.0f}%"
+    except (TypeError, ValueError):
+        return "FCC never read its progress"
+
+
 @app.route('/api/cancel_deduct/recompute', methods=['POST'])
 def api_cancel_deduct_recompute():
     """Group 65.1 (1b): work a card out again at another basis. Body {printer_name,
     job_id, rev, percent (0..100) | whole: true}. Writes only FCC's pending-review file,
-    never Spoolman: the card is claimed (popped), rescaled from the figures its one
-    download kept (_rescale_review), its `progress` the new basis (the ledger's scale at
-    its Apply), `seen_progress` what FCC saw, `basis` "whole" or the percent, `rev` one
-    up (an Apply from a view drawn before is refused, FX7's rule), and put back. One
-    Activity Log line. A card already part-applied (its ask fixed), an uncharged-grams
-    card, one with no figures, a stale `rev` and a basis before a head's last swap are
-    refused, the card left as it was."""
+    never Spoolman. The card is read, rescaled from the figures its one download kept
+    (_rescale_review), its `progress` the new basis (the ledger's scale at its Apply),
+    `seen_progress` what FCC saw (None for an end it never sampled), `basis` "whole" or
+    the percent, `rev` one up (an Apply from a view drawn before is refused, FX7's
+    rule), and swapped in only while the store still holds the card read
+    (cancel_review_store.replace_if; Group 65 review, OR2: it used to be claimed by a
+    pop, and a Discard or an Apply in that window was told it was already handled while
+    the card came back). One Activity Log line. A stale `rev`, a card _rework_refusal
+    refuses, a percentage on a card whose moves FCC can't read, and a basis before a
+    head's last swap are refused, the card left as it was."""
     data = request.json or {}
     printer = data.get('printer_name')
     job_id = data.get('job_id')
@@ -5715,25 +6008,20 @@ def api_cancel_deduct_recompute():
             percent = None
         if percent is None or not math.isfinite(percent) or percent < 0 or percent > 100:
             return jsonify({"status": "error", "msg": "Type how far the print got, from 0 to 100 %."}), 400
-    rec = cancel_review_store.pop_pending(printer, job_id)
+    rec = cancel_review_store.get_pending(printer, job_id)
     if rec is None:
         return jsonify({"status": "already_handled"})
-
-    def refuse(msg, **more):
-        cancel_review_store.add_pending(rec)
-        return jsonify(dict({"status": "error", "msg": msg}, **more))
-
+    stale = {"status": "error", "stale": True,
+             "msg": "This card changed since it was drawn: it's drawn again as it is now."}
     if str(data.get('rev')) != str(rec.get('rev', 0)):
-        return refuse("This card changed since it was drawn: it's drawn again as it is now.", stale=True)
-    figures = rec.get("figures")
-    if rec.get("kind") == "shortfall" or not isinstance(figures, dict) or not figures.get("footer"):
-        return refuse("FCC kept no figures for this print, so it can't be worked out again: nudge each "
-                      "spool's grams instead.")
-    if rec.get("requested_total") is not None:
-        return refuse("Part of this print is already charged, so it can't be worked out again: charge the rest "
-                      "as shown, or Discard and weigh the spools.")
+        return jsonify(stale)
+    why = _rework_refusal(rec)
+    if why:
+        return jsonify({"status": "error", "msg": why})
+    figures = rec["figures"]
     if not whole and not (figures.get("by_pct") or {}):
-        return refuse("FCC can't read this file's moves, so it can only charge the whole print.")
+        return jsonify({"status": "error",
+                        "msg": "FCC can't read this file's moves, so it can only charge the whole print."})
     base = rec
     if rec.get("kind") == "progress_unknown":
         # Group 65.1 (1c): a "couldn't measure" card becomes a card to pick on, each
@@ -5741,21 +6029,28 @@ def api_cancel_deduct_recompute():
         base = dict(rec, kind="no_spool", usage_map={}, spools=[], unmeasured_was=rec.get("unmeasured_reason"))
         base.pop("unmeasured_reason", None)
     try:
-        fresh = _rescale_review(base, _grams_at_basis(figures, None if whole else percent))
+        fresh = _rescale_review(base, _grams_at_basis(figures, None if whole else percent),
+                                to_point=None if whole else _swap_point({"progress": percent / 100.0}))
     except _RescaleRefused as e:
-        return refuse(str(e))
-    seen = rec.get("seen_progress", rec.get("progress"))
+        return jsonify({"status": "error", "msg": str(e)})
+    for key in ("requested_total", "requested_keys", "applied_g"):
+        # Group 65 review (RW6): an Apply that charged nothing fixed no ask.
+        fresh.pop(key, None)
+    unsampled = "unsampled" in (rec.get("unmeasured_reason"), rec.get("unmeasured_was"))
+    seen = None if unsampled else rec.get("seen_progress", rec.get("progress"))
     fresh["seen_progress"] = seen
     fresh["progress"] = 1.0 if whole else round(percent / 100.0, 4)
     fresh["basis"] = "whole" if whole else round(percent, 2)
     fresh["rev"] = int(rec.get("rev") or 0) + 1
-    cancel_review_store.add_pending(fresh)
+    if not cancel_review_store.replace_if(printer, job_id, rec, fresh):
+        if cancel_review_store.get_pending(printer, job_id) is None:
+            return jsonify({"status": "already_handled"})
+        return jsonify(stale)
     try:
-        seen_pct = max(0.0, min(1.0, float(seen or 0.0))) * 100
         how = "for the whole print" if whole else f"at {percent:g}%"
         state.add_log_entry(
-            f"📝 {_esc(printer)}: job {_esc(job_id)}'s review worked out again {how} (FCC last saw "
-            f"~{seen_pct:.0f}%): {fresh['total_grams']:.2f}g ('{_esc(rec.get('filename'))}').", "INFO", "6cb2eb",
+            f"📝 {_esc(printer)}: job {_esc(job_id)}'s review worked out again {how} ({_seen_words(seen)}): "
+            f"{fresh['total_grams']:.2f}g ('{_esc(rec.get('filename'))}').", "INFO", "6cb2eb",
             meta={"type": "cancel_deduct_pending", "printer_name": printer, "job_id": str(job_id)})
     except Exception:
         pass
@@ -6437,12 +6732,11 @@ def api_cancel_deduct_confirm():
         # Group 65.1 (1b): the card was worked out again; its Apply says at what (the
         # ledger's scale above is that basis).
         try:
-            seen_pct = max(0.0, min(1.0, float(rec.get("seen_progress") or 0.0))) * 100
             how = ("the whole print" if rec.get("basis") == "whole"
                    else f"{float(rec.get('basis')):g}% of the print")
             state.add_log_entry(
                 f"📝 {_esc(printer)}: job {_esc(job_id)} charged {applied_total:.2f}g for {how}, as its review "
-                f"was worked out again (FCC last saw ~{seen_pct:.0f}%).", "INFO", "6cb2eb")
+                f"was worked out again ({_seen_words(rec.get('seen_progress'))}).", "INFO", "6cb2eb")
         except Exception:
             pass
     _low_stock_after_review(applied, printer, job_id)
