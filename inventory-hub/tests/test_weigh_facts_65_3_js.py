@@ -6,7 +6,9 @@ tare_skipped}, posted beside `id` and `updates`: the server words the Activity L
 from it (test_weigh_line_65_3). An Additive figure is grams typed, no reading, so it
 sends none; Gross sends the empty-spool weight it used; <WeightEntry>'s Skip (the
 reading saved as filament left, with no empty weight) says so as `tare_skipped`. Both
-empty-spool prompts say to take off a clip, cap or edge guards first.
+empty-spool prompts carry a line about clips, caps and edge guards (the post-archive
+prompt: take them off before weighing; the missing-tare question: weigh the empty spool
+as the full one was weighed).
 
 Node's `vm` for the saves (the 63.6 harness), the real page in `isolated_page` for
 WeightEntry and the prompts. RED on 1be96d6e (no `weigh` was sent, no `tare_skipped`,

@@ -1575,11 +1575,14 @@ def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
 
 
 def test_the_empty_weight_prompts_add_ons_line_is_readable(page: Page, base_url: str):
-    """Group 65.3: both empty-spool prompts say "Take off any clip, cap or edge guards
-    first: FCC counts them as filament." (the post-archive prompt, and the missing-tare
-    question a Gross reading with no empty weight asks). Each line on its prompt's dark
-    ground, scored from the dialog and proved scored. A stub filament, every write
-    answered in the browser, nothing saved."""
+    """Group 65.3: both empty-spool prompts carry a line about clips, caps and edge
+    guards: the post-archive prompt's "Take off any clip, cap or edge guards before you
+    weigh it: …", and the missing-tare question's (a Gross reading with no empty weight)
+    "Weigh the empty spool as the full one was weighed, with any clip, cap or edge guards
+    off: …" (the group's first review reworded both, 41503f1f). Each line on its prompt's
+    dark ground, scored from the dialog and proved scored, by words within the first 80
+    characters the guard reports. A stub filament, every write answered in the browser,
+    nothing saved."""
     import conftest   # local: keeps this file's header out of other branches' merges
     from test_text_size_guard import _read_only
     filament = {"id": 9004, "name": "Ocean Blue", "material": "PLA", "spool_weight": None,
@@ -1589,7 +1592,7 @@ def test_the_empty_weight_prompts_add_ons_line_is_readable(page: Page, base_url:
     page.wait_for_function("() => typeof window.showArchiveEmptyWeightPrompt === 'function'"
                            " && typeof window.promptMissingEmptyWeight === 'function'"
                            " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
-    words = "Take off any clip, cap or edge guards first"
+    words = "Take off any clip, cap or edge guards before you weigh it"
     page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 9004, null); }")
     expect(page.locator("#fcc-archive-empty-overlay #fcc-archive-empty-addons")).to_be_visible()
     dialog = page.locator("#fcc-archive-empty-overlay [data-fcc-weight-keys]")
@@ -1602,6 +1605,7 @@ def test_the_empty_weight_prompts_add_ons_line_is_readable(page: Page, base_url:
                   " color: 'Ocean Blue', allowSkip: true }); }")
     expect(page.locator("#fcc-missing-empty-weight-overlay-addons")).to_be_visible()
     question = page.locator("#fcc-missing-empty-weight-overlay [role=dialog]")
+    words = "Weigh the empty spool as the full one was weighed, with any clip, cap"
     assert [o for o in conftest.contrast_offenders(question) if words in (o.get("text") or "")] == []
     assert any(words in (o.get("text") or "") for o in conftest.contrast_offenders(question, min_ratio=100))
     page.keyboard.press("Escape")
