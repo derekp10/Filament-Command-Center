@@ -90,6 +90,7 @@
 > Derek's standing ask: *surface this section whenever he asks what's pending, even if he's asked
 > about something else.* He'll get to it; he doesn't know when.
 
+* **⏸️ PENDING DEREK — once Group 65 is on prod, the first time a printer drops off the network: read its 📡 line.** _(Added 2026-11-23, Derek: "IF there's a follow up here, I'll need to be aware of it to try and remember to keep an eye out for it.")_ Since Group 65.1 FCC says when it loses contact with a printer ("📡 Lost contact with XL …"), and then pings the printer to tell PrusaLink being stuck from the printer being off. Whether prod's container may send a ping is the one thing not checked (dev's can, checked 2026-11-23; Derek expects prod's can too, as nothing on his network blocks it). If that line goes on with "… is on the network, but PrusaLink isn't answering …" or "… doesn't answer at all …", prod can ping: nothing to do. If it says only "Lost contact with …" (with no second sentence), prod's container can't ping: tell Claude (the read-only TrueNAS checks are in the Group 65 task file, "A prod fact"). Nothing breaks either way: without a ping FCC keeps today's words. Claude takes this off once either line is seen.
 * **⏸️ PENDING DEREK — if the Activity Log ever shows "FCC's G-code walk of … came to … against the slicer's …",
   tell Claude: FCC may be misreading that file.** (That warning is how the INDX profile's new tags were caught on
   2026-11-02. Nothing to set up.)
