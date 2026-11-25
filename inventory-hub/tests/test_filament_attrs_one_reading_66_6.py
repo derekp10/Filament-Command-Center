@@ -247,6 +247,9 @@ def test_changed_chips_on_an_old_string_are_sent_as_the_person_left_them(details
     save(details)
     extra = posts_to(details, "/api/update_filament")[0]["body"]["data"]["extra"]
     assert extra["filament_attributes"] == '["Silk"]'
+    # The label check ran (review round 1 of Group 66, R1-04: the docstring said so, and
+    # nothing pinned it): the filament's spools' labels are flagged.
+    details.wait_for_function("() => window.__posts.some((p) => p.url.split('?')[0] === '/api/filament/7/flag_spool_labels')")
 
 
 # --- The wizard: Edit Spool's chips, its label check, the Prusament backfill ----------

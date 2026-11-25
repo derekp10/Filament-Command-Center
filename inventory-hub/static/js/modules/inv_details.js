@@ -2377,8 +2377,11 @@ const _editfilOpenModal = (fil) => {
     const currentAttributes = parseFilamentAttributes(rawExtra.filament_attributes);
     // A stored value that isn't the multi-choice list (an old record's text), which
     // Spoolman refuses with any other extra Save sends back (see the mend at Save).
+    // Review round 1 of Group 66 (R1-03): an old empty text value ('') and a list holding a
+    // non-text item are mended too (Spoolman 0.27 refuses both with any extra a Save sends).
     const storedAttrsNotAList = rawExtra.filament_attributes != null
-        && rawExtra.filament_attributes !== '' && !Array.isArray(rawExtra.filament_attributes);
+        && (!Array.isArray(rawExtra.filament_attributes)
+            || rawExtra.filament_attributes.some((x) => typeof x !== 'string'));
 
     const modalEl = document.getElementById('editFilamentModal');
     if (!modalEl) { showToast('Edit Filament modal missing', 'error'); return; }
@@ -2393,10 +2396,15 @@ const _editfilOpenModal = (fil) => {
     // filled; a value code sets afterwards goes through codeSet, so it is no edit.
     const readForm = () => {
         const m = new Map();
+        // A colour row's ids carry a counter that grows with each row added, so a row added
+        // and removed again read as an unsaved change (review round 1 of Group 66, R2-03):
+        // the rows are keyed by their place.
+        const colourSeen = { picker: 0, hex: 0 };
         modalEl.querySelectorAll('input, textarea, select').forEach((el, i) => {
             if (el.closest('#editfil-import-panel')) return;
             const v = (el.type === 'checkbox' || el.type === 'radio') ? String(el.checked) : el.value;
-            m.set(el.id || el.name || `#${i}`, v);
+            const cm = /^editfil-color-(picker|hex)-\d+$/.exec(el.id || '');
+            m.set(cm ? `colour-${cm[1]}-${colourSeen[cm[1]]++}` : (el.id || el.name || `#${i}`), v);
         });
         m.set('chips', attrSelected.join(','));
         return m;
@@ -2787,8 +2795,12 @@ const _editfilOpenModal = (fil) => {
             return `+ Add "${t}" as a new material`;
         },
     });
+    // Each late read below draws only while this open is still the open one (review round 1
+    // of Group 66, R2-01): the window is reused, and a read of an earlier open that landed
+    // after the next open drew into it (the first filament's slicer profile in the second's
+    // form, sent by its Save; its manufacturer box moved by the first open's look-up).
     fetch('/api/materials').then(r => r.json()).then(d => {
-        if (!d || !d.success) return;
+        if (_editfilSession !== session || !d || !d.success) return;
         materialCache = Array.isArray(d.materials) ? d.materials : [];
         refreshMaterialBadge();
     }).catch(() => {});
@@ -2894,7 +2906,7 @@ const _editfilOpenModal = (fil) => {
     const readVendors = () => {
         const seq = ++vendorReadSeq;
         return fetch('/api/vendors').then(r => r.json()).then(d => {
-            if (seq !== vendorReadSeq || !d || !d.success || !Array.isArray(d.vendors)) return;
+            if (_editfilSession !== session || seq !== vendorReadSeq || !d || !d.success || !Array.isArray(d.vendors)) return;
             session.codeSet(() => {
                 vendorCache = d.vendors;
                 vendorsRead = true;
@@ -2902,6 +2914,9 @@ const _editfilOpenModal = (fil) => {
             });
         }).catch(() => {});
     };
+    // Drawn at the open from the filament's own manufacturer (review round 1 of Group 66,
+    // R1-01): a list read that failed left the last open's pill, another vendor's weight.
+    refreshVendorBadge();
     readVendors();
     // A vendor saved (or created) over the window: the list takes its record at once, the
     // name box its new name when it holds that vendor, and what comes from it is redrawn;
@@ -3086,7 +3101,7 @@ const _editfilOpenModal = (fil) => {
 
     // Load known attribute choices (and slicer profile choices) from Spoolman's field schema.
     fetch('/api/external/fields').then(r => r.json()).then(d => {
-        if (!d || !d.success) return;
+        if (_editfilSession !== session || !d || !d.success) return;
         const filamentFields = (d.fields && d.fields.filament) || [];
         const attrField = filamentFields.find(f => f.key === 'filament_attributes');
         if (attrField && Array.isArray(attrField.choices)) {
@@ -3195,6 +3210,14 @@ const _editfilOpenModal = (fil) => {
         // committing it as a chip, commit it now so it's not silently lost.
         if (attrInput && attrInput.value && attrInput.value.trim()) {
             addAttrChip(attrInput.value);
+            // Refused ("Did you mean ...?"), it stays in its box, and the Save stops here
+            // (review round 1 of Group 66, R2-05): it went on to "No changes to save", closed
+            // the window, and the typed tag was gone.
+            if (attrInput.value.trim()) {
+                showErr(`The tag "${attrInput.value.trim()}" wasn't added: pick it from the list, change it, or clear it, then Save.`,
+                    'editfil-tab-basic-btn');
+                return;
+            }
         }
         const attrsArr = attrSelected.slice();
         const newNozzleMax = val('editfil-nozzle-max');
@@ -3376,6 +3399,10 @@ const _editfilOpenModal = (fil) => {
         }
 
         saveBtn.disabled = true;
+        // Review round 1 of Group 66 (R2-02): the window stays while its Save is on its way
+        // (the close guard below reads this): Cancel, ✕ or a click outside asked "Close
+        // without saving?", and the edit landed after Close Anyway had closed the window.
+        session.saving = true;
         try {
             // Register newly-typed filament_attribute tags with Spoolman's schema
             // so future modals show them in the dropdown. Fire-and-forget;
@@ -3461,6 +3488,7 @@ const _editfilOpenModal = (fil) => {
         } catch (e) {
             showErr(`${isCreate ? 'Create' : 'Update'} error: ${e.message || e}`);
         } finally {
+            session.saving = false;
             saveBtn.disabled = false;
         }
     };
@@ -3491,6 +3519,12 @@ let _editfilSession = null;
 document.addEventListener('hide.bs.modal', (e) => {
     if (!e.target || e.target.id !== 'editFilamentModal') return;
     const s = _editfilSession;
+    if (s && s.saving && !s.closing) {
+        // Its Save is on its way: the window stays, and closes itself once the Save lands.
+        e.preventDefault();
+        showToast('This filament is saving: the window closes once it is saved.', 'warning', 7000);
+        return;
+    }
     if (!s || s.closing || !s.isDirty()) return;
     e.preventDefault();
     // Its question's Close Anyway closes through the session, so it never asks again.
@@ -3521,6 +3555,9 @@ const _editfilShowEscapeConfirm = (bsModal) => {
     if (window.getOverlay && window.getOverlay('editfil-esc-confirm')) return;
     let handle = null;
     let release = null;
+    // Where the keyboard was (review round 1 of Group 66, R2-04): keeping on editing gives it
+    // back there; it was left on the page, and the next keys typed went nowhere.
+    const returnTo = document.activeElement;
     const cleanup = () => {
         if (release) { release(); release = null; }
         if (!handle) return;
@@ -3528,13 +3565,20 @@ const _editfilShowEscapeConfirm = (bsModal) => {
         handle = null;
         h.cleanup();
     };
+    const keep = () => {
+        cleanup();
+        if (returnTo && returnTo !== document.body && returnTo.isConnected && modalEl.contains(returnTo)
+                && modalEl.classList.contains('show')) {
+            try { returnTo.focus({ preventScroll: true }); } catch (_) { /* gone */ }
+        }
+    };
     const shield = () => { if (window.fccShieldNextPress) window.fccShieldNextPress(); };
     handle = window.mountOverlay({
         id: 'editfil-esc-confirm',
         tier: 'standard',
         host: modalEl,
         initialFocus: '#editfil-esc-no',
-        onEscape: cleanup,
+        onEscape: keep,
         content: `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px;
                         max-width:min(26.25rem, calc(100vw - 16px)); box-sizing:border-box; text-align:center;">
@@ -3552,14 +3596,14 @@ const _editfilShowEscapeConfirm = (bsModal) => {
     const flash = (msg) => { const f = ov.querySelector('#editfil-esc-flash'); if (f) f.textContent = msg; };
     const arm = window.armedClick || ((fn) => fn);
     const armMs = window.questionArmMs ? window.questionArmMs() : 0;
-    ov.querySelector('#editfil-esc-no').onclick = () => { cleanup(); shield(); };
+    ov.querySelector('#editfil-esc-no').onclick = () => { keep(); shield(); };
     ov.querySelector('#editfil-esc-yes').onclick = arm(() => { cleanup(); shield(); bsModal.hide(); }, armMs);
     if (window.fccHoldScans) {
         release = window.fccHoldScans({
             title: 'Close without saving?',
             element: ov,
             hint: 'Answer the question on screen first: Keep Editing, or Close Anyway',
-            cancel: () => cleanup(),
+            cancel: () => keep(),
             flash,
         });
     }

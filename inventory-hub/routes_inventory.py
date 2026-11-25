@@ -233,9 +233,21 @@ def api_update_vendor(vid):
         vendors, why = spoolman_api.read_vendor_list()
         if vendors is None:
             state.logger.warning(f"Vendor #{vid} rename to '{new_name}': the vendor list read failed: {why}")
+            # Review round 1 of Group 66 (R1-05): one Activity Log line, as the create's.
+            state.add_log_entry(f'⚠️ Didn\'t rename manufacturer #{vid} to "{html.escape(new_name, quote=False)}": '
+                                'FCC couldn\'t read the manufacturer list to check the name is free.',
+                                "WARNING", "ffaa00")
             return jsonify({"success": False, "msg": "Couldn't check whether that name is free, so nothing "
                             "was saved. Try again in a moment."}), 502
-        existing = spoolman_api.vendor_named(new_name, vendors, but_not=vid)
+        # Review round 1 of Group 66 (R1-02): a `before` FCC couldn't read made any save that
+        # sends the name (the vendor window always does) a rename; the list just read holds
+        # this manufacturer's own name, and its own name is no other's.
+        own = next((v for v in vendors if str(v.get('id')) == str(vid)), None)
+        if not before.get('name') and own and \
+                spoolman_api.vendor_name_key(own.get('name')) == spoolman_api.vendor_name_key(new_name):
+            existing = None
+        else:
+            existing = spoolman_api.vendor_named(new_name, vendors, but_not=vid)
         if existing:
             ex_name = str(existing.get('name') or '')
             state.add_log_entry(f'⚠️ Didn\'t rename manufacturer #{vid} to "{html.escape(new_name, quote=False)}": '
