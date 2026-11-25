@@ -1,6 +1,11 @@
 import requests
+import errno
+import os
 import re
+import socket
+import struct
 import threading
+import time
 from typing import Dict, List, Optional
 import bgcode_decode  # binary-gcode (.bgcode) decoder for the cancel prefix-parse
 
@@ -181,6 +186,12 @@ def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
         out = {"gcode": text, "fraction": _remap(reached_fraction)}
         if extra_fractions:
             out["fractions"] = [_remap(p) for p in extra_fractions]
+        # Group 65.1 (1b): how a progress value is placed in this file, so the review
+        # can cut it at every whole percent in the same walk (its figures, for
+        # "Charge the whole print" and a percentage typed later). The caller's call is
+        # unchanged: the 34 stand-ins that answer four arguments keep working, and a
+        # result without it keeps no figures.
+        out["remap"] = _remap
         return out
     except Exception as e:
         print(f"fetch_cancel_gcode: failed for {filename}: {e}")
@@ -679,25 +690,40 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
     _ACTIVE_PRINT_STATES = {"PRINTING", "PAUSING", "RESUMING"}
     creds = fetch_printer_credentials(filabridge_url, printer_name)
     if not creds or not creds.get("ip_address"):
+        _note_probe_failure(printer_name, "no_ip")
         return None
     ip = creds["ip_address"]
     api_key = creds.get("api_key")
     headers = {"X-Api-Key": api_key} if api_key else {}
 
     # v1 status — returns {"printer": {"state": "PRINTING", ...}, ...}
+    why = "unreadable"
     try:
         r = requests.get(f"http://{ip}/api/v1/status", headers=headers, timeout=2)
         if r.ok:
-            body = r.json() or {}
+            try:
+                body = r.json() or {}
+            except ValueError:
+                # Group 65 fix review 2 (WA4): an answer that isn't JSON, and doesn't say it is,
+                # is no PrusaLink (another device took the address); JSON FCC can't read, JSON
+                # without a state, or a cut-off answer stays "unreadable" (PrusaLink answering
+                # badly).
+                ctype = str((getattr(r, "headers", None) or {}).get("Content-Type", "") or "")
+                why = "unreadable" if "json" in ctype.lower() else "not_prusalink"
+                raise
             printer = body.get("printer") or {}
             state_str = str(printer.get("state", "")).upper()
             if state_str:
+                _note_probe_failure(printer_name, None)
                 return {"state": state_str, "is_active": state_str in _ACTIVE_PRINT_STATES}
-    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        else:
+            why = f"http {r.status_code}"
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
         # L3 fix B: a connection-level failure (timeout / refused / no route)
         # means the printer is unreachable. The legacy endpoint lives on the
         # SAME ip:port and will time out too — skip it instead of burning a
         # second 2s timeout. Halves the probe cost for an offline printer.
+        _note_probe_failure(printer_name, _connection_failure_kind(e))
         return None
     except Exception:
         # v1 answered but the body was unusable (bad JSON / odd shape) — fall
@@ -718,10 +744,125 @@ def _probe_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dic
             # printing flag.
             is_active = bool(flags.get("printing")) or state_text in _ACTIVE_PRINT_STATES
             if state_text:
+                _note_probe_failure(printer_name, None)
                 return {"state": state_text, "is_active": is_active}
+        elif why in ("unreadable", "not_prusalink"):
+            why = f"http {r.status_code}"
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        why = _connection_failure_kind(e)
     except Exception:
         pass
 
+    _note_probe_failure(printer_name, why)
+    return None
+
+
+# Group 65.1 (2): why each printer's last state probe failed, beside its unchanged
+# answer (None, fail-open, for every caller): "no_ip" (no PrusaLink IP saved),
+# "timeout", "refused" (the printer answered, and nothing listens: it is on the
+# network), "no_route", "connection" (another connection failure), "http <status>",
+# "unreadable" (a body FCC couldn't read). Cleared by an answer. The print monitor reads
+# it to stay quiet about a printer with no IP saved, and (65.1 (3)) to tell PrusaLink
+# stuck from a printer that doesn't answer at all.
+_LAST_PROBE_FAILURE = {}
+
+
+def _note_probe_failure(printer_name, why):
+    if why is None:
+        _LAST_PROBE_FAILURE.pop(printer_name, None)
+    else:
+        _LAST_PROBE_FAILURE[printer_name] = why
+
+
+def _connection_failure_kind(e):
+    if isinstance(e, requests.exceptions.Timeout):
+        return "timeout"
+    text = str(e).lower()
+    if "refused" in text:
+        return "refused"
+    if "no route" in text or "unreachable" in text:
+        return "no_route"
+    return "connection"
+
+
+def last_probe_failure(printer_name):
+    """Why `printer_name`'s last state probe failed (see _LAST_PROBE_FAILURE), or None
+    when it answered (or was never probed)."""
+    return _LAST_PROBE_FAILURE.get(printer_name)
+
+
+def _icmp_checksum(data):
+    if len(data) % 2:
+        data += b"\0"
+    total = sum(struct.unpack("!%dH" % (len(data) // 2), data))
+    total = (total >> 16) + (total & 0xFFFF)
+    total += total >> 16
+    return (~total) & 0xFFFF
+
+
+def _icmp_socket(kind):
+    """An ICMP socket of `kind` (the tests' seam)."""
+    return socket.socket(socket.AF_INET, kind, socket.IPPROTO_ICMP)
+
+
+_UNREACHABLE = {getattr(errno, n) for n in ("EHOSTUNREACH", "ENETUNREACH", "EHOSTDOWN") if hasattr(errno, n)}
+
+
+def icmp_echo(host, timeout=1.0):
+    """Group 65.1 (3): one ICMP echo to `host` (an IP, a port after ':' ignored), the
+    standard library only (the image has no `ping` program). True when it answers
+    within `timeout`, False when it doesn't (or the network can't reach it), None when
+    FCC can't send one: neither the unprivileged datagram socket (which works when the
+    container's net.ipv4.ping_group_range covers its group, Docker's default since
+    20.10) nor a raw one (which needs NET_RAW) opens. A host name is resolved once and
+    a reply counts only from that address (Group 65 review, RW3: a reply never matched a
+    name, and a printer that answers was called off); a name FCC can't resolve, an
+    address that isn't IPv4, and a send the system refuses for a reason that isn't the
+    network's are None too (WD12: FCC never pinged it). Never raises."""
+    raw = str(host or "").strip()
+    if not raw or raw.startswith("[") or raw.count(":") > 1:
+        return None          # none, or an IPv6 address: this echo is IPv4 only
+    try:
+        ip = socket.gethostbyname(raw.split(":")[0])
+    except (OSError, UnicodeError):
+        return None
+    ident = os.getpid() & 0xFFFF
+    payload = b"fcc-reach"
+    for kind in (socket.SOCK_DGRAM, socket.SOCK_RAW):
+        try:
+            sock = _icmp_socket(kind)
+        except OSError:
+            continue
+        try:
+            packet = struct.pack("!BBHHH", 8, 0, 0, ident, 1) + payload
+            packet = struct.pack("!BBHHH", 8, 0, _icmp_checksum(packet), ident, 1) + payload
+            deadline = time.monotonic() + float(timeout)
+            sock.settimeout(float(timeout))
+            try:
+                sock.sendto(packet, (ip, 0))
+            except OSError as e:
+                # Only the network saying it can't reach the printer means it doesn't answer.
+                return False if getattr(e, "errno", None) in _UNREACHABLE else None
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return False
+                sock.settimeout(left)
+                try:
+                    data, addr = sock.recvfrom(1024)
+                except (socket.timeout, OSError):
+                    return False
+                if kind == socket.SOCK_RAW and data:
+                    data = data[(data[0] & 0x0F) * 4:]      # a raw socket hands back the IP header
+                if addr and addr[0] == ip and len(data) >= 8 and data[0] == 0:   # an echo reply
+                    return True
+        except Exception:
+            return None
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
     return None
 
 

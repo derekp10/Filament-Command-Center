@@ -493,7 +493,7 @@
         const tip = id ? `${name} · ID ${id}` : name;
         return `<div class="fcc-ps-printer-group" data-printer="${_esc(name)}">`
             + `<span class="fcc-ps-strip-name" title="${_esc(tip)}">${_esc(shown)}</span>`
-            + `<span class="fcc-ps-strip-state">${_renderStateChip(info.state)}</span>`
+            + `<span class="fcc-ps-strip-state">${_renderStateChip(info.state, info.reach)}</span>`
             + '<span class="fcc-ps-strip-count"></span>'
             + `<span class="fcc-ps-strip-heads">${info.toolheads.map(_renderToolheadCompact).join('')}</span>`
             + '</div>';
@@ -525,13 +525,26 @@
     // deduct. Returns null when there's nothing to show.
     //   state === undefined → not probed       → null (no badge)
     //   state === null      → printer didn't answer → OFFLINE badge
-    const _stateMeta = (state) => {
+    // Group 65.1 (3): `reach` (the heartbeat's, while the monitor has lost contact)
+    // words the OFFLINE badge's tooltip and accessible name for the case: on the
+    // network with PrusaLink not answering, or no answer at all. The look is the same.
+    const _stateMeta = (state, reach) => {
         if (state === undefined) return null;
         if (state === null) {
+            // Group 65 review (RW2): PrusaLink answering with an error is said as that.
+            const said = {
+                prusalink: 'On the network, but PrusaLink isn’t answering: restarting the printer brings it back, but wait until its print is done',
+                none: 'Doesn’t answer at all (off, or off the network)',
+                login: 'PrusaLink answers, but turns FCC’s API key away: check the key in Settings, 🔌 Printer Connections',
+                error: 'PrusaLink answers, but with an error',
+                address: 'Something answers at its address, but not as PrusaLink: check the address in Settings, 🔌 Printer Connections',
+            };
+            const why = said[reach] || 'Printer unreachable (offline, networked elsewhere, or cold-rebooting)';
             return {
                 cls: 'fcc-ps-state-offline',
                 label: 'OFFLINE',
-                title: 'Printer unreachable (offline, networked elsewhere, or cold-rebooting)',
+                title: why,
+                aria: said[reach] ? `OFFLINE: ${why}` : '',
             };
         }
         const raw = String(state.state || '').toUpperCase();
@@ -558,20 +571,20 @@
 
     // Expanded-row badge — first on the printer's info line, under its name
     // and before the review count (Derek, 2026-10-24), in its slot (_renderRow).
-    const _renderStateBadge = (state) => {
-        const m = _stateMeta(state);
+    const _renderStateBadge = (state, reach) => {
+        const m = _stateMeta(state, reach);
         if (!m) return '';
-        return `<span class="fcc-ps-state ${m.cls}" title="${m.title}">${m.label}</span>`;
+        return `<span class="fcc-ps-state ${m.cls}" title="${m.title}"${m.aria ? ` aria-label="${m.aria}"` : ''}>${m.label}</span>`;
     };
 
     // Collapsed chip-strip badge — same color/vocab as the expanded badge,
     // rendered compact at the head of each printer's chip group so the user
     // can read live printer state WITHOUT expanding the widget (buglist
     // 2026-06-13 "show the printer state in the collapsed Printer Status bar").
-    const _renderStateChip = (state) => {
-        const m = _stateMeta(state);
+    const _renderStateChip = (state, reach) => {
+        const m = _stateMeta(state, reach);
         if (!m) return '';
-        return `<span class="fcc-ps-state fcc-ps-state-chip ${m.cls}" title="${m.title}">${m.label}</span>`;
+        return `<span class="fcc-ps-state fcc-ps-state-chip ${m.cls}" title="${m.title}"${m.aria ? ` aria-label="${m.aria}"` : ''}>${m.label}</span>`;
     };
 
     // A printer's name, escaped for the text and for an attribute (its title,
@@ -627,7 +640,7 @@
             ? `<button type="button" class="fcc-ps-reorder" data-dir="1" title="Move down"
                     onclick="event.stopPropagation(); window.movePrinterStatusRow(${nameArg}, 1)">▼</button>`
             : `<span class="fcc-ps-reorder-placeholder"></span>`;
-        const stateBadge = _renderStateBadge(info.state);
+        const stateBadge = _renderStateBadge(info.state, info.reach);
         // Per-printer expanded row. The collapsed view is now a single
         // chip strip in the widget header (rendered separately in _render),
         // not per-row, so we don't include compact chips here anymore.

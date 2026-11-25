@@ -518,8 +518,9 @@ def test_a_clean_purge_leaves_no_snapshot_behind(client, monkeypatch):
 
 def test_a_failed_purge_KEEPS_the_snapshot_for_recovery(client, monkeypatch):
     """The snapshot is written BEFORE the DELETE and survives a failure. It is
-    the durable half of the fix: hub.log is a ~6 MB rolling buffer that retains
-    days, not months, and the reloader gives it two competing writers."""
+    the durable half of the fix: hub.log is a rolling buffer (~6 MB when this was
+    written, 100 MB since Group 65.4) that keeps weeks, not forever, and the
+    reloader gives it two competing writers."""
     fields, filaments = _fixture()
 
     def fail_one(url, body):

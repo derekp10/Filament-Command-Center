@@ -104,6 +104,22 @@ def list_pending() -> list:
         return list(_load().values())
 
 
+def replace_if(printer_name, job_id, expected: dict, record: dict) -> bool:
+    """Swap `record` in for the pending review only while the store still holds
+    exactly `expected`, the review the caller read (Group 65 review, OR2). False,
+    with nothing written, when it was settled or changed meanwhile. A recompute
+    used to claim its card by taking it out of the store, and a Discard or an Apply
+    in that window was told it was already handled while the card came back."""
+    with _LOCK:
+        data = _load()
+        key = _key(printer_name, job_id)
+        if data.get(key) != expected:
+            return False
+        data[key] = record
+        _save(data)
+        return True
+
+
 def pop_pending(printer_name, job_id):
     """Atomically remove + return the pending record (or None). The atomic pop is
     the confirm/dismiss CLAIM: a concurrent second call gets None and no-ops, so

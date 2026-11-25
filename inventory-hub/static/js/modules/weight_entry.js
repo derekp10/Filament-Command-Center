@@ -380,6 +380,7 @@
                 return;
             }
             let typedTare = null;   // the tare the person gave the missing-tare question (Group 63.7)
+            let tareSkipped = false;   // Skip: the reading saved as filament left (Group 65.3)
             let r = window.computeUsedWeight({
                 mode,
                 value: v,
@@ -436,6 +437,7 @@
                     // is persisted; the typed value is treated as filament
                     // remaining (used = initial − net).
                     effectiveMode = 'net';
+                    tareSkipped = true;
                 } else {
                     currentEmpty = Number(tare);
                     typedTare = currentEmpty;
@@ -476,6 +478,9 @@
                 // question (null when none was asked): the caller keeps it as the
                 // spool's own (the Quick-Weigh saves it as its spool_weight).
                 typed_tare: typedTare,
+                // Group 65.3: the empty weight was skipped, so the reading is no
+                // weighing of the filament (the Activity Log says it was typed).
+                tare_skipped: tareSkipped,
             };
             cleanup();
             if (typeof onSubmit === 'function') onSubmit(payload);

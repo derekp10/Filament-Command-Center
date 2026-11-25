@@ -278,6 +278,8 @@ def test_restart_recovery_threads_persisted_swap_log():
     disp = MagicMock()
     with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value={"state": "FINISHED"}), \
+         patch.object(app_module.prusalink_api, "get_printer_job",  # Group 65 fix review (WT1)
+                      return_value={"job_id": 9, "progress": 1.0}), \
          patch.object(print_monitor, "_dispatch_completion_edge", disp), \
          patch.object(app_module.state, "add_log_entry"):
         app_module._recover_one_print_latch("XL", entry, "http://fb")

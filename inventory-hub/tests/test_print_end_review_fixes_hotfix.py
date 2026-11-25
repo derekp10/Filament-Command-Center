@@ -284,6 +284,7 @@ def test_a_blip_at_the_finish_and_a_good_read_at_the_restart_charge_the_spool_th
         with patch.object(print_tracker_store, "load", return_value={INDX: latch}), \
                 patch.object(print_monitor.prusalink_api, "get_printer_state",
                              return_value={"state": "FINISHED"}), \
+                patch.object(print_monitor.prusalink_api, "get_printer_job", return_value=_job(1.0)), \
                 _compute({4: 50.0}, error=True):
             print_monitor._recover_print_tracker_on_start()
         stored = cancel_fetch_store.get_pending(INDX, str(JOB))["end_heads"]

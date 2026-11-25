@@ -1,5 +1,46 @@
 # **Done**
 
+* **[2026-11-24 — 📡 Group 65 Print Watch: First Steps done on `feature/group-65-print-watch-first-steps`; merged to `dev` on Derek's OK; `main` held]** — built 2026-11-23 by one chat, on a branch cut from Group 64's (64 merged to `dev` `27a47b8c` the same day, and dev into this branch): Derek's network-drop report (2026-11-09) and the first step of each of his three 2026-11-03 early-warning items (the print-file watch, weigh-in drift, a longer history). Built solo, then a first review (39 findings) and six fix reviews (19, 19, 24, 18, 11, 10), each finding fixed with a test red on the commit before it (`e6ee25ad` `c244a791` `41503f1f` `fddf1ceb`, `2363aba3`, `dcfa4a4b`, `cbfea058`, `22c87e02`, `04ce498f`, `fadc6409`). Picture walk 2026-11-24: all kept; the 🔁 card's banner now names its heads as its rows do (Derek: "the spools are listed as head 1, but in the notice, it says toolhead positon 0"; `fb3e7a2b`). The step 2s stay in their buglist items, and seven edges the reviews left are filed standalone (two items, 2026-11-24).
+  * ✅ **65.1 (2)** One 📡 line when FCC loses contact with a printer (3 failed probes in a row) and one when it answers again, never per tick.
+  * ✅ **65.1 (1)** The latch keeps when FCC last saw a print and when it lost it; every review after lost contact says so in a 📡 line, and every ❓ card gets Charge the whole print and How far it got, worked out on the server from the figures the card keeps from its one download. A spool weighed while FCC couldn't see the print is held, what FCC saw it print counted; a print FCC first meets at a park is latched there; a card FCC couldn't measure says why and, where it can, reads its file for figures.
+  * ✅ **65.1 (3)** The lost line and the OFFLINE badge's tooltip say why: PrusaLink not answering on a printer that is on the network (restart it once its print is done), no answer at all, an API key turned away, an error, or something else at the address.
+  * ✅ **65.2, step 1** A finished print's file is walked too, one line naming every head past the 2% rule; every file FCC reads is scanned for slicer tags it doesn't know and for bare tag words (`print_file_watch.py`).
+  * ✅ **65.3, step 1** Every weigh save says what FCC expected, or that it was a hand edit, and names a print not charged yet; both empty-spool prompts say to take the add-ons off first.
+  * ✅ **65.4, step 1** `hub.log` keeps 20 files of 5 MB.
+  * ✅ **The runs.** The full sweep with the browser tests on dev after fix review 3: 10706 passed, 1 failed, a test (fixed in `c5719825`); offline runs green after each later round (8861, 8876, 8888) and the review card's 111 browser tests each time.
+  * ⏳ **Left, standalone in the buglist:** 🟡 Print Watch at a park: five edges left by Group 65's reviews; 🟡 three ends FCC can't measure still give no figures; and the 2026-11-03 items' later steps (the per-printer print-file fingerprint; the drift record, its report and the known add-on weights; the spool-history journal), each still in its own item.
+  * The item archived:
+    > * **📡 A printer that drops off the network mid-print: say so, and say what FCC missed (Derek, 2026-11-09).** _(→ **Group 65.1**, 2026-11-16)_
+    >   _(Found when both printers showed offline after a router reboot: they answered ping, but PrusaLink timed
+    >   out on every port, from the PC and from the container, until Derek pressed each printer's reset button.)_ Derek: *"the
+    >   biggest problem, is if the network drops mid print, and fcc doesn't receive data when everything re-connects."* What
+    >   FCC does now is safe: `print_monitor._track_print_edge` keeps the latched job through every failed probe, so on
+    >   reconnect a FINISHED charges as usual, a STOPPED runs the cancel partial, an IDLE (the finish screen cleared, or a
+    >   reset) opens the ❓ ambiguous review and never charges by itself, and a new job started meanwhile opens the job-changed
+    >   review. Three gaps:
+    >   **(1) The review's percentage is where FCC lost sight of the print, and it doesn't say so (M, ~4–6 h).** The latch
+    >   keeps no time for its last good sample, so a print that lost contact at 30% and finished unseen reads "❓ XL — ended at
+    >   ~30%" (`cancel_review.js`), its grams worked out at 30%. Record the last good sample's time and the first failed probe
+    >   after it on the latch (persisted with it, `data/print_tracker_latch.json`), and when the edge comes after a gap, word
+    >   the review from it: "FCC lost contact with XL at ~30% (14:02) and next saw it idle at 16:40, so the print may have gone
+    >   further." **Derek's answer (2026-11-09):** "the 30% last seen is the real issue, we should have a charge the whole
+    >   print, or a way to change the percentage (in case the user actually did see the percentage before interruption (either
+    >   power, or reset/otherwise))". So every ❓ ambiguous review, whatever ended it (a network drop, a power cut, a reset),
+    >   gets (a) a one-tap **Charge the whole print** (each head's footer grams) and (b) an editable **percentage**, pre-filled
+    >   with the last % FCC saw, that works the grams out again from the print file at the % typed (the cancel partial's own
+    >   walk, `prusalink_api.measure_filament_usage`, so a server round trip, not a page-side scale). Today the card offers only
+    >   each spool's grams to edit (`cancel_review.js`). The per-spool grams stay editable after either.
+    >   **(2) Nothing is logged (S, ~2 h).** `prusalink_api._probe_printer_state` answers None on a timeout without a word, and
+    >   hub.log held no printer line all day. Log once per change, never per tick: a WARNING after a few failed probes in a row
+    >   (so a one-tick blip says nothing), "Lost contact with XL (it was printing 'x.bgcode', ~30%)" or "… (idle)", and an INFO
+    >   "XL is back (PRINTING, ~62%)" on the first good probe after it.
+    >   **(3) Say when PrusaLink, not the printer, is stuck (S, ~2 h, after a check on TrueNAS).** On 2026-11-09 the printers
+    >   answered ping while every TCP port timed out, and only a reset brought PrusaLink back. Where the container can ping
+    >   (ICMP needs NET_RAW: check it on TrueNAS first), the lost-contact line and the Printer Status badge could tell "XL is on
+    >   the network but PrusaLink isn't answering: restart the printer once its print ends" from "XL doesn't answer at all (off,
+    >   or off the network)". A reset mid-print ends the print, so the words must say to wait; the ambiguous review covers a
+    >   reset that ends one.
+
 * **[2026-11-23 — 🖨️ Group 64 Print-End Hardening merged to `dev` `27a47b8c` (Claude ran `/project:finish-group` on Derek's OK, "Merge if were done, otherwise, correct anything and then merge"); `main` held]** — built on `feature/group-64-print-end-hardening` (cut from `dev` `3388c7d`) from 2026-11-19 to 23 by one chat: the print-end hotfix's leftovers, Derek's Decision 1 (a spool weighed after its print ended is never charged twice) and MMU support (his veto of call 1: "Each slot its own number"). Built solo, then a first review (16 findings), a fix review (10), a full-size review in two chunks (26), and four more checks of the fixes (12, 13, 13, 8 + 1): every finding fixed, each pin red on the code before it, with mutation passes.
   * ✅ **64.1** A one-position printer's swap split counts a tool's grams once: the footer and the swaps' figures fold onto the position by the same tool; several tools on one position ask.
   * ✅ **64.2** The hotfix's eleven smaller limits: one spool lock shared by charges and FCC's weight saves; a set's figures checked by the server (`set_ack`); a compute that raises or a file that won't decode retried with a backoff until the 72 h give-up, with a "↻ Try again now" button; a scanned label picks on the card's picker; the card's grams boxes are weight boxes; and the rest of the list.

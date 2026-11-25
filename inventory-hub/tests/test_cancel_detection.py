@@ -373,8 +373,10 @@ def test_attention_to_idle_fires_ambiguous(capture_ambiguous):
     so you power-cycle). The print ENDED from ATTENTION without an observed
     terminal → fire the ambiguous review from the held latch (prev=ATTENTION is
     'active', not idle/terminal)."""
-    _drive(["PRINTING", "ATTENTION", "IDLE"],
-           jobs={0: _job(filename="/usb/r.bgcode", job_id=42, progress=0.91)})
+    # The park's own job read names the same print (Group 65 fix review 2, WA1: a park
+    # whose read names another print is a job change).
+    job42 = _job(filename="/usb/r.bgcode", job_id=42, progress=0.91)
+    _drive(["PRINTING", "ATTENTION", "IDLE"], jobs={0: job42, 1: job42})
     assert capture_ambiguous.call_count == 1
     args = capture_ambiguous.call_args.args
     assert args[1] == "/usb/r.bgcode" and args[2] == 42

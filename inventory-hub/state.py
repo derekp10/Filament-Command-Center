@@ -104,7 +104,12 @@ logger.addHandler(c_handler)
 # File Output. delay=True (Group 45.9): the file is opened at the first log line,
 # not at import, so importing this module (every host test run, every script)
 # creates no hub.log in whatever the working directory is.
-f_handler = RotatingFileHandler('hub.log', maxBytes=1000000, backupCount=5, delay=True)
+# 20 files of 5 MB, 100 MB (Group 65.4; Derek, 2026-11-03: "I didn't realize how
+# handy those logs are, and I'm beginning to wonder if we shouldn't keep them
+# longer"). It kept 6 of 1 MB, and from 2026-02-16 to 02-19 one repeated line
+# filled four of them and pushed out everything logged before. At today's rate
+# (~66 KB a month) 100 MB never fills; a burst like February's takes ~38 days.
+f_handler = RotatingFileHandler('hub.log', maxBytes=5_000_000, backupCount=19, delay=True)
 f_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(f_handler)
 

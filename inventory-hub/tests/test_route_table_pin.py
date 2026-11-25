@@ -33,6 +33,7 @@ EXPECTED_ROUTES = [
     ("/api/cancel_deduct/dismiss", "POST", "api_cancel_deduct_dismiss"),
     ("/api/cancel_deduct/retry_fetch", "POST", "api_cancel_deduct_retry_fetch"),
     ("/api/cancel_deduct/pending", "GET", "api_cancel_deduct_pending"),
+    ("/api/cancel_deduct/recompute", "POST", "api_cancel_deduct_recompute"),  # Group 65.1 (1b)
     ("/api/config", "GET", "api_get_config"),
     ("/api/config", "PUT", "api_put_config"),
     ("/api/config/export", "GET", "api_config_export"),

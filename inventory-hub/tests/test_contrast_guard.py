@@ -1261,6 +1261,73 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
     page.keyboard.press("Escape")
 
 
+def test_lost_contact_review_lines_are_readable(page: Page, base_url: str):
+    """Group 65.1 (1): a review whose end FCC saw only after it lost sight of the print
+    says so in a 📡 line under its file name (a ❓ card, a 🛑 card, and a "couldn't
+    measure" card restart recovery opened). Each line readable on its card. Made-up
+    reviews in this page only; nothing is written."""
+    import json as _json
+    import time as _time
+    import conftest
+    now = _time.time()
+    lost = {"progress": 0.3, "seen_at": now - 9600, "lost_at": now - 9480, "back_at": now, "back_state": "IDLE",
+            "why": "lost"}
+    row = {"sid": 9001, "toolhead": "ZZ-1", "position": 0, "grams": 12.4, "current_used": 100.0,
+           "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 887.6,
+           "display": "#9001 Contrast PLA", "color": "c0392b", "ambiguous": False}
+    base = {"printer_name": "ZZ Contrast XL", "filename": "/usb/LOST~1.BGC", "progress": 0.3,
+            "total_grams": 12.4, "kind": "partial"}
+    pending = [dict(base, job_id="l1", ambiguous=True, spools=[row], lost_contact=lost),
+               dict(base, job_id="l2", ambiguous=False, spools=[dict(row, sid=9002)],
+                    lost_contact=dict(lost, back_state="STOPPED")),
+               dict(base, job_id="l3", ambiguous=True, spools=[], total_grams=0.0, kind="progress_unknown",
+                    unmeasured_reason="unsampled", usage_map=None, lost_contact=dict(lost, why="restart"))]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="l3"] .fcc-cr-lost', timeout=15000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    offenders = [o for o in conftest.contrast_offenders(overlay)
+                 if "lost contact" in (o.get("text") or "") or "last saw this print" in (o.get("text") or "")]
+    assert offenders == [], offenders
+    # Proved scored (the guard keeps each text's start, so the lines are found by theirs).
+    scored = [o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100)]
+    assert sum("FCC lost contact with ZZ Contrast XL" in (t or "") for t in scored) == 2, scored
+    assert any("FCC last saw this print" in (t or "") for t in scored), scored
+    page.keyboard.press("Escape")
+
+
+def test_review_basis_controls_are_readable(page: Page, base_url: str):
+    """Group 65.1 (1b): a card whose download kept its figures offers Charge the whole
+    print and "How far it got: [ ] %" with Work it out, and says the basis it was worked
+    out at. Each readable on its card. A made-up review in this page only; nothing is
+    written."""
+    import json as _json
+    import conftest
+    figures = {"footer": {"0": 40.0}, "by_pct": {"0": [round(0.4 * i, 4) for i in range(101)]}}
+    row = {"sid": 9001, "toolhead": "ZZ-1", "position": 0, "grams": 24.8, "current_used": 100.0,
+           "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 875.2,
+           "display": "#9001 Contrast PLA", "color": "c0392b", "ambiguous": False}
+    pending = [{"printer_name": "ZZ Contrast XL", "job_id": "b1", "filename": "/usb/BASIS~1.BGC", "progress": 0.62,
+                "seen_progress": 0.3, "basis": 62, "rev": 1, "total_grams": 24.8, "kind": "partial",
+                "ambiguous": True, "spools": [row], "figures": figures}]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="b1"] .fcc-cr-basis', timeout=15000)
+    basis = page.locator('#fcc-cancel-review-overlay .fcc-cr-card[data-job="b1"]')
+    words = ("Charge the whole print", "How far it got", "Work it out", "Worked out at 62%")
+    assert [o for o in conftest.contrast_offenders(basis) if any(w in (o.get("text") or "") for w in words)] == []
+    scored = [o.get("text") or "" for o in conftest.contrast_offenders(basis, min_ratio=100)]
+    for w in words:
+        assert any(w in t for t in scored), (w, scored)
+    page.keyboard.press("Escape")
+
+
 @pytest.mark.usefixtures("require_server")
 def test_scan_holding_pickers_notice_lines_are_readable(page: Page, base_url: str, assert_contrast):
     """Group 61 review: the notice line of each picker that holds scans (the
@@ -1507,6 +1574,43 @@ def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
     page.locator("#fcc-archive-later").click()
 
 
+def test_the_empty_weight_prompts_add_ons_line_is_readable(page: Page, base_url: str):
+    """Group 65.3: both empty-spool prompts carry a line about clips, caps and edge
+    guards: the post-archive prompt's "Take off any clip, cap or edge guards before you
+    weigh it: …", and the missing-tare question's (a Gross reading with no empty weight)
+    "Weigh the empty spool as the full one was weighed, with any clip, cap or edge guards
+    off: …" (the group's first review reworded both, 41503f1f). Each line on its prompt's
+    dark ground, scored from the dialog and proved scored, by words within the first 80
+    characters the guard reports. A stub filament, every write answered in the browser,
+    nothing saved."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9004, "name": "Ocean Blue", "material": "PLA", "spool_weight": None,
+                "vendor": {"id": 9005, "name": "Example Brand", "empty_spool_weight": None}}
+    _read_only(page, extra_get={"/api/filament_details": filament})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.showArchiveEmptyWeightPrompt === 'function'"
+                           " && typeof window.promptMissingEmptyWeight === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    words = "Take off any clip, cap or edge guards before you weigh it"
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 9004, null); }")
+    expect(page.locator("#fcc-archive-empty-overlay #fcc-archive-empty-addons")).to_be_visible()
+    dialog = page.locator("#fcc-archive-empty-overlay [data-fcc-weight-keys]")
+    assert [o for o in conftest.contrast_offenders(dialog) if words in (o.get("text") or "")] == []
+    assert any(words in (o.get("text") or "") for o in conftest.contrast_offenders(dialog, min_ratio=100))
+    page.locator("#fcc-archive-later").click()
+    expect(page.locator("#fcc-archive-empty-overlay")).to_have_count(0)
+    # The missing-tare question (no Promise handed back: evaluate would wait on it).
+    page.evaluate("() => { window.promptMissingEmptyWeight({ vendor: 'Example Brand', material: 'PLA',"
+                  " color: 'Ocean Blue', allowSkip: true }); }")
+    expect(page.locator("#fcc-missing-empty-weight-overlay-addons")).to_be_visible()
+    question = page.locator("#fcc-missing-empty-weight-overlay [role=dialog]")
+    words = "Weigh the empty spool as the full one was weighed, with any clip, cap"
+    assert [o for o in conftest.contrast_offenders(question) if words in (o.get("text") or "")] == []
+    assert any(words in (o.get("text") or "") for o in conftest.contrast_offenders(question, min_ratio=100))
+    page.keyboard.press("Escape")
+
+
 def test_the_refill_question_is_readable(page: Page, base_url: str):
     """Group 63.1: the question a refill after a toolhead asks (window.askRefillPlace):
     its title, words, answers (Back on the head greyed out, its reason line in yellow)
@@ -1710,7 +1814,7 @@ def test_print_end_review_notes_are_readable(page: Page, base_url: str, assert_c
     # Each element's text is scored by its first 80 characters (contrast_offenders).
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
     for said in ("had #42 when the print started", "is on HEAD-7 now", "isn't sure which spool printed",
-                 "isn't sure which spool it came from", "changed mid-print at position(s)"):
+                 "isn't sure which spool it came from", "changed mid-print on HEAD-5"):
         assert said in scored, (said, scored)
     page.keyboard.press("Escape")
 
