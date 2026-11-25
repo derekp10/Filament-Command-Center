@@ -1188,6 +1188,9 @@ _HEADS_WORDS = {
     # Group 64.3 (4): an end straight from an ATTENTION park (a cancel from the
     # printer's prompt) names the spools read when it first parked.
     "park": "when the printer paused",
+    # Group 65 fix review 6 (WU1): a park read that landed only on a retry, a while after
+    # FCC first saw the print parked: maybe after a spool was changed at its prompt.
+    "park_late": "when FCC first read its heads at the park, a while after the printer paused",
     "start": "when the print started",
     # Group 65.1 (1): an end FCC saw only after it lost contact with the printer names
     # the spools read when it saw the printer again, never "when the print ended".
@@ -2334,36 +2337,67 @@ def _held_left_unseen(rec, row, sid, used_now, mark):
 def _rec_seen_g(rec, row, sid):
     """Group 65 fix review 5 (RZ1): RX4's seen share at an Apply on a card that keeps no
     figures (a completion's uncharged-grams or no-spool card, seen after lost contact), from
-    its `seen_by_head`: the spool FCC's record had on each head when it last saw the print,
-    and the walk's grams for that head up to then. 0.0 for any other spool on that head;
-    None when the card kept none (the figures' share is worked out instead)."""
+    its `seen_by_head`: for each head, each spool FCC's record had there before it last saw
+    the print and the walk's grams of that spool's own stretches up to then (fix review 6,
+    RU1: a spool put on at a swap counts from that swap). 0.0 for a spool FCC saw nowhere on
+    that head; None when the card kept none (the figures' share is worked out instead). A
+    card from fix review 5 keeps one spool a head ({sid, grams})."""
     seen = rec.get("seen_by_head")
     if not isinstance(seen, dict):
         return None
     h = seen.get(str(_norm_pos(row.get("position"))))
-    if not isinstance(h, dict) or h.get("sid") is None or str(h.get("sid")) != str(sid):
+    if not isinstance(h, dict):
+        return 0.0
+    if "sid" in h:
+        g = h.get("grams") if h.get("sid") is not None and str(h.get("sid")) == str(sid) else None
+    else:
+        g = h.get(str(sid))
+    if g is None:
         return 0.0
     try:
-        return round(max(0.0, min(float(h["grams"]), float(row.get("grams") or 0))), 2)
-    except (TypeError, ValueError, KeyError):
+        return round(max(0.0, min(float(g), float(row.get("grams") or 0))), 2)
+    except (TypeError, ValueError):
         return None
 
 
 def _seen_by_head(start_spools, swap_log, seen, cums):
-    """{str(pos): {sid, grams}}: the spool FCC's record had on each head when it last saw
-    the print (progress `seen`: the start snapshot advanced by the swaps recorded by then)
-    and the walk's grams for that head up to then (`cums`, the download's grams at that
-    progress). {} when FCC can't say (Group 65 fix review 5, RZ1)."""
+    """{str(pos): {str(sid): grams}}: for each head, each spool FCC's record had there
+    before it last saw the print (progress `seen`), and the walk's grams of that spool's own
+    stretches up to then: the start snapshot's spool from the start, a spool a recorded swap
+    put on from that swap, a spool that went back on summed (Group 65 fix review 5, RZ1; fix
+    review 6, RU1: the head's grams from the start credited the spool on it at `seen` with
+    the stretches before its swap). `cums`: the download's {point: {pos: grams}} at every
+    swap and at `seen`. {} when FCC can't say; a head whose figures are missing is left out."""
     if seen is None or not isinstance(cums, dict):
         return {}
     try:
-        log = [ev for ev in swap_log or [] if isinstance(ev, dict)
-               and _swap_point(ev) is not None and _swap_point(ev) <= float(seen) + 1e-6]
+        seen_pt = _swap_point({"progress": float(seen)})
+        at_seen = cums.get(seen_pt)
+        if seen_pt is None or not isinstance(at_seen, dict):
+            return {}
+        start = _start_map(start_spools)
+        events = _swaps_by_position([ev for ev in swap_log or [] if isinstance(ev, dict)
+                                     and _swap_point(ev) is not None and _swap_point(ev) <= seen_pt + 1e-9])
         out = {}
-        for pos, sid in _start_mapping(start_spools, log).items():
-            g = _cum_at(cums, pos)
-            if sid is not None and g is not None:
-                out[str(_norm_pos(pos))] = {"sid": sid, "grams": round(float(g), 4)}
+        for pos in set(start) | set(events):
+            spans, sid, frm = [], start.get(pos), 0.0
+            for ev in events.get(pos) or []:
+                pt = _swap_point(ev)
+                spans.append((sid, frm, pt))
+                sid, frm = ev.get('to_sid'), pt
+            spans.append((sid, frm, seen_pt))
+            per = {}
+            for s_id, a, b in spans:
+                if s_id is None:
+                    continue
+                g_b = _cum_at(at_seen if b == seen_pt else cums.get(b), pos)
+                g_a = 0.0 if a <= 1e-9 else _cum_at(cums.get(a), pos)
+                if g_b is None or g_a is None:
+                    per = None
+                    break
+                per[str(s_id)] = round(per.get(str(s_id), 0.0) + max(0.0, float(g_b) - float(g_a)), 4)
+            if per:
+                out[str(_norm_pos(pos))] = per
         return out
     except (TypeError, ValueError):
         return {}
@@ -3732,7 +3766,7 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
 
     # Group 65 fix review 5 (RZ1): what FCC saw each head print before it lost sight of the
     # print, for the cards this opens (they keep no figures of their own).
-    seen_by_head = (_seen_by_head(start_spools, swap_log, seen, swap_cums.get(seen_point))
+    seen_by_head = (_seen_by_head(start_spools, swap_log, seen, swap_cums)
                     if unseen and seen_point is not None else {})
     mapping = _usable_heads(end_heads)
     heads = source = read_at = None
@@ -3864,7 +3898,9 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
         # below instead (43.2): it may have landed, and a no_spool Apply would
         # charge whatever is on the head again.
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
-                                        usage_map=usage_map, no_spool=True, **lost_kw)
+                                        usage_map=usage_map, no_spool=True, **lost_kw,
+                                        # Group 65 fix review 6 (RU2): what FCC saw each head print.
+                                        **_given(seen_by_head=seen_by_head or None))
     # Record what was ACTUALLY deducted, not the full footer estimate: on a
     # multi-tool print where one toolhead has a spool and another doesn't,
     # _apply_usage_to_printer deducts only the bound one(s), so sum(usage_map) would
@@ -5506,6 +5542,16 @@ def _stash_cancel_review_from_heads(printer_name, filename, job_id, reached_frac
         row_notes = _row_notes_after_end(printer_name, fb_url, heads, rows, words)
         if row_notes:
             record["row_notes"] = row_notes
+    if source == "park_late":
+        # Group 65 fix review 6 (WU1): FCC read the heads at the park only on a retry, maybe
+        # after a spool was changed at its prompt: each row says its spool may not be the one
+        # that printed this (it was pre-picked as read, and said nowhere).
+        late_notes = {str(r['sid']): (f"FCC read {r.get('toolhead') or 'its head'} only after the print had "
+                                      f"parked a while: if a spool was changed at that prompt before then, "
+                                      f"#{r['sid']} isn't the one that printed this. Pick the spool that did.")
+                      for r in rows if r.get('sid') is not None}
+        if late_notes:
+            record["row_notes"] = _merge_notes(record.get("row_notes"), late_notes)
     uncharged = _carry_uncharged(record, unresolved, printer_name, fb_url, heads=card_heads,
                                  source=source, read_at=read_at, notes=notes, phrases=phrases,
                                  sets=sets)

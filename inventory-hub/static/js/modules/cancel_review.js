@@ -1389,6 +1389,9 @@
         const t = String(s == null ? '' : s).trim().replace(/\s*%$/, '');
         return t === '' ? NaN : Number(t);
     };
+    // Group 65 fix review 6 (CU1): a figure as the person typed it, for the words (62.25,
+    // never fmt's 62.3).
+    const pctAsTyped = (s) => String(s == null ? '' : s).trim().replace(/\s*%$/, '');
     // Where the keyboard was on a card, to find it again on the card drawn anew (Group 65
     // fix review, CD5): the control's own class and the line, spool or head it belongs to.
     function focusKey(el) {
@@ -1552,6 +1555,7 @@
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-kind="${esc(kind)}" data-ambiguous="${rec.ambiguous ? '1' : '0'}"
                  data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
+                 data-basis="${esc(rec.basis == null ? '' : rec.basis)}"
                  data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
                  data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
@@ -1682,6 +1686,7 @@
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-ambiguous="${ambiguous ? '1' : '0'}" data-kind="${esc(kind)}"
                  data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
+                 data-basis="${esc(rec.basis == null ? '' : rec.basis)}"
                  data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
                  data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
@@ -2009,6 +2014,9 @@
             const fresh = tmp.firstElementChild;
             card.replaceWith(fresh);
             fresh.dataset.drawnAt = String(Date.now());      // fix review 4 (CY4)
+            // Fix review 6 (CU3 / AU3): How far it got as the person left it, read right before
+            // the fresh card took its place: a queued Enter's figure is judged against it.
+            fresh._fccKeptPct = kept && kept.pct ? kept.pct.value : null;
             if (liveHeads[printer]) withHeads(fresh, liveHeads[printer]);
             if (kept) {
                 fresh._fccKept = restoreCard(fresh, kept, keep);
@@ -2181,8 +2189,9 @@
                         ? (d.msg || 'This card changed since it was drawn: it is drawn again as it is now.') + notDone
                         : `${how}: ${next}${gone}`);
                     // Fix review 4 (CY2) / 5 (CZ1 / CZ2): an Enter in How far it got while the card
-                    // was being worked out: its figure is worked out now, as the person asked.
-                    afterQueued(card, fresh);
+                    // was being worked out: its figure is worked out now, as the person asked;
+                    // fix review 6: never the figure this press sent again (a double press).
+                    afterQueued(card, fresh, { sent: whole ? null : payload.percent });
                 }
                 // The redraw put new buttons where the pointer is: a double click's second
                 // press reaches nothing (Group 58's rule).
@@ -2190,6 +2199,12 @@
                 return;
             }
             btns.forEach((b) => { b.disabled = false; });
+            // Fix review 6 (CU2): a queued copy of the figure FCC just refused (a double press's
+            // second Enter) goes with the refusal's own words, never "press Enter again".
+            if (!whole && pctNumber(card.dataset.queuedPct) === Number(payload.percent)) {
+                delete card.dataset.queuedPct;
+                delete card.dataset.queuedTypo;
+            }
             tell(card, ((d && d.msg) || "FCC didn't answer, so the card wasn't worked out again. Try again in a moment.")
                 + queuedNotDone(card));
         }
@@ -2202,25 +2217,75 @@
         function queuedNotDone(card) {
             const q = card.dataset.queuedPct;
             delete card.dataset.queuedPct;
-            return (q != null && q !== '') ? ` ${fmt(Number(q))}% wasn’t worked out: press Enter again.` : '';
+            delete card.dataset.queuedTypo;
+            return (q != null && q !== '') ? ` ${pctAsTyped(q)}% wasn’t worked out: press Enter again.` : '';
         }
-        function afterQueued(old, fresh) {
+        // Words added after what the card already says (a redraw's own words stand).
+        function addToNotice(card, words) {
+            const n = card && card.querySelector('.fcc-cr-card-notice');
+            const now = n ? String(n.textContent || '').trim() : '';
+            sayOnCard(card, now ? `${now} ${words}` : words);
+        }
+        // Group 65 fix review 6 (CU1 / CU3 / AU1 / AU2 / AU3, CZ1 a): the queued Enter, judged
+        // on the old card's box as the redraw read it (`_fccKeptPct`): changed since the Enter,
+        // it is said and never worked out; the figure the press itself sent (a double press's
+        // second Enter) is never worked out again, nor one the card is at (its exact basis,
+        // `data-basis`, never the box's rounding); else the figure as typed goes out on the
+        // card drawn again. `ctx.sent`: the percentage the redraw's own press sent.
+        function afterQueued(old, fresh, ctx) {
             const q = old.dataset.queuedPct;
+            const typo = old.dataset.queuedTypo;
             delete old.dataset.queuedPct;
-            if (q == null || q === '' || !fresh) return;
-            const want = Number(q);
-            const box = fresh.querySelector('.fcc-cr-pct');
-            if (!box || !Number.isFinite(want)) return;
-            const at = pctNumber(box.getAttribute('value'));
-            if (Number.isFinite(at) && at === want) return;      // drawn at it already
-            const now = pctNumber(box.value);
-            if (now === want || (Number.isFinite(at) && now === at)) {
-                box.value = fmt(want);
-                recompute(fresh, false);
+            delete old.dataset.queuedTypo;
+            if (!fresh) return;
+            if ((q == null || q === '') && typo != null && typo !== '') {
+                addToNotice(fresh, `“${typo}” in How far it got isn’t a percentage from 0 to 100, so it wasn’t worked out.`);
                 return;
             }
-            sayOnCard(fresh, `${fmt(want)}% wasn’t worked out: How far it got changed after you pressed Enter. `
-                + 'Press Enter to work out what it holds.');
+            if (q == null || q === '') return;
+            const want = pctNumber(q);
+            if (!Number.isFinite(want)) return;
+            const left = fresh._fccKeptPct;
+            if (left != null && pctAsTyped(left) !== pctAsTyped(q)) {
+                addToNotice(fresh, `${pctAsTyped(q)}% wasn’t worked out: How far it got changed after you pressed `
+                    + 'Enter. Press Enter to work out what it holds.');
+                return;
+            }
+            if (ctx && ctx.sent != null && want === Number(ctx.sent)) return;
+            const basis = String(fresh.dataset.basis == null ? '' : fresh.dataset.basis);
+            if ((basis === 'whole' && want === 100) || (basis !== '' && basis !== 'whole' && Number(basis) === want)) return;
+            const box = fresh.querySelector('.fcc-cr-pct');
+            if (!box) return;
+            box.value = pctAsTyped(q);
+            recompute(fresh, false);
+        }
+        // Group 65 fix review 6 (CU4): an Enter in How far it got on a card kept as drawn after
+        // a read that failed reads the card again first, then works its figure out on the card
+        // FCC holds, never sending the old revision (refused as stale, the figure lost).
+        async function readAgainThenQueued(card) {
+            card.dataset.recomputing = '1';
+            const btns = Array.from(card.querySelectorAll('.fcc-cr-whole, .fcc-cr-workout, .fcc-cr-confirm, .fcc-cr-discard'));
+            btns.forEach((b) => { b.disabled = true; });
+            sayOnCard(card, 'Reading this card again first…');
+            const fresh = await rerenderCard(card, true, { from: 'basis' });
+            if (fresh && fresh !== card) {
+                sayOnCard(fresh, 'Drawn again as FCC holds this card now.');
+                afterQueued(card, fresh, {});
+            } else if (fresh) {
+                delete card.dataset.recomputing;
+                btns.forEach((b) => { b.disabled = false; });
+                sayOnCard(card, `FCC still couldn’t read the review list.${queuedNotDone(card)}`);
+            }
+        }
+        // Group 65 fix review 6 (CZ1 c): a card drawn again with a figure in How far it got that
+        // it isn't worked out at (typed, never worked out) says so: Confirm charges the card's.
+        function sayCarried(fresh) {
+            const box = fresh && fresh.querySelector('.fcc-cr-pct');
+            if (!box) return;
+            const typed = pctAsTyped(box.value);
+            const drawn = pctAsTyped(box.getAttribute('value'));
+            if (typed === '' || typed === drawn || !PCT_FIGURE.test(typed)) return;
+            addToNotice(fresh, `How far it got reads ${typed}%, which isn’t worked out: press Enter to work it out.`);
         }
 
         // 43.2: an Apply that couldn't place every gram opened an uncharged-grams
@@ -2442,18 +2507,30 @@
             // out again ("whole" became "100%", a second log line).
             const card = t.closest('.fcc-cr-card');
             if (!card) return;
-            if (card.dataset.recomputing === '1') {
+            const busy = card.dataset.recomputing === '1';
+            if (busy || card.dataset.stale === '1') {
                 // Fix review 4 (CY2) / 5 (CZ1 / CZ2 / CZ3): the card is being worked out, or a
                 // stale Confirm reads it again: the figure the Enter was pressed on (any figure,
-                // the old card's own too) is kept and worked out once the card is drawn again
-                // (afterQueued); one that isn't from 0 to 100 is said at once, never promised.
-                const n = pctNumber(t.value);
-                if (!PCT_FIGURE.test(t.value) || !Number.isFinite(n) || n < 0 || n > 100) {
+                // the old card's own too) is kept, as typed, and worked out once the card is
+                // drawn again (afterQueued); one that isn't from 0 to 100 is said at once, never
+                // promised, and again on the card drawn again (fix review 6, CZ1 a). Fix review
+                // 6 (CU4): a card kept as drawn after a read that failed is read again first, so
+                // its Enter goes out on the revision FCC holds, never refused as stale.
+                const text = String(t.value).trim();
+                const n = pctNumber(text);
+                if (!PCT_FIGURE.test(text) || !Number.isFinite(n) || n < 0 || n > 100) {
+                    card.dataset.queuedTypo = text;
+                    delete card.dataset.queuedPct;
                     sayOnCard(card, 'Type how far the print got, from 0 to 100 %, then press Enter.');
                     return;
                 }
-                card.dataset.queuedPct = String(n);
-                sayOnCard(card, `Still working this card out: ${fmt(n)}% is worked out once it is drawn again.`);
+                card.dataset.queuedPct = text;
+                delete card.dataset.queuedTypo;
+                if (busy) {
+                    sayOnCard(card, `Still working this card out: ${pctAsTyped(text)}% is worked out once it is drawn again.`);
+                    return;
+                }
+                readAgainThenQueued(card);
                 return;
             }
             const drawn = pctNumber(t.getAttribute('value'));
@@ -2590,7 +2667,10 @@
                     const fresh = await rerenderCard(card, true, { from: 'confirm' });
                     if (fresh && fresh !== card) {
                         sayOnCard(fresh, 'Drawn again as FCC holds this card now: check it, then Apply.');
-                        afterQueued(card, fresh);
+                        // Fix review 6 (CZ1 c): a typed figure the card isn't at is said.
+                        const queued = !!card.dataset.queuedPct;
+                        afterQueued(card, fresh, {});
+                        if (!queued) sayCarried(fresh);
                     } else if (fresh) {
                         delete card.dataset.recomputing;
                         held.forEach((b) => { b.disabled = false; });

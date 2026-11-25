@@ -1334,6 +1334,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                else None),
                 # Group 65.1 (1): an end FCC saw only after it lost sight of the print.
                 'lost_contact': _lost_contact_from(entry, cur),
+                # Group 65 fix review 6 (WU1): its park read landed only on a retry.
+                'start_late': entry.get('start_late'),
             }
             # Reset the latch to the terminal state so the edge can't re-fire.
             _PRINT_TRACKER[printer_name] = {'state': cur}
@@ -1446,6 +1448,10 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                 # a retry may come after a spool was changed at the prompt: the
                                 # resume says so when it finds no change (when it read them).
                                 e['start_late'] = time.time()
+                                # Fix review 6 (WU1): and a card built from it (a cancel or reset
+                                # at that prompt) says when it was read, never "when the printer
+                                # paused".
+                                park['source'] = 'park_late'
         if not park:
             # Group 65 fix review 4 (WY3): a read that kept nothing (a Spoolman blip), of a
             # print FCC has no start snapshot for (one it first met at this park): read again
@@ -1512,6 +1518,23 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 # another), so the heads are read when FCC saw the printer again, and
                 # Decision 1 compares them with the start snapshot.
                 snapshot["park_heads"] = fire['park_heads']
+                if fire.get('start_late') is not None:
+                    # Group 65 fix review 6 (WU1): the park's read landed only on a retry, maybe
+                    # after a spool was changed at the prompt: said, as a resume says it.
+                    try:
+                        _heads = ", ".join(
+                            f"T{print_deduct._esc(h.get('position'))} #{print_deduct._esc(h.get('sid'))}"
+                            for h in (fire['park_heads'].get('heads') or [])
+                            if isinstance(h, dict) and h.get('sid') is not None)
+                        state.add_log_entry(
+                            f"⚠️ {print_deduct._esc(printer_name)}: FCC read job "
+                            f"{print_deduct._esc(fire['job_id'])}'s heads at its park"
+                            f"{f' ({_heads})' if _heads else ''} only after it first saw the print parked, "
+                            f"so if a spool was changed at that prompt before then, its 🛑 card names the new "
+                            f"spool for the part the old one printed: pick the spool that printed it.",
+                            "WARNING", "ffaa00")
+                    except Exception:
+                        pass
             if fire.get('lost_contact'):
                 # Group 65.1 (1): the heads are read when FCC saw the printer again.
                 snapshot["lost_contact"] = fire['lost_contact']

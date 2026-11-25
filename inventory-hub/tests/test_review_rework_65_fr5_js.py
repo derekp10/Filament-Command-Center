@@ -104,7 +104,9 @@ await settle(900);
 return { worked: worked(), notice: notice('a') };
 """, {"pending": _cards(), "spools": SPOOLS})
     assert res["worked"] == ["whole"], res
-    assert res["notice"].startswith("70% wasn’t worked out: How far it got changed after you pressed Enter."), res
+    # Fix review 6: after the redraw's own words (they stand), never in their place.
+    assert res["notice"].endswith("70% wasn’t worked out: How far it got changed after you pressed Enter. "
+                                  "Press Enter to work out what it holds."), res
 
 
 def test_a_queued_figure_on_a_card_that_couldnt_be_drawn_again_is_said(tmp_path):

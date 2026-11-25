@@ -56,7 +56,8 @@ def test_a_start_spools_pick_on_a_completions_uncharged_line_gets_its_seen_share
         p.sm.spools[42]["used_weight"] = 784.28
         _tick("FINISHED", _job(1.0))
         card = cancel_review_store.get_pending(INDX, f"{JOB}#shortfall")
-        assert (card.get("seen_by_head") or {}).get("4") == {"sid": 42, "grams": 70.0}, card
+        # Fix review 6 (RU1): per spool, each spool's own stretches before FCC lost sight.
+        assert (card.get("seen_by_head") or {}).get("4") == {"42": 70.0}, card
         before = p.sm.used(42)
         app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
             "printer_name": INDX, "job_id": f"{JOB}#shortfall", "rev": card.get("rev", 0),
