@@ -141,38 +141,24 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
 
         // --- UNSAVED CHANGES GUARD ---
         // hide.bs.modal fires before the modal closes and supports preventDefault().
+        // Group 66.2: the question is wizardAskDiscard's (one for this close and for
+        // anything that would start the wizard over), and the bypass flag is set and
+        // cleared around the synchronous hide(): a hide Bootstrap drops while the window
+        // fades never leaves it set for the person's next close (the grounding's C18).
         wizEl.addEventListener('hide.bs.modal', (event) => {
-            if (wizardState.forceClose) { wizardState.forceClose = false; return; }
-            if (wizardState.isDirty) {
-                event.preventDefault();
-                // Group 10.8 — was nested Swal.fire; now routed through
-                // mountOverlay so the .cmd-deck scrollbar-comp shift goes away
-                // and the overlay survives Bootstrap's focus trap.
-                const panelHtml = `
-                    <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:28.75rem; width:92%;">
-                        <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ Unsaved Changes</div>
-                        <div style="color:#ffc; margin-bottom:16px;">You have unsaved changes. Discard them and close?</div>
-                        <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
-                            <button id="fcc-wiz-dirty-cancel" class="btn btn-secondary btn-sm" style="min-width:120px;">Keep Editing</button>
-                            <button id="fcc-wiz-dirty-confirm" class="btn btn-danger btn-sm" style="min-width:140px;">Discard &amp; Close</button>
-                        </div>
-                    </div>
-                `;
-                const handle = window.mountOverlay({
-                    id: 'fcc-wiz-unsaved-changes',
-                    content: panelHtml,
-                    host: wizEl,
-                    initialFocus: '#fcc-wiz-dirty-cancel',
-                    // Escape = keep editing (default cleanup is sufficient).
-                });
-                handle.element.querySelector('#fcc-wiz-dirty-confirm')?.addEventListener('click', () => {
-                    handle.cleanup();
-                    wizardState.isDirty = false;
-                    wizardState.forceClose = true;
-                    window.modals.wizardModal.hide();
-                });
-                handle.element.querySelector('#fcc-wiz-dirty-cancel')?.addEventListener('click', () => handle.cleanup());
-            }
+            if (wizardState.forceClose) return;
+            if (!wizardState.isDirty) return;
+            event.preventDefault();
+            window.wizardAskDiscard({
+                title: '⚠️ Unsaved Changes',
+                body: 'You have unsaved changes. Discard them and close?',
+                discardLabel: 'Discard & Close',
+            }).then((discard) => {
+                if (!discard) return;
+                wizardState.isDirty = false;
+                wizardState.forceClose = true;
+                try { window.modals.wizardModal.hide(); } finally { wizardState.forceClose = false; }
+            });
         });
 
         // Track dirty state from any form input/change inside the wizard (delegated).
@@ -193,8 +179,27 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
         // question's Pick a place…: Group 63 review, round 2) is no edit of the form:
         // typing its search marked the wizard changed, and closing it asked.
         const _inDialog = (e) => !!(e && e.target && e.target.closest && e.target.closest('.swal2-container'));
-        wizEl.addEventListener('input', (e) => { if (!_inDialog(e)) _onDirty(); });
-        wizEl.addEventListener('change', (e) => { if (!_inDialog(e)) _onDirty(); });
+        // Group 66.2 (the grounding's 66.4 step 9): a text box that kept the focus
+        // through wizardReset fires its `change` at blur, in the NEW session, and that
+        // marked a fresh wizard changed (66.2's guard then asked over nothing). A typed
+        // box always fires `input` first, so a text box's `change` counts only when the
+        // box had an `input` since the last reset (wizardState.typedSinceReset). Hidden
+        // ids (a combobox pick), selects and checkboxes count as before.
+        const _textLike = (t) => !!t && ((t.tagName === 'INPUT' && t.type !== 'hidden'
+            && t.type !== 'checkbox' && t.type !== 'radio') || t.tagName === 'TEXTAREA');
+        wizEl.addEventListener('input', (e) => {
+            if (_inDialog(e)) return;
+            if (_textLike(e.target)) {
+                if (!wizardState.typedSinceReset) wizardState.typedSinceReset = new WeakSet();
+                wizardState.typedSinceReset.add(e.target);
+            }
+            _onDirty();
+        });
+        wizEl.addEventListener('change', (e) => {
+            if (_inDialog(e)) return;
+            if (_textLike(e.target) && !(wizardState.typedSinceReset && wizardState.typedSinceReset.has(e.target))) return;
+            _onDirty();
+        });
         // Which extras the user changed (window.wizardNoteExtraTouched). A chip's
         // own onclick removes it, so its click is read in the capture phase,
         // while the chip still sits in its box.
@@ -260,7 +265,90 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
     }, true);
 })();
 
-window.openWizardModal = async () => {
+// --- "UNSAVED CHANGES" (Group 66.2): one question for every way the wizard's edits
+// would be lost: its close, and anything that would start it over (a new Prusament
+// spool's QR, the legacy picker's Add new spool, an Edit / Clone / New Spool opened over
+// it). Resolves true for Discard, false otherwise (Keep Editing, Escape, its host closing,
+// a newer question on the same id). A mountOverlay hosted by the wizard, opening on Keep
+// Editing (the safe answer: CLAUDE.md "a dialog whose yes is hard to undo opens on its safe
+// answer"); Discard takes no mouse click until a double click has passed (62.3), and both
+// answers shield the next press. While it is up it holds scans: a bare CMD:CANCEL keeps
+// editing, any other scan is refused on its own line.
+window.wizardAskDiscard = ({ title, body, discardLabel }) => new Promise((resolve) => {
+    const wizEl = document.getElementById('wizardModal');
+    let handle = null;
+    let release = null;
+    let settled = false;
+    const onClosed = (e) => {
+        if (handle && e && e.detail && e.detail.element === handle.element) { handle = null; settle(false); }
+    };
+    const settle = (answer) => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('fcc:overlay-closed', onClosed);
+        if (release) { release(); release = null; }
+        if (handle) { const h = handle; handle = null; h.cleanup(); }
+        resolve(answer);
+    };
+    const esc = window.escHtml || _wizEscape;
+    handle = window.mountOverlay({
+        id: 'fcc-wiz-unsaved-changes',
+        host: wizEl,
+        initialFocus: '#fcc-wiz-dirty-cancel',
+        onEscape: () => settle(false),
+        content: `
+            <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:28.75rem; width:92%;">
+                <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${esc(title)}</div>
+                <div style="color:#ffc; margin-bottom:16px;">${esc(body)}</div>
+                <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
+                    <button id="fcc-wiz-dirty-cancel" class="btn btn-secondary btn-sm" style="min-width:120px;">Keep Editing</button>
+                    <button id="fcc-wiz-dirty-confirm" class="btn btn-danger btn-sm" style="min-width:140px;">${esc(discardLabel)}</button>
+                </div>
+                <div id="fcc-wiz-dirty-flash" role="alert" style="color:#ffc107; font-size:var(--fcc-fs-small); margin-top:10px;"></div>
+            </div>`,
+    });
+    document.addEventListener('fcc:overlay-closed', onClosed);
+    const ov = handle.element;
+    const shield = () => { if (window.fccShieldNextPress) window.fccShieldNextPress(); };
+    const arm = window.armedClick || ((fn) => fn);
+    ov.querySelector('#fcc-wiz-dirty-cancel').addEventListener('click', () => { shield(); settle(false); });
+    ov.querySelector('#fcc-wiz-dirty-confirm').addEventListener('click',
+        arm(() => { shield(); settle(true); }, window.questionArmMs ? window.questionArmMs() : 0));
+    const flash = (msg) => { const f = ov.querySelector('#fcc-wiz-dirty-flash'); if (f) f.textContent = msg; };
+    if (window.fccHoldScans) {
+        release = window.fccHoldScans({
+            title: String(title || 'Unsaved Changes').replace(/^\W+\s*/, ''),
+            element: ov,
+            hint: `Answer the question on screen first: Keep Editing, or ${discardLabel}`,
+            cancel: () => settle(false),
+            flash,
+        });
+    }
+});
+
+// Group 66.2: is the wizard on screen with a Save on its way (wizardSubmit's session) or
+// with edits nobody saved? `opts.why` leads the question's words.
+// Returns true when the wizard may start over (or open), false when it was kept as it was.
+window.openWizardModal = async (opts = {}) => {
+    const wizShown = (() => { const w = document.getElementById('wizardModal'); return !!(w && w.classList.contains('show')); })();
+    if (wizShown && wizardState.saving != null) {
+        const words = 'The wizard is saving: wait for it to finish, then try again.';
+        if (window.showToast) window.showToast(words, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ ${_wizEscape(words)}`, 'WARNING');
+        return false;
+    }
+    if (wizShown && wizardState.isDirty) {
+        const editing = wizardState.mode === 'edit_spool' && wizardState.editSpoolId != null;
+        const why = opts && opts.why ? `${opts.why} ` : '';
+        const discard = await window.wizardAskDiscard({
+            title: '⚠️ Unsaved Changes',
+            body: `${why}You have unsaved changes${editing ? ` to Spool #${wizardState.editSpoolId}` : ''}. Discard them and start over?`,
+            discardLabel: 'Discard & Start Over',
+        });
+        if (!discard) return false;
+        // Asked and answered meanwhile: a Save that began since keeps its form.
+        if (wizardState.saving != null) return false;
+    }
     // L26 follow-up: close any open details modal before launching the
     // wizard. The 2026-04-29 lock-up Derek reproed was wizard-on-top-of-
     // details — the silent-refresh path's promise can land mid-wizard-
@@ -304,14 +392,17 @@ window.openWizardModal = async () => {
         // management — override after that so we win the focus war.
         _wizModalEl.addEventListener('shown.bs.modal', _focusFirst, { once: true });
     }
+    // Group 66.2: a list read that fails leaves the wizard open and its opener going (it
+    // rejected the whole open, and an opener awaiting it stopped half-way).
     await Promise.all([
         wizardFetchVendors(),
         wizardFetchLocations(),
         wizardFetchExtraFields(),
         wizardFetchMaterials()
-    ]);
+    ].map((p) => Promise.resolve(p).catch((e) => { console.warn('Wizard list read failed', e); return null; })));
     if (window.wizardSyncSpoolRows) window.wizardSyncSpoolRows();
     if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('create');
+    return true;
 };
 
 // Group 10.1 (Session C) — applies the wizard's section-collapse defaults.
@@ -990,6 +1081,13 @@ const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.touchedExtras = new Set();
     wizardState.touchedNative = new Set();
+    // Group 66.2 (kept out of the state's literal, whose lines the load-order canary
+    // pins): `prefilling`, an opener's prefill still loading ('edit' | 'clone' | 'new');
+    // `typedSinceReset`, the text boxes typed in this session (their blur `change` is
+    // the person's). `saving` (a Save's session on its way) is wizardSubmit's: a Save
+    // that began before this reset still clears it when it lands.
+    wizardState.prefilling = null;
+    wizardState.typedSinceReset = new WeakSet();
     // Group 64 review (S2 / S3): what Edit Spool's Total Used box showed when it
     // was filled from the record, so Save sends the used weight only when the box
     // changed.
@@ -4257,7 +4355,7 @@ function wizardSavedUsed(sent, addSent, readSent) {
     if (readSent && wizardState.usedRead === readSent) wizardState.usedRead = null;
 }
 
-window.wizardSubmit = async () => {
+const _wizardSubmitInner = async () => {
     // Fix review 4 (UP5) and 5 (VP4): the session this Save belongs to, and its spool,
     // noted first, so an answer (or no answer) after the wizard was opened again is told
     // apart and said in a toast naming the spool, never on the form opened since.
@@ -4895,6 +4993,19 @@ window.wizardSubmit = async () => {
     }
 };
 
+// Group 66.2: a Save on its way, by its session, for the opener's guard (openWizardModal
+// says "the wizard is saving" and starts nothing over under it). Cleared when the Save
+// is answered (or fails), whatever the form shows by then.
+window.wizardSubmit = async () => {
+    const session = wizardState.session;
+    wizardState.saving = session;
+    try {
+        return await _wizardSubmitInner();
+    } finally {
+        if (wizardState.saving === session) wizardState.saving = null;
+    }
+};
+
 // Group 63 review (K01 / K02 / C4): what an Edit Spool Save's own write did to where
 // the spool is, shown in the Location field (`location_now`, sent when no Location
 // move was asked: a refill took the spool off the head it was archived on, or put it
@@ -4918,31 +5029,35 @@ const wizardAfterOwnWrite = (data, editSid, wizModal) => {
 };
 
 // --- SPOOL CLONE LOGIC ---
-window.openCloneWizard = async (spoolId) => {
-    // Group 10.11: source-aware return-id — only set when an actual details
-    // modal is visible at launch. Clone launched from search/grid/loc-mgr
-    // leaves return-ids null so the wizard closes silently on cancel rather
-    // than popping an unexpected details modal.
+// Group 10.11: source-aware return-id — only set when an actual details modal is visible
+// at launch. Opened from search / grid / location manager it leaves both null, so the
+// wizard closes silently on cancel rather than popping an unexpected details modal.
+// Group 66.2: read before openWizardModal (which hides those windows) and applied only
+// once it answers true: kept editing, the open wizard keeps its own return target.
+const _wizReturnTarget = (spoolId) => {
     const filModal = document.getElementById('filamentModal');
     const spoolModal = document.getElementById('spoolModal');
-    const filVisible = filModal && filModal.classList.contains('show');
-    const spoolVisible = spoolModal && spoolModal.classList.contains('show');
-    if (filVisible) {
+    if (filModal && filModal.classList.contains('show')) {
         const fid = document.getElementById('fil-detail-id')?.innerText;
-        if (fid) {
-            wizardState.returnToFilamentId = fid;
-            wizardState.returnToSpoolId = null;
-        }
-    } else if (spoolVisible) {
-        wizardState.returnToSpoolId = spoolId;
-        wizardState.returnToFilamentId = null;
-    } else {
-        wizardState.returnToSpoolId = null;
-        wizardState.returnToFilamentId = null;
+        if (fid) return { returnToFilamentId: fid, returnToSpoolId: null };
+        return {};
     }
+    if (spoolModal && spoolModal.classList.contains('show')) return { returnToSpoolId: spoolId, returnToFilamentId: null };
+    return { returnToSpoolId: null, returnToFilamentId: null };
+};
 
+// Group 66.2: each opener answers false, having changed nothing, when the open wizard was
+// kept as it was (Keep Editing, a Save on its way); its prefill belongs to its own
+// session (an answer that lands after the wizard was opened again changes nothing), and
+// wizardState.prefilling says one is loading (a Prusament QR then feeds no Spool box).
+window.openCloneWizard = async (spoolId) => {
+    const ret = _wizReturnTarget(spoolId);
     // Reset and Open Wizard (Wait for Extrad fields DOM injection!)
-    await openWizardModal();
+    if (!(await openWizardModal())) return false;
+    Object.assign(wizardState, ret);
+    const session = wizardState.session;
+    const mine = () => wizardState.session === session;
+    wizardState.prefilling = 'clone';
     wizardSetContextLabel({ action: 'Cloning', spoolId });
 
     // Temporarily disable submit while fetching clone data
@@ -4953,6 +5068,7 @@ window.openCloneWizard = async (spoolId) => {
     fetch(`/api/spool_details?id=${spoolId}`)
         .then(r => r.json())
         .then(d => {
+            if (!mine()) return;
             if (!d || !d.filament) {
                 document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to fetch clone data.</span>';
                 return;
@@ -5023,20 +5139,25 @@ window.openCloneWizard = async (spoolId) => {
             if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
+            if (!mine()) return;
             console.error("Clone Wizard Error:", err);
             document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to connect for clone.</span>';
             document.getElementById('btn-wiz-submit').disabled = false;
-        });
+        })
+        .finally(() => { if (mine()) wizardState.prefilling = null; });
+    return true;
 };
 
 // --- NEW SPOOL FROM FILAMENT LOGIC ---
 window.openNewSpoolFromFilamentWizard = async (filamentId) => {
+    // Reset and Open Wizard (Wait for Extra fields DOM injection!)
+    if (!(await openWizardModal())) return false;
     // Track filament for re-opening detail modal after wizard closes
     wizardState.returnToFilamentId = filamentId;
     wizardState.returnToSpoolId = null;
-
-    // Reset and Open Wizard (Wait for Extra fields DOM injection!)
-    await openWizardModal();
+    const session = wizardState.session;
+    const mine = () => wizardState.session === session;
+    wizardState.prefilling = 'new';
     wizardSetContextLabel({ action: 'New Spool for', filamentId });
 
     // Temporarily disable submit while fetching data
@@ -5046,6 +5167,7 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
     fetch(`/api/filament_details?id=${filamentId}`)
         .then(r => r.json())
         .then(d => {
+            if (!mine()) return;
             if (!d || !d.id) {
                 document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to fetch filament data.</span>';
                 return;
@@ -5092,40 +5214,26 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
             if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
+            if (!mine()) return;
             console.error("New Spool from Filament Wizard Error:", err);
             document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to connect.</span>';
             document.getElementById('btn-wiz-submit').disabled = false;
-        });
+        })
+        .finally(() => { if (mine()) wizardState.prefilling = null; });
+    return true;
 };
 
 // --- SPOOL EDIT LOGIC ---
 window.openEditWizard = async (spoolId) => {
-    // Group 10.11: only re-open a details modal on cancel/close if one was
-    // ACTUALLY visible at launch. Previously the `else` branch set
-    // returnToSpoolId unconditionally — so launching the wizard from the
-    // search FAB or Location Manager (no details modal open) still popped the
-    // spool details modal on cancel. Now we leave both return-ids null when
-    // there's no source details modal to return to.
-    const filModal = document.getElementById('filamentModal');
-    const spoolModal = document.getElementById('spoolModal');
-    const filVisible = filModal && filModal.classList.contains('show');
-    const spoolVisible = spoolModal && spoolModal.classList.contains('show');
-    if (filVisible) {
-        const fid = document.getElementById('fil-detail-id')?.innerText;
-        if (fid) {
-            wizardState.returnToFilamentId = fid;
-            wizardState.returnToSpoolId = null;
-        }
-    } else if (spoolVisible) {
-        wizardState.returnToSpoolId = spoolId;
-        wizardState.returnToFilamentId = null;
-    } else {
-        wizardState.returnToSpoolId = null;
-        wizardState.returnToFilamentId = null;
-    }
-
+    // Group 10.11: only re-open a details modal on cancel/close if one was ACTUALLY
+    // visible at launch (_wizReturnTarget; Group 66.2: applied only once the wizard opens).
+    const ret = _wizReturnTarget(spoolId);
     // Reset and Open Wizard (Wait for dynamically mapped DOM structures first!)
-    await openWizardModal();
+    if (!(await openWizardModal())) return false;
+    Object.assign(wizardState, ret);
+    const session = wizardState.session;
+    const mine = () => wizardState.session === session;
+    wizardState.prefilling = 'edit';
     wizardSetContextLabel({ action: 'Editing', spoolId });
 
     // Temporarily disable submit while fetching edit data
@@ -5141,6 +5249,7 @@ window.openEditWizard = async (spoolId) => {
     fetch(`/api/spool_details?id=${spoolId}`)
         .then(r => r.json())
         .then(d => {
+            if (!mine()) return;
             if (!d || !d.filament) {
                 // Fix review 5 (VP5): no Save on a form that never loaded (see the catch).
                 wizardState.editLoadFailed = true;
@@ -5330,6 +5439,7 @@ window.openEditWizard = async (spoolId) => {
             if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
+            if (!mine()) return;
             console.error("Edit Wizard Error:", err);
             // Group 64 fix review 5 (VP5): the form never loaded (it is still wizardReset's
             // create form under a SAVE CHANGES label, or half filled), so it offers no Save:
@@ -5339,7 +5449,9 @@ window.openEditWizard = async (spoolId) => {
             submitBtn.disabled = true;
             document.getElementById('wiz-status-msg').innerHTML = '<span class="text-danger">Failed to connect for edit: '
                 + 'close this window and open Edit Spool again.</span>';
-        });
+        })
+        .finally(() => { if (mine()) wizardState.prefilling = null; });
+    return true;
 };
 
 // --- PER-SPOOL PRUSAMENT SCAN (Step 3) ---
@@ -5931,6 +6043,43 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
     const weights = bits.length ? `Prusament says ${bits.join(', ')}. ` : '';
     return done('linked-new', 'Links at Save',
         `${weights}To use its weights, Save and close the wizard, then scan this QR on the dashboard: FCC checks them against the spool first.`);
+};
+
+// --- A NEW PRUSAMENT SPOOL'S QR WHILE THE WIZARD IS OPEN (Group 66.2) ---
+// The dashboard's prusament_new answer used to call openWizardModal unasked, which reset an
+// open wizard (an Edit silently became an Add). In an Add (New Manual Form, Existing
+// Filament, Import Database) whose Spool boxes have an empty one, the QR goes into that box
+// instead, as if scanned there, with no question. Never while an opener's prefill is still
+// loading, a Save is on its way, or the form never loaded; never in Edit Spool, whose box
+// links its own spool only through the box itself (the grounding's C4: a QR read from
+// outside it may be another spool's). Answers {row} when it took the link, else false.
+window.wizardTakePrusamentLink = (url) => {
+    const link = String(url || '').trim();
+    const wizEl = document.getElementById('wizardModal');
+    if (!link || !wizEl || !wizEl.classList.contains('show')) return false;
+    if (!['manual', 'existing', 'external'].includes(wizardState.mode)) return false;
+    if (wizardState.prefilling || wizardState.saving != null || wizardState.editLoadFailed) return false;
+    const box = document.getElementById('wiz-spool-rows-box');
+    if (box && box.getClientRects().length === 0) return false;
+    for (const row of (wizardState.spoolRows || [])) {
+        const input = document.querySelector(`[data-spool-row-idx="${row.idx}"] input[type='url']`);
+        if (row.status !== 'empty' || !input || input.value.trim() !== '') continue;
+        input.value = link;
+        // As a scanner typing there would: the form is changed (and a create's lock lifts).
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        window.wizardScanSpoolRow(row.idx, link);
+        return { row: row.idx };
+    }
+    return false;
+};
+
+// Group 66.2 (the grounding's C5): the spool open in Edit Spool, if any. The dashboard's
+// matched-spool question holds its weight correction for it: applied while the wizard is
+// open, the wizard's next Save would write its old weights back over it unseen.
+window.wizardEditingSpool = () => {
+    const wizEl = document.getElementById('wizardModal');
+    if (!wizEl || !wizEl.classList.contains('show') || wizardState.mode !== 'edit_spool') return null;
+    return wizardState.editSpoolId != null ? String(wizardState.editSpoolId) : null;
 };
 
 window.wizardAutoSwitchToExisting = (filament, parsedTemplate) => {

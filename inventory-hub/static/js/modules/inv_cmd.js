@@ -2982,10 +2982,17 @@ window.promptPrusamentMatched = (res) => {
                 <span>Remaining <span class="text-muted">(used ${g(sw.used)} kept)</span></span>
                 <span><span style="color:#adb5bd;">${g(sw.remaining.current)}</span> &rarr; <span class="text-success fw-bold">${g(sw.remaining.new)}</span></span>
             </div>` : '';
+        // Group 66.2 (the grounding's C5): held while this very spool is open in Edit
+        // Spool, whose next Save would write its old weights back over the correction.
+        const heldByWizard = !!(sw.rows && sw.rows.length && window.wizardEditingSpool
+            && window.wizardEditingSpool() === String(sid));
+        const heldWords = `#${sid} is open in the wizard: close it first, then scan its QR again.`;
         const blockedLine = sw.blocked
-            ? `<div class="text-warning small mt-1">⚠️ ${esc(sw.blocked)}</div>` : '';
-        const applyBtn = (sw.rows && sw.rows.length)
+            ? `<div class="text-warning small mt-1">⚠️ ${esc(sw.blocked)}</div>`
+            : (heldByWizard ? `<div class="text-warning small mt-1">⚠️ ${esc(heldWords)}</div>` : '');
+        const applyBtn = (sw.rows && sw.rows.length && !heldByWizard)
             ? `<button id="pm-update-weights" class="btn btn-sm btn-success w-100 mt-2">📦 Update spool weights</button>` : '';
+        if (heldByWizard) showToast(heldWords, 'warning', 7000);
         weightHtml = `
             <div id="pm-weight-section" class="border border-success rounded p-2 mb-2" style="background:#2a2a2a;">
                 <div class="text-success small mb-1">📦 Prusament's spec differs from this spool's weights:</div>
@@ -3991,9 +3998,29 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                 // (The old Step-2 "Import from External" did only the filament
                 // half, so the spool came up empty whenever the filament already
                 // existed — the bug Derek hit.)
-                showToast('🆕 New Prusament spool — opening the Add wizard to onboard it', 'info', 4500);
-                if (typeof window.openWizardModal === 'function') {
-                    Promise.resolve(window.openWizardModal()).then(() => {
+                // Group 66.2: it used to open (and so reset) the wizard unasked, even one
+                // open with changes: an Edit silently became an Add. An Add with an empty
+                // Spool box now takes the link there, with no question; otherwise
+                // openWizardModal asks first when the wizard holds changes, and keeping
+                // them adds nothing, said in a toast and the Activity Log.
+                const escWords = window.escHtml || ((x) => x);
+                const fed = window.wizardTakePrusamentLink ? window.wizardTakePrusamentLink(res.url || '') : false;
+                if (fed) {
+                    showToast(`🆕 New Prusament spool: scanning it into Spool ${fed.row + 1}`, 'info', 4000);
+                } else if (typeof window.openWizardModal === 'function') {
+                    const editing = window.wizardEditingSpool ? window.wizardEditingSpool() : null;
+                    Promise.resolve(window.openWizardModal({ why: 'A new Prusament spool was scanned.' })).then((ok) => {
+                        if (ok === false) {
+                            const words = editing
+                                ? "Kept the wizard as it was, so the scanned Prusament spool wasn't added. Save first, then scan it again."
+                                : "Kept the wizard as it was, so the scanned Prusament spool wasn't added. Scan it into a Spool box, or Save first.";
+                            showToast(words, 'warning', 7000);
+                            if (window.logClientEvent) {
+                                window.logClientEvent(`⚠️ ${escWords(words)} (${escWords(res.url || '')})`, 'WARNING');
+                            }
+                            return;
+                        }
+                        showToast('🆕 New Prusament spool — opening the Add wizard to onboard it', 'info', 4500);
                         const rowEl = document.querySelector('[data-spool-row-idx]');
                         if (rowEl && typeof window.wizardScanSpoolRow === 'function') {
                             const idx = parseInt(rowEl.getAttribute('data-spool-row-idx'), 10) || 0;
