@@ -132,24 +132,40 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
 // box shows as the new filament's (the cross-check's C15: today's outcome). A function
 // declaration reading the touched set itself: a summary may ask before the module's
 // later consts exist.
+// Review round 2 of Group 66 (Q2-02, Q2-03): 'vendor' also while the brand gives nothing
+// (the box empty, with no badge), so the box goes on following the brand. It used to lose
+// the mark there: a key typed in the Vendor box that matched no manufacturer emptied it for
+// good, and the brand the person then picked never filled it (Save's cross-inherit wrote
+// that brand's weight as the filament's own). Edit Spool's open marks a filament with none
+// of its own so, whatever its brand gives.
 function wizardFilEmptyWeightIsInherited() {
     return wizardState.filEmptyWeightFrom === 'vendor'
         && !(wizardState.touchedNative && wizardState.touchedNative.has('fil:spool_weight'));
 }
 
-// Shows or hides the box's "↩ from vendor" badge (Derek's D2 (a), the spool box's look).
+// Shows or hides the box's "↩ from vendor" badge (Derek's D2 (a), the spool box's look):
+// only while it shows the brand's weight. Its words say what Save does with it (review
+// round 2 of Group 66, Q2-04): a create saves it as the new filament's own (C15), which the
+// words used to deny.
+const WIZ_FIL_BADGE_EDIT = "The manufacturer's empty weight: this filament has none of its own. Type a weight to give the filament its own.";
+const WIZ_FIL_BADGE_CREATE = "The manufacturer's empty weight: Create saves it as the new filament's own. Type a weight to give it another.";
 window.wizardRefreshFilEmptyWeightMark = () => {
     const badge = document.getElementById('wiz-fil-empty-inherited-badge');
-    if (badge) badge.style.display = wizardFilEmptyWeightIsInherited() ? '' : 'none';
+    if (!badge) return;
+    const box = document.getElementById('wiz-fil-empty_weight');
+    const shows = !!(box && String(box.value || '') !== '');
+    badge.style.display = wizardFilEmptyWeightIsInherited() && shows ? '' : 'none';
+    badge.title = wizardState.mode === 'edit_spool' ? WIZ_FIL_BADGE_EDIT : WIZ_FIL_BADGE_CREATE;
 };
 
-// Puts `value` in the box: the brand's when `source` is 'vendor' (marked, unless it is
-// empty), else the filament's own. Code, not the person: no event, so no touch.
+// Puts `value` in the box: the brand's when `source` is 'vendor' (marked while it shows a
+// value; still the brand's, unmarked, while the brand gives nothing), else the filament's
+// own. Code, not the person: no event, so no touch.
 window.wizardSetFilEmptyWeightInherited = (value, source) => {
     const box = document.getElementById('wiz-fil-empty_weight');
     if (!box) return;
     box.value = (value !== null && value !== undefined) ? String(value) : '';
-    wizardState.filEmptyWeightFrom = (source === 'vendor' && box.value !== '') ? 'vendor' : null;
+    wizardState.filEmptyWeightFrom = source === 'vendor' ? 'vendor' : null;
     window.wizardRefreshFilEmptyWeightMark();
     if (window.wizardRecheckScale) window.wizardRecheckScale();
 };
@@ -1306,10 +1322,11 @@ const wizardReset = () => {
     if (rowsLabel) rowsLabel.textContent = WIZ_ROWS_LABEL_ADD;
     if (window.wizardRenderLinkNote) window.wizardRenderLinkNote();
 
-    // Reset View
-    wizardSelectType('manual');
-    document.getElementById('wiz-status-msg').innerText = "";
-    // Reset vendor combobox (visible search field + hidden id).
+    // Reset vendor combobox (visible search field + hidden id). Before the view's reset
+    // below (review round 2 of Group 66, Q2-01): wizardSelectType('manual') draws the
+    // spool's empty weight from the brand this box holds, and the last session's brand
+    // (an Edit Spool's) was still in it: a plain Add opened with that brand's weight in the
+    // spool box, "↩ from vendor", and Create saved it as the new spool's and filament's own.
     const vSearch = document.getElementById('wiz-fil-vendor-search');
     if (vSearch) vSearch.value = '';
     const vSel = document.getElementById('wiz-fil-vendor-sel');
@@ -1319,6 +1336,10 @@ const wizardReset = () => {
         // programmatic reset (matches wizardComboboxSet's policy).
         vSel.dispatchEvent(new Event('change', { bubbles: false }));
     }
+
+    // Reset View
+    wizardSelectType('manual');
+    document.getElementById('wiz-status-msg').innerText = "";
     // Reset location combobox too. Its hidden id field is an <input type="hidden">,
     // which neither the text-input nor the select loop above clears (it was a
     // <select> once), so an Add opened after an Edit used to send the edited
@@ -2470,8 +2491,12 @@ const _wizardCascadeVendorEmptyWeight = (vendor) => {
 
 // Group 66.7: a filament box showing its brand's weight follows the manufacturer the
 // Vendor box holds (the person's pick, Generic, or a code write: the open, a save). A
-// pick never fills an empty box (a create's Save fills it from the brand, as before), and
-// a value of the filament's own, or one the person typed, stays.
+// pick never fills an empty box the filament doesn't inherit (a create's Save fills it
+// from the brand, as before), and a value of the filament's own, or one the person typed,
+// stays. Edit Spool's filament with none of its own inherits even while its brand gives
+// nothing, so it follows a pick there too (review round 2 of Group 66, Q2-03), and a key
+// typed in the Vendor box that matches no manufacturer (Generic for a moment) no longer
+// ends the following (Q2-02).
 (function () {
     const hidden = document.getElementById('wiz-fil-vendor-sel');
     if (!hidden) return;
@@ -2497,8 +2522,9 @@ const _wizardCascadeVendorEmptyWeight = (vendor) => {
 //   - the filament's Spool Wt box follows it when it shows the brand's weight or is
 //     empty, and the spool's box when it shows that manufacturer's weight;
 //   - then the list is read again, the newest read winning.
-// All of it is code: no box counts as typed in, and the wizard isn't marked changed. The
-// record replaces the old one whole: a weight cleared is a key Spoolman leaves out.
+// All of it is code: no box counts as typed in, and a save isn't marked as a change (a
+// create the ➕ made is: the person chose it for this filament). The record replaces the
+// old one whole: a weight cleared is a key Spoolman leaves out.
 window.wizardVendorSaved = (vendor, { created = false } = {}) => {
     if (!vendor || vendor.id == null) return;
     const wizModalEl = document.getElementById('wizardModal');
@@ -2519,6 +2545,10 @@ window.wizardVendorSaved = (vendor, { created = false } = {}) => {
         window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', vid, rec.name || '');
         _wizardCascadeVendorEmptyWeight(rec);
     }
+    // A manufacturer made with the ➕ and picked here is the person's choice for this
+    // filament (review round 2 of Group 66, Q4-05): the form has an unsaved change, so a
+    // close or an opener asks first. Its weight still fills as code (no box touched).
+    if (created && window.wizardMarkChanged) window.wizardMarkChanged();
     if (wizardState.spoolEmptyWeightFrom === 'vendor' && wizardState.spoolEmptyWeightVendorId === vid
             && !wizardNativeTouched('spool', 'spool_weight')) {
         _wizSpoolEmptyWeightFrom({ filamentWt: null, vendor: rec });
@@ -5053,7 +5083,11 @@ const _wizardSubmitInner = async () => {
             // untouched is no longer sent at all (Group 54.8). Edit mode never refills
             // a box the user emptied: that is a clear (Group 54.5).
             {
-                const selectedVendorId = document.getElementById('wiz-fil-vendor-sel')?.value;
+                // Review round 2 of Group 66 (Q2-03 / Q5-03): Edit Spool's filament inherits
+                // its brand's weight by itself, so its Save never takes the brand's weight for
+                // it (a brand picked over an empty box was written as the filament's own).
+                // Only a create's new filament takes it (the cross-check's C15).
+                const selectedVendorId = isWizardEdit ? '' : document.getElementById('wiz-fil-vendor-sel')?.value;
                 const vendor = selectedVendorId
                     ? (wizardState.vendors || []).find(v => String(v.id) === String(selectedVendorId))
                     : null;
@@ -5070,8 +5104,12 @@ const _wizardSubmitInner = async () => {
             // Group 66.7: the filament box showing its brand's weight (untouched) is no
             // value of the filament's own: Edit Spool leaves it out, so the filament keeps
             // having none (every Save wrote the brand's weight as the filament's). A create
-            // still takes it, as the new filament's (the cross-check's C15).
-            if (isWizardEdit && wizardFilEmptyWeightIsInherited()) delete f_payload.spool_weight;
+            // still takes it, as the new filament's (the cross-check's C15). An inherited box
+            // the brand leaves empty keeps the cross-inherit's old rule: the spool's own
+            // empty weight goes to a filament that has none.
+            if (isWizardEdit && wizardFilEmptyWeightIsInherited() && getVal('wiz-fil-empty_weight') !== '') {
+                delete f_payload.spool_weight;
+            }
 
             // Note: Spoolman 0.19.1 natively supports `multi_color_hexes` 
             if (colors.length > 1) {
@@ -5872,12 +5910,13 @@ window.openEditWizard = async (spoolId) => {
                 // The filament's own empty weight, else its brand's (blank and 0 are none),
                 // marked "↩ from vendor" (Group 66.7): Save leaves the brand's out, so the
                 // filament keeps having none of its own. The brand is the record the Vendor
-                // box holds (the list's, read at this open).
+                // box holds (the list's, read at this open). A filament with none of its own
+                // follows its brand even while the brand gives nothing (review round 2, Q2-03).
                 const { value, source } = resolveEmptySpoolWeightSource({
                     filamentWt: f.spool_weight,
                     vendor: _wizSelectedVendor() || f.vendor,
                 });
-                window.wizardSetFilEmptyWeightInherited(value, source);
+                window.wizardSetFilEmptyWeightInherited(value, source === 'filament' ? 'filament' : 'vendor');
             }
 
             // Map Temperatures

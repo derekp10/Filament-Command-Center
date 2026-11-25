@@ -150,6 +150,21 @@ def test_the_plain_wizard_drops_a_marked_box_after_a_switch_to_existing(wiz):
     assert "spool_weight" not in body["spool_data"], _got(body["spool_data"], "spool_weight")
 
 
+def test_the_plain_wizard_shows_the_forms_value_again_on_the_way_back(wiz):
+    """Claude's call 6b's way back (review round 2 of Group 66, Q4-04: no case switched
+    back): 210 typed in New Manual Form, Existing Filament and a pick empty the spool's
+    box, and New Manual Form again shows 210 as the filament's; Create sends it."""
+    _list(wiz, FIL_A, FIL_C)
+    _open_new_filament(wiz)
+    wiz.locator(FIL).fill("210")
+    _existing(wiz)
+    _pick(wiz, 9)
+    assert _spool(wiz) == ("", False, None)
+    _manual(wiz)
+    assert _spool(wiz) == ("210", True, "filament")
+    assert _save(wiz, CREATE)["spool_data"]["spool_weight"] == 210
+
+
 def test_a_typed_spool_weight_survives_the_switch_to_existing(wiz):
     """A pin for 6b: a value the person typed in the spool's box stays."""
     _list(wiz, FIL_A, FIL_C)

@@ -322,11 +322,19 @@ def test_the_next_wizard_session_forgets_a_touch(wiz):
     The box keeps the focus from the first session here, so the Save click's blur
     fires a `change` on it in the second (Chromium fires it for an edit made
     before the reset). A first build that counted `change` too sent the new
-    spool's empty bed temperature as a clear: only `input` counts as a touch."""
+    spool's empty bed temperature as a clear: only `input` counts as a touch.
+
+    Review round 2 of Group 66 (Q4-01): since Group 66.2 an open over unsaved changes
+    asks first, and its question takes the focus, so the box's blur `change` fired in
+    the OLD session and this case proved nothing (a `change` listener passed it). The
+    first session's edit is marked saved here, as a landed Save leaves it, so the open
+    asks nothing and the box keeps the focus into the new session, as before 66.2."""
     _open_edit(wiz)
     wiz.locator("#wiz-fil-settings_bed_temp").fill("")
     assert _touched(wiz) == ["fil:settings_bed_temp"]
-    _open_edit(wiz, over_changes=True, bed=None)     # the emptied box is unsaved: Discard (Group 66.2)
+    wiz.evaluate("() => { wizardState.isDirty = false; }")
+    _open_edit(wiz, bed=None)
+    assert wiz.evaluate("() => document.activeElement && document.activeElement.id") == "wiz-fil-settings_bed_temp"
     assert _touched(wiz) == []
     body = _save(wiz, EDIT)
     assert "settings_bed_temp" not in body["filament_data"], body["filament_data"]

@@ -204,9 +204,11 @@ def test_a_failed_reread_keeps_the_saved_record(wiz):
 def test_a_manufacturer_made_from_the_wizard_is_picked_and_fills_as_code(wiz):
     """The wizard's ➕ made a manufacturer with a 180 g empty weight: the box picks it
     and the empty filament box shows its weight, marked as the brand's. Code filled it:
-    the box isn't counted as typed in, and the wizard isn't marked changed. RED: the
-    fill was a synthetic `input`, which counted as the person's edit (touched, so Edit
-    Spool would save it as the filament's own) and marked the wizard changed."""
+    the box isn't counted as typed in. RED: the fill was a synthetic `input`, which
+    counted as the person's edit (touched, so Edit Spool would save it as the filament's
+    own). The pick is the person's choice for this filament, so the wizard is marked
+    changed (review round 2 of Group 66, Q4-05: this case pinned the opposite, and a
+    close or an opener dropped the brand the person had just made)."""
     wiz.evaluate("() => window.openWizardModal()")
     wiz.wait_for_function("() => !!document.getElementById('wiz_fil_ef_needs_label_print')")
     wiz.evaluate("() => wizardSelectType('manual')")
@@ -216,7 +218,7 @@ def test_a_manufacturer_made_from_the_wizard_is_picked_and_fills_as_code(wiz):
     assert (_value(wiz, SEARCH), _held(wiz)) == ("New Brand", "5")
     assert _value(wiz, FIL) == "180"
     assert "fil:spool_weight" not in _touched(wiz)
-    assert wiz.evaluate("() => wizardState.isDirty") is False
+    assert wiz.evaluate("() => wizardState.isDirty") is True
     assert _badge(wiz, "#wiz-fil-empty-inherited-badge") is True
     assert wiz.evaluate("window.__errors") == []
 
