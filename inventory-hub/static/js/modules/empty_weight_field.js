@@ -67,6 +67,11 @@
         let cascade = null;       // the {spoolWt, filamentWt} last given to setFromCascade
         let drawn = { source: null, text: input.value };   // what the last draw put in the box
         let touched = false;      // a person's input, Use Vendor or setValue since the last draw
+        // Torn down (the box bound again, a window opened anew): this handle writes nothing
+        // more into the box it shares with the new binding (review round 2 of Group 66,
+        // Q1-07: an earlier Edit Filament open's late vendor read redrew the next open's box
+        // through it, and that Save wrote the old vendor's weight as the filament's own).
+        let dead = false;
 
         const showBadge = (source) => {
             if (!badge) return;
@@ -82,6 +87,7 @@
 
         // Draw the box from the cascade and the vendor it has now.
         const draw = () => {
+            if (dead) return;
             const { value, source } = window.resolveEmptySpoolWeightSource({
                 spoolWt: cascade ? cascade.spoolWt : null,
                 filamentWt: cascade ? cascade.filamentWt : null,
@@ -94,6 +100,7 @@
         };
 
         const setFromCascade = (c = {}) => {
+            if (dead) return;
             cachedVendor = c.vendor || null;
             cascade = { spoolWt: c.spoolWt, filamentWt: c.filamentWt };
             draw();
@@ -106,19 +113,21 @@
             ? drawn.source : null;
 
         const setVendor = (v) => {
+            if (dead) return;
             cachedVendor = v || null;
             updateCopyVendorEnabled();
             if (cascade && !isTouched() && drawn.source !== 'spool') draw();
         };
 
         const setValue = (v) => {
+            if (dead) return;
             input.value = (v === null || v === undefined) ? '' : v;
             touched = true;
             clearBadge();
         };
 
         const updateCopyVendorEnabled = () => {
-            if (!copyVendorBtn) return;
+            if (!copyVendorBtn || dead) return;
             const has = cachedVendor &&
                 cachedVendor.empty_spool_weight !== null &&
                 cachedVendor.empty_spool_weight !== undefined &&
@@ -150,6 +159,7 @@
         if (copyVendorBtn) copyVendorBtn.addEventListener('click', onCopyVendor);
 
         const _teardown = () => {
+            dead = true;
             input.removeEventListener('input', onInput);
             if (copyVendorBtn) copyVendorBtn.removeEventListener('click', onCopyVendor);
         };

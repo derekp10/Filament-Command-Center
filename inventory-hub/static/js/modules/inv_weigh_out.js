@@ -107,6 +107,24 @@ const refreshAllRowPreviews = () => {
     });
 };
 
+// A manufacturer saved while the list holds its spools (review round 2 of Group 66, Q1-06):
+// the post-archive prompt's "also the brand's default" sets a brand's empty weight, and the
+// list's other spools of that brand kept the weight they were read with (none), so a Gross
+// reading asked for it again. Each cached spool of that brand takes its record now.
+document.addEventListener('vendor:updated', (e) => {
+    const v = e && e.detail ? e.detail.vendor : null;
+    if (!v || v.id == null) return;
+    let changed = false;
+    weighOutDetailsCache.forEach((entry) => {
+        const was = entry && entry.cascade ? entry.cascade.vendor : null;
+        if (!was || was.id == null || String(was.id) !== String(v.id)) return;
+        entry.cascade = Object.assign({}, entry.cascade, { vendor: Object.assign({}, was, v) });
+        entry.empty = window.resolveEmptySpoolWeightSource(entry.cascade).value;
+        changed = true;
+    });
+    if (changed) refreshAllRowPreviews();
+});
+
 const setWeighOutMode = (mode) => {
     if (!['gross', 'net', 'additive', 'set_used'].includes(mode)) return;
     window.weighOutMode = mode;

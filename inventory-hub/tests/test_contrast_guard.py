@@ -2300,6 +2300,33 @@ def test_edit_filaments_tare_from_its_brand_is_readable(page: Page, base_url: st
                for o in conftest.contrast_offenders(column, min_ratio=100)), "the badge was never scored"
 
 
+def test_edit_filaments_unread_manufacturer_note_is_readable(page: Page, base_url: str, assert_contrast):
+    """Review round 2 of Group 66 (Q1-04): with the manufacturer list unread, a name Edit
+    Filament can't check is said under the Vendor box, in the "(vendor: N g)" hint's amber.
+    The filament is handed to the window, its vendor list answers that it couldn't be read,
+    and every write is answered in the browser, so nothing is saved. Scored from its
+    column, the note proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page, extra_get={"/api/vendors": {"success": False, "msg": "Spoolman didn't answer"}})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditFilamentForm === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    vendor = {"id": 9003, "name": "Example Brand", "extra": {}}
+    fil = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+           "extra": {}, "vendor": vendor}
+    page.evaluate("(f) => { window.openEditFilamentForm(f); }", fil)
+    conftest.wait_modal_settled(page, "editFilamentModal")
+    page.locator("#editfil-vendor-name").fill("Exmaple Brand")
+    note = page.locator("#editfil-vendor-unread-note")
+    expect(note).to_be_visible()
+    assert "Couldn't read the manufacturer list" in note.inner_text()
+    column = note.locator("xpath=ancestor::div[contains(@class, 'col-6')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "editfil-vendor-unread-note"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the note was never scored"
+
+
 def test_the_wizards_unsaved_changes_question_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 66.2 (review round 1, R3-09): the wizard's "Unsaved Changes" question, and the
     line under its buttons that says a scan was held off while it is up, on its dark

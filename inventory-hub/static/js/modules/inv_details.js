@@ -2686,6 +2686,7 @@ const _editfilOpenModal = (fil) => {
     // again). Now the box keeps one set of listeners, which read the latest open's opts.
     // `preferValue()`: with no row highlighted, Enter picks the row of that value when the
     // list shows it (the vendor the box holds, under a name two vendors share), else the first.
+    // `onFocus()`: called as the box takes the focus (review round 2 of Group 66, Q1-05).
     const bindComboDropdown = (newOpts) => {
         const input = document.getElementById(newOpts.inputId);
         const dropdown = document.getElementById(newOpts.dropdownId);
@@ -2721,7 +2722,10 @@ const _editfilOpenModal = (fil) => {
                 };
             });
         };
-        input.addEventListener('focus', render);
+        input.addEventListener('focus', () => {
+            if (combo.opts.onFocus) combo.opts.onFocus();
+            render();
+        });
         input.addEventListener('input', () => {
             render();
             if (combo.opts.onInput) combo.opts.onInput();
@@ -2816,6 +2820,14 @@ const _editfilOpenModal = (fil) => {
     let vendorCache = [];
     let vendorsRead = false;
     let vendorReadSeq = 0;      // the newest list read wins
+    // Review round 2 of Group 66 (Q1-03): the read whose list was last taken. An older read
+    // is dropped only when a newer one was taken: a re-read that failed (after a vendor
+    // save) dropped the open's good list, and the dropdown offered one vendor.
+    let vendorTakenSeq = 0;
+    // Q1-04: a read failed and none was taken, so FCC can't check a typed name.
+    let vendorReadFailed = false;
+    // Q1-05: the vendor the box held when it took the focus (typing blanks the held id).
+    let vendorHeldAtFocus = '';
     const vendorKey = (s) => String(s == null ? '' : s).split(/\s+/).filter(Boolean).join(' ').toLowerCase();
     const vendorNameEl = document.getElementById('editfil-vendor-name');
     const vendorIdEl = document.getElementById('editfil-vendor-id');
@@ -2824,6 +2836,14 @@ const _editfilOpenModal = (fil) => {
     // Group 6.2: ✏️ pencil opens the Vendor Edit modal stacked over this one.
     // Visible only when an EXISTING vendor is selected (mirrors vendorInfoPill).
     const vendorEditBtn = document.getElementById('editfil-vendor-edit-btn');
+    const vendorUnreadNote = document.getElementById('editfil-vendor-unread-note');
+    const showUnreadNote = (on) => {
+        if (!vendorUnreadNote) return;
+        vendorUnreadNote.textContent = on
+            ? "Couldn't read the manufacturer list to check this name: Save uses the manufacturer Spoolman has by this name, or makes a new one."
+            : '';
+        vendorUnreadNote.style.display = on ? '' : 'none';
+    };
     const refreshVendorBadge = () => {
         const typed = (vendorNameEl.value || '').trim();
         if (!typed) {
@@ -2831,6 +2851,12 @@ const _editfilOpenModal = (fil) => {
             vendorNewBadge.style.display = 'none';
             if (vendorInfoPill) vendorInfoPill.style.display = 'none';
             if (vendorEditBtn) vendorEditBtn.style.display = 'none';
+            showUnreadNote(false);
+            // No vendor (Generic): nothing comes from one (review round 2 of Group 66, Q1-01).
+            // The box, its "↩ from vendor", the hint and Use Vendor kept the old vendor's
+            // weight, and Save left it out: the filament had no vendor and no weight of its
+            // own, while the window showed the old vendor's.
+            drawVendorWeight(null);
             return;
         }
         const own = fil.vendor && fil.vendor.id != null ? fil.vendor : null;
@@ -2846,6 +2872,7 @@ const _editfilOpenModal = (fil) => {
         if (match) {
             vendorIdEl.value = String(match.id);
             vendorNewBadge.style.display = 'none';
+            showUnreadNote(false);
             if (vendorEditBtn) vendorEditBtn.style.display = 'inline-block';
             // Surface the vendor's data so the user knows what Spoolman has on
             // file. Empty-spool weight is the most useful; extras (if any)
@@ -2871,12 +2898,16 @@ const _editfilOpenModal = (fil) => {
             drawVendorWeight(match);
         } else {
             vendorIdEl.value = '';
-            // Unread, FCC can't tell a new name from a known one: no "+ NEW", and the box
-            // is left as it is until the list says (the grounding's C1).
+            // Unread, FCC can't tell a new name from a known one: no "+ NEW" (the grounding's
+            // C1). Review round 2 of Group 66: nothing comes from a vendor FCC doesn't know
+            // (Q1-02: the old vendor's weight stayed under the typed name, and Use Vendor
+            // saved it as the filament's own on the new one), and a failed read says Save
+            // may make a manufacturer of the name (Q1-04: a typo made one with no sign).
             vendorNewBadge.style.display = vendorsRead ? 'inline-block' : 'none';
             if (vendorInfoPill) vendorInfoPill.style.display = 'none';
             if (vendorEditBtn) vendorEditBtn.style.display = 'none';
-            if (vendorsRead) drawVendorWeight(null);
+            showUnreadNote(!vendorsRead && vendorReadFailed);
+            drawVendorWeight(null);
         }
     };
     bindComboDropdown({
@@ -2892,7 +2923,12 @@ const _editfilOpenModal = (fil) => {
             refreshVendorBadge();
         },
         onInput: () => refreshVendorBadge(),
-        preferValue: () => vendorIdEl.value,
+        // The vendor the box holds; once typing has blanked it, the one it held when it took
+        // the focus, else the filament's own (review round 2 of Group 66, Q1-05: "Sun" +
+        // Enter under Derek's two Sunlus took the lowest id, and Save moved the filament).
+        onFocus: () => { vendorHeldAtFocus = vendorIdEl.value; },
+        preferValue: () => vendorIdEl.value || vendorHeldAtFocus
+            || (fil.vendor && fil.vendor.id != null ? String(fil.vendor.id) : ''),
         newHintText: (typed) => {
             const t = (typed || '').trim();
             if (!t || !vendorsRead) return null;
@@ -2900,19 +2936,29 @@ const _editfilOpenModal = (fil) => {
             return `+ Create vendor "${t}"`;
         },
     });
-    // The vendor list, read at the open and again after a vendor is saved: the newest read
-    // sent wins; one FCC couldn't read leaves the list (and the vendor held) as they were.
+    // The vendor list, read at the open and again after a vendor is saved: an older read's
+    // list is never taken over a newer one's; one FCC couldn't read leaves the list (and
+    // the vendor held) as they were.
     // Code, not the person (Group 66.8): a box it redraws is no edit.
     const readVendors = () => {
         const seq = ++vendorReadSeq;
+        const failed = () => {
+            if (_editfilSession !== session || vendorsRead) return;
+            vendorReadFailed = true;
+            session.codeSet(() => refreshVendorBadge());
+        };
         return fetch('/api/vendors').then(r => r.json()).then(d => {
-            if (_editfilSession !== session || seq !== vendorReadSeq || !d || !d.success || !Array.isArray(d.vendors)) return;
+            if (_editfilSession !== session) return;
+            if (!d || !d.success || !Array.isArray(d.vendors)) { failed(); return; }
+            if (seq < vendorTakenSeq) return;       // a newer read's list was taken
+            vendorTakenSeq = seq;
             session.codeSet(() => {
                 vendorCache = d.vendors;
                 vendorsRead = true;
+                vendorReadFailed = false;
                 refreshVendorBadge();
             });
-        }).catch(() => {});
+        }).catch(() => failed());
     };
     // Drawn at the open from the filament's own manufacturer (review round 1 of Group 66,
     // R1-01): a list read that failed left the last open's pill, another vendor's weight.
@@ -3427,6 +3473,7 @@ const _editfilOpenModal = (fil) => {
             // Group 66.1: a name another vendor has is refused by the server (409, with the
             // vendor it names): Save uses that vendor, and its toast says so.
             let usedExisting = null;
+            let madeVendor = null;     // review round 2 of Group 66 (Q1-04): said in the toast
             if (pendingNewVendorName) {
                 const vr = await fetch('/api/vendors', {
                     method: 'POST',
@@ -3436,6 +3483,7 @@ const _editfilOpenModal = (fil) => {
                 const vd = await vr.json();
                 if (vd && vd.success && vd.vendor && vd.vendor.id != null) {
                     payload.vendor_id = Number(vd.vendor.id);
+                    madeVendor = vd.vendor;
                 } else if (vr.status === 409 && vd && vd.existing && vd.existing.id != null) {
                     usedExisting = vd.existing;
                     payload.vendor_id = Number(vd.existing.id);
@@ -3466,6 +3514,8 @@ const _editfilOpenModal = (fil) => {
                 const done = isCreate ? `Filament #${newId} created` : `Filament #${fil.id} updated`;
                 if (usedExisting) {
                     showToast(`${done}; used the existing manufacturer ${usedExisting.name} (#${usedExisting.id}).`, 'success', 7000);
+                } else if (madeVendor) {
+                    showToast(`${done}; made the new manufacturer ${madeVendor.name || pendingNewVendorName} (#${madeVendor.id}).`, 'success', 7000);
                 } else {
                     showToast(`${done}.`, 'success');
                 }

@@ -250,9 +250,22 @@ def test_the_vendor_combobox_binds_once(ef):
 
 
 def test_the_filament_window_reads_its_filament_again_on_its_vendors_save(ef):
-    """RED on the base: only the brand's text changed; its "↩ vendor" weight stayed."""
-    ef.evaluate("""() => { const m = document.getElementById('filamentModal'); m.classList.add('show');
+    """RED on the base: only the brand's text changed; its "↩ vendor" weight stayed.
+    Review round 2 of Group 66 (Q1-08): the read is answered with the filament as Spoolman
+    has it now, and the window must show its new "↩ vendor" weight, with no error (this case
+    passed on a page where the read answered nothing usable and the weight stayed)."""
+    ef.evaluate("""(a) => { Object.assign(window.__answers, a);
+        const m = document.getElementById('filamentModal'); m.classList.add('show');
         document.getElementById('fil-detail-id').innerText = '7';
-        document.getElementById('fil-detail-vendor').dataset.vendorId = '2'; }""")
+        document.getElementById('fil-detail-vendor').dataset.vendorId = '2';
+        document.getElementById('fil-detail-empty-spool-weight').innerText = '180 g'; }""", {
+        "/api/filament_details": {"id": 7, "name": "Red", "material": "PLA", "spool_weight": None, "extra": {},
+                                  "vendor": dict(BRAND, empty_spool_weight=200.0)},
+        "/api/spools_by_filament": [],
+    })
     _vendor_saved(ef, dict(BRAND, empty_spool_weight=200.0))
     assert any(f["url"].startswith("/api/filament_details?id=7") for f in ef.evaluate("window.__fetches"))
+    ef.wait_for_function("() => document.getElementById('fil-detail-empty-spool-weight').innerText === '200 g'")
+    assert ef.evaluate("() => (document.getElementById('fil-detail-empty-spool-source') || {}).innerText") == "↩ vendor"
+    assert "Missing" not in ef.locator("#toast-container").inner_text()
+    assert errors(ef) == []
