@@ -3320,9 +3320,13 @@ const _editfilOpenModal = (fil) => {
                 if (wasMulti) changed.multi_color_hexes = '';
                 if (oldDir) changed.multi_color_direction = null;
             }
-            // Group 66.7: a weight the box only inherits (the vendor's, untouched) is not
-            // the filament's own: it was written at EVERY Save, whatever was edited.
-            if (!(emptyField && emptyField.inherited()) && !same(data.spool_weight, fil.spool_weight)) {
+            // Group 66.7: the box is sent only when the person changed it (their typing,
+            // Use Vendor, an Import panel Apply, an own value emptied: null). A weight it
+            // only inherits (the vendor's) was written as the filament's own at EVERY Save,
+            // whatever was edited; and a filament storing 0 with no vendor weight showed an
+            // empty box, so every Save wrote null over the 0.
+            const wtByPerson = !emptyField || emptyField.isTouched();
+            if (wtByPerson && !same(data.spool_weight, fil.spool_weight)) {
                 changed.spool_weight = data.spool_weight;
             }
             if (!same(data.density, fil.density)) changed.density = data.density;
@@ -4804,6 +4808,9 @@ document.addEventListener('vendor:created', (e) => {
                 if (val == null) val = '';
             }
             inputEl.value = String(val);
+            // Group 66.7: an applied weight is the person's choice (the empty-weight box
+            // then counts it as theirs, even when it equals the vendor's figure).
+            if (key === 'spool_weight') inputEl.dispatchEvent(new Event('input', { bubbles: true }));
             applied++;
         });
         showToast(`Applied ${applied} field${applied === 1 ? '' : 's'}. Click Save to persist.`, 'success', 4000);

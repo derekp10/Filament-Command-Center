@@ -140,6 +140,16 @@ def test_an_own_weight_emptied_is_cleared(ef):
     assert _save_body(ef)["spool_weight"] is None
 
 
+def test_a_filament_storing_0_with_no_vendor_weight_isnt_rewritten(ef):
+    """66.7's grounding: such a filament shows an empty box (0 reads as no value), and
+    every Save of any edit wrote null over the 0. Only a box the person changed is sent
+    now. RED on the base: spool_weight null went out with a name change."""
+    open_form(ef, filament(vendor=dict(SUNLU35), spool_weight=0.0))     # no weight of its own, nor its vendor
+    assert _ui(ef)["box"] == ""
+    ef.locator("#editfil-name").fill("Red Two")
+    assert _save_body(ef) == {"name": "Red Two"}
+
+
 def test_a_filament_on_a_shared_name_keeps_its_own_vendor(ef):
     """Derek's Sunlu #4 and #35. RED on the base: the list moved the hidden id to #4, and
     a Save of the name alone moved the filament onto it."""
