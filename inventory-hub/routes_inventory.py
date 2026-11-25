@@ -46,17 +46,33 @@ import weigh_stamps  # type: ignore  # Group 64, Decision 1: when FCC weighed a 
 from app_core import app
 
 # --- INVENTORY WIZARD ---
+_VENDOR_LIST_UNREAD = "Couldn't read the manufacturer list from Spoolman. Try again in a moment."
+
+
+def _vendor_list_answer():
+    """Group 66.1: the vendor list, or a 502 with words when FCC couldn't read it, never
+    `success: true` with []: after a Spoolman blip Edit Filament read the empty list as
+    "no such vendor", marked the filament's own vendor "+ NEW", and its Save created a
+    second vendor of that name. Spoolman's address (in `why`) stays in hub.log."""
+    vendors, why = spoolman_api.read_vendor_list()
+    if vendors is None:
+        state.logger.warning(f"Vendor list read failed: {why}")
+        return jsonify({"success": False, "msg": _VENDOR_LIST_UNREAD}), 502
+    return jsonify({"success": True, "vendors": vendors})
+
+
 @app.route('/api/external/vendors', methods=['GET'])
 def api_external_vendors():
-    """Proxy route to fetch Spoolman vendors for the Wizard dropdowns."""
-    vendors = spoolman_api.get_vendors()
-    return jsonify({"success": True, "vendors": vendors})
+    """Proxy route to fetch Spoolman vendors for the Wizard dropdowns (Group 66.1: a list
+    FCC couldn't read answers 502, and the wizard keeps the list it had)."""
+    return _vendor_list_answer()
 
 @app.route('/api/vendors', methods=['GET'])
 def api_vendors():
-    """Returns a list of all vendors in Spoolman."""
+    """Returns a list of all vendors in Spoolman (Group 66.1: 502 when FCC couldn't read
+    it, never an empty list)."""
     try:
-        return jsonify({"success": True, "vendors": spoolman_api.get_vendors()})
+        return _vendor_list_answer()
     except Exception as e:
         return jsonify({"success": False, "msg": str(e)}), 500
 
@@ -116,10 +132,32 @@ def api_create_vendor():
     if not name:
         return jsonify({"success": False, "msg": "Vendor name required."}), 400
     data['name'] = name
+    # Group 66.1: one manufacturer per name (spoolman_api.vendor_name_key: trimmed, inner
+    # spaces made one, any case). Spoolman takes a second vendor of a name in use, and
+    # FCC never checked: Derek's data holds three such pairs (Sunlu #4 / #35, Prusament
+    # #9 / #34, Jessie Premium #38 / #39). A list FCC can't read refuses too: never a
+    # create on a guess. Nothing is written either way.
+    vendors, why = spoolman_api.read_vendor_list()
+    esc_name = html.escape(name, quote=False)
+    if vendors is None:
+        state.logger.warning(f"Vendor create '{name}': the vendor list read failed: {why}")
+        state.add_log_entry(f'⚠️ Didn\'t create manufacturer "{esc_name}": FCC couldn\'t read the '
+                            f'manufacturer list to check the name is free.', "WARNING", "ffaa00")
+        return jsonify({"success": False, "msg": "Couldn't check whether that name is free, so nothing "
+                        "was created. Try again in a moment."}), 502
+    existing = spoolman_api.vendor_named(name, vendors)
+    if existing:
+        ex_name = str(existing.get('name') or '')
+        state.add_log_entry(f'⚠️ Didn\'t create manufacturer "{esc_name}": #{existing.get("id")} '
+                            f'"{html.escape(ex_name, quote=False)}" already has that name.', "WARNING", "ffaa00")
+        return jsonify({"success": False,
+                        "msg": f'A manufacturer named "{ex_name}" already exists (#{existing.get("id")}), '
+                               f'so nothing was created.',
+                        "existing": {"id": existing.get('id'), "name": ex_name}}), 409
     try:
         created = spoolman_api.create_vendor(data)
         if created and created.get('id') is not None:
-            state.add_log_entry(f"➕ Vendor '{name}' created", "SUCCESS", "00ff00")
+            state.add_log_entry(f"➕ Vendor '{esc_name}' created", "SUCCESS", "00ff00")
             return jsonify({"success": True, "vendor": created})
         # Surface Spoolman's rejection body when create_vendor returned None.
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the vendor create."
@@ -127,6 +165,14 @@ def api_create_vendor():
     except Exception as e:
         state.logger.error(f"Failed to create vendor '{name}': {e}")
         return jsonify({"success": False, "msg": str(e)}), 500
+
+
+def _esc_log(v):
+    """A value for an Activity Log line, which draws as HTML (Group 66.1: a vendor's name,
+    notes or website went in unescaped). Falsy stays falsy, for the "(empty)" fallback."""
+    if v is None or v == '':
+        return ''
+    return html.escape(str(v), quote=False)
 
 
 def _format_vendor_edit_log(vid, before, data, uncleared=()):
@@ -144,14 +190,14 @@ def _format_vendor_edit_log(vid, before, data, uncleared=()):
                 old = before_extra.get(ek, '')
                 if spoolman_api._is_delete_sentinel(ev):
                     # 23.4 — blank-to-clear, not a literal sentinel write.
-                    parts.append(f"extra.{ek}: {old or '(empty)'} → "
+                    parts.append(f"extra.{ek}: {_esc_log(old) or '(empty)'} → "
                                  f"{'(not cleared)' if ek in uncleared else '(cleared)'}")
                 elif str(old) != str(ev):
-                    parts.append(f"extra.{ek}: {old or '(empty)'} → {ev or '(empty)'}")
+                    parts.append(f"extra.{ek}: {_esc_log(old) or '(empty)'} → {_esc_log(ev) or '(empty)'}")
             continue
         old = before.get(key, '')
         if str(old) != str(value):
-            parts.append(f"{key}: {old or '(empty)'} → {value or '(empty)'}")
+            parts.append(f"{key}: {_esc_log(old) or '(empty)'} → {_esc_log(value) or '(empty)'}")
     if not parts:
         return f"✏️ Vendor #{vid} edited (no fields)"
     return f"✏️ Vendor #{vid} edited — " + " · ".join(parts)
@@ -177,6 +223,27 @@ def api_update_vendor(vid):
     if not isinstance(data, dict) or not data:
         return jsonify({"success": False, "msg": "No fields to update."}), 400
     before = spoolman_api.get_vendor(vid) or {}
+    # Group 66.1: a rename to a name another manufacturer has is refused, nothing written
+    # (the duplicate check of a create). Only a change of name is checked: an edit of
+    # the weight or notes reads no list, and a rename that only changes its own name's
+    # case or spacing is no other vendor's name. A `before` FCC couldn't read counts as a
+    # change, so the list is read.
+    if 'name' in data and spoolman_api.vendor_name_key(data.get('name')) != spoolman_api.vendor_name_key(before.get('name')):
+        new_name = str(data.get('name') or '').strip()
+        vendors, why = spoolman_api.read_vendor_list()
+        if vendors is None:
+            state.logger.warning(f"Vendor #{vid} rename to '{new_name}': the vendor list read failed: {why}")
+            return jsonify({"success": False, "msg": "Couldn't check whether that name is free, so nothing "
+                            "was saved. Try again in a moment."}), 502
+        existing = spoolman_api.vendor_named(new_name, vendors, but_not=vid)
+        if existing:
+            ex_name = str(existing.get('name') or '')
+            state.add_log_entry(f'⚠️ Didn\'t rename manufacturer #{vid} to "{html.escape(new_name, quote=False)}": '
+                                f'#{existing.get("id")} already has that name.', "WARNING", "ffaa00")
+            return jsonify({"success": False,
+                            "msg": f'A manufacturer named "{ex_name}" already exists (#{existing.get("id")}), '
+                                   f'so nothing was saved.',
+                            "existing": {"id": existing.get('id'), "name": ex_name}}), 409
     try:
         updated = spoolman_api.update_vendor_or_raise(vid, data)
         uncleared = (updated.get('fcc_uncleared_extras') or ()) if isinstance(updated, dict) else ()
@@ -192,7 +259,7 @@ def api_update_vendor(vid):
     except spoolman_api.SpoolmanRejection as e:
         err = str(e) or "Spoolman rejected the vendor edit."
         state.add_log_entry(
-            f"❌ Vendor #{vid} edit rejected — {err}",
+            f"❌ Vendor #{vid} edit rejected — {html.escape(err, quote=False)}",
             "ERROR", "ff4444",
         )
         return jsonify({"success": False, "msg": err}), 400
