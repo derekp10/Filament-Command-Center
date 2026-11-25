@@ -39,7 +39,7 @@ from unittest.mock import patch
 import pytest
 
 from spoolman_extra_fake import SpoolmanHTTPFake
-from test_wizard_label_status_58_5 import FIELDS, MODULES, PRELUDE, WIZARD_HTML, _save
+from test_wizard_label_status_58_5 import FIELDS, MODULES, PRELUDE, WIZARD_HTML, _discard_changes, _save
 
 EDIT = "/api/edit_spool_wizard"
 CREATE = "/api/create_inventory_wizard"
@@ -105,7 +105,9 @@ def wiz(isolated_page):
     return page
 
 
-def _open_edit(page, **kw):
+def _open_edit(page, over_changes=False, **kw):
+    """`over_changes`: the form open now holds unsaved changes, so the open asks first
+    (Group 66.2) and the person presses Discard & Start Over."""
     details = _details(**kw)
     page.evaluate("""(a) => {
         window.__answers['/api/spool_details'] = a.details;
@@ -114,10 +116,20 @@ def _open_edit(page, **kw):
     # Not awaited: openEditWizard holds no answer the test needs, and the states
     # are waited on below.
     page.evaluate("() => { window.openEditWizard(57); }")
+    if over_changes:
+        _discard_changes(page)
     page.wait_for_function("() => wizardState.mode === 'edit_spool' && wizardState.selectedFilamentId === 7"
                            " && !!document.getElementById('wiz_fil_ef_needs_label_print')"
                            " && document.getElementById('wiz-fil-color_name').value === 'Red'"
                            " && !document.getElementById('btn-wiz-submit').disabled")
+
+
+def _closed_meanwhile(page):
+    """The person closes the wizard while its Save is on its way, then opens another
+    spool: since Group 66.2 the wizard isn't started over on screen during a Save, so
+    that is how a second form comes up then. The harness's modal simply hides (its
+    close question answered)."""
+    page.evaluate("() => document.getElementById('wizardModal').classList.remove('show')")
 
 
 def _open_new_filament(page):
@@ -314,7 +326,7 @@ def test_the_next_wizard_session_forgets_a_touch(wiz):
     _open_edit(wiz)
     wiz.locator("#wiz-fil-settings_bed_temp").fill("")
     assert _touched(wiz) == ["fil:settings_bed_temp"]
-    _open_edit(wiz, bed=None)
+    _open_edit(wiz, over_changes=True, bed=None)     # the emptied box is unsaved: Discard (Group 66.2)
     assert _touched(wiz) == []
     body = _save(wiz, EDIT)
     assert "settings_bed_temp" not in body["filament_data"], body["filament_data"]
@@ -794,6 +806,7 @@ def test_a_saves_late_answer_leaves_a_form_opened_since_for_another_spool_alone(
     wiz.wait_for_function("() => typeof window.__release === 'function'")
     d58 = _details()
     d58.update(id=58, used_weight=199.97, remaining_weight=800.03)
+    _closed_meanwhile(wiz)
     wiz.evaluate("(d) => { window.__answers['/api/spool_details'] = d; window.openEditWizard(58); }", d58)
     wiz.wait_for_function("() => wizardState.mode === 'edit_spool' && wizardState.editSpoolId == 58"
                           " && document.getElementById('wiz-fil-color_name').value === 'Red'"
@@ -857,7 +870,9 @@ def _save_held(page, answer, fail=False):
 
 
 def _released_in_58s_form(page):
-    """#57's answer, let go once Edit Spool shows #58; waits for the toast naming #57."""
+    """#57's answer, let go once Edit Spool shows #58 (the wizard closed meanwhile);
+    waits for the toast naming #57."""
+    _closed_meanwhile(page)
     _open_sid(page, 58, 199.97)
     page.evaluate("() => window.__release()")
     page.wait_for_function("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"

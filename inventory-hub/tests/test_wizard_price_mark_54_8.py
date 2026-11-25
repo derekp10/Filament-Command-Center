@@ -227,7 +227,7 @@ def test_the_collapsed_summary_says_where_the_price_comes_from(wiz):
     assert _summary(wiz) == "$25 ↩ from filament"
     wiz.locator(PRICE).fill("22")
     assert _summary(wiz) == "$22"
-    _open_edit(wiz, price=30.0)
+    _open_edit(wiz, over_changes=True, price=30.0)
     assert _summary(wiz) == "$30"
 
 
@@ -719,7 +719,7 @@ def test_the_weight_summary_follows_a_picked_filament(wiz):
     _open_new_spool(wiz)
     _pick(wiz, 10)
     assert _shown_summary(wiz, WEIGHT_SUMMARY) == "tare 170g ↩ from vendor"
-    _open_edit(wiz, spool_wt=None, vendor_wt=180.0)
+    _open_edit(wiz, over_changes=True, spool_wt=None, vendor_wt=180.0)
     wiz.locator("#wiz-fil-empty_weight").fill("")
     _blur(wiz)
     assert _shown_summary(wiz, WEIGHT_SUMMARY).endswith("· tare 180g ↩ from vendor"), _shown_summary(wiz, WEIGHT_SUMMARY)
