@@ -1108,6 +1108,10 @@ const wizardReset = () => {
     if (step1) step1.style.display = 'block';
     const qtyBox = document.getElementById('wiz-spool-qty');
     if (qtyBox && qtyBox.parentElement) qtyBox.parentElement.style.display = 'flex';
+    // Group 66.3 (B): the Prusament box is the Add wizard's per-spool scan again.
+    const rowsLabel = document.getElementById('wiz-spool-rows-label');
+    if (rowsLabel) rowsLabel.textContent = WIZ_ROWS_LABEL_ADD;
+    if (window.wizardRenderLinkNote) window.wizardRenderLinkNote();
 
     // Reset View
     wizardSelectType('manual');
@@ -4527,7 +4531,10 @@ window.wizardSubmit = async () => {
         if (wizardState.spoolRows && wizardState.spoolRows.length > 0) {
             const blocking = wizardState.spoolRows.some(r => r.status === 'pending' || r.status === 'error');
             if (blocking) {
-                msg.innerHTML = '<span class="text-danger fw-bold">⚠ One or more spool scans failed or are still loading. Fix or clear them before creating.</span>';
+                // Group 66.3 (B): Edit Spool's link check is still loading (a refusal never blocks).
+                msg.innerHTML = wizardState.mode === 'edit_spool'
+                    ? '<span class="text-danger fw-bold">⚠ The Prusament QR is still being checked. Save again in a moment.</span>'
+                    : '<span class="text-danger fw-bold">⚠ One or more spool scans failed or are still loading. Fix or clear them before creating.</span>';
                 document.getElementById('btn-wiz-submit').disabled = false;
                 return;
             }
@@ -5161,6 +5168,11 @@ window.openEditWizard = async (spoolId) => {
             const qtyBox = document.getElementById('wiz-spool-qty');
             if (qtyBox && qtyBox.parentElement) qtyBox.parentElement.style.display = 'none';
             if (qtyBox) qtyBox.value = 1;
+            // Group 66.3 (Derek's (B)): the Prusament box links this spool to its QR.
+            const rowsLabel = document.getElementById('wiz-spool-rows-label');
+            if (rowsLabel) rowsLabel.textContent = WIZ_ROWS_LABEL_EDIT;
+            if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
+            if (window.wizardRenderLinkNote) window.wizardRenderLinkNote();
 
             const f = d.filament;
             // 23.3 — snapshot the label-bearing filament fields at edit-open so
@@ -5537,16 +5549,28 @@ const _spoolRowBadgeHtml = (row) => {
     if (row.status === 'error') {
         return `<span class="badge bg-danger" role="button" style="cursor: pointer;"
                        title="Click to clear this row and retry"
-                       onclick="window.wizardScanSpoolRow(${row.idx}, '')">✗ ${row.errorMsg || 'Scan failed'} ✕</span>`;
+                       onclick="window.wizardScanSpoolRow(${row.idx}, '')">✗ ${_wizEscape(row.errorMsg || 'Scan failed')} ✕</span>`;
+    }
+    // Group 66.3 (B), Edit Spool's link: its words are text (a spool's name can be in them).
+    if (row.status === 'linked-new' || row.status === 'linked') {
+        return `<span class="badge bg-success">🔗 ${_wizEscape(row.errorMsg || 'Linked')}</span>`;
+    }
+    if (row.status === 'refused') {
+        return `<span class="badge bg-warning text-dark" role="button" style="cursor: pointer;"
+                       title="Click to clear this row"
+                       onclick="window.wizardScanSpoolRow(${row.idx}, '')">✗ ${_wizEscape(row.errorMsg || 'Not linked')} ✕</span>`;
     }
     return '';
 };
+
+// Is there anything in the row to clear (its ✕ shows)?
+const _spoolRowClearable = (row) => ['ok', 'error', 'linked', 'linked-new', 'refused'].includes(row.status);
 
 // "Clear this row" button — sits between the URL input and the status
 // badge. Only relevant when the row has a value to clear (status is
 // 'ok' or 'error'); hidden in 'empty' or 'pending' states.
 const _spoolRowClearBtnHtml = (row) => {
-    const visible = (row.status === 'ok' || row.status === 'error');
+    const visible = _spoolRowClearable(row);
     const display = visible ? '' : 'display: none;';
     return `<button type="button" class="btn btn-sm btn-link p-0 px-1 text-secondary wiz-row-clear-btn"
                     style="font-size: 1.1em; line-height: 1; ${display}"
@@ -5555,6 +5579,8 @@ const _spoolRowClearBtnHtml = (row) => {
 };
 
 const _spoolRowSummaryHtml = () => {
+    // Group 66.3 (B): in Edit Spool the box links one spool; it has no count to show.
+    if (wizardState.mode === 'edit_spool') return '';
     const okCount = wizardState.spoolRows.filter(r => r.status === 'ok').length;
     const total = wizardState.spoolRows.length;
     const errCount = wizardState.spoolRows.filter(r => r.status === 'error').length;
@@ -5587,8 +5613,7 @@ window.wizardRenderSpoolRowBadge = (idx) => {
         // just flip its display so any focus state stays intact.
         const clearBtn = rowEl.querySelector('.wiz-row-clear-btn');
         if (clearBtn) {
-            const visible = (row.status === 'ok' || row.status === 'error');
-            clearBtn.style.display = visible ? '' : 'none';
+            clearBtn.style.display = _spoolRowClearable(row) ? '' : 'none';
         }
         // Outline class for error state.
         rowEl.classList.toggle('border', row.status === 'error');
@@ -5639,6 +5664,8 @@ window.wizardUpdateSubmitGate = () => {
 };
 
 window.wizardScanSpoolRow = async (idx, rawUrl) => {
+    // Group 66.3 (Derek's (B)): in Edit Spool the box links the spool to its QR.
+    if (wizardState.mode === 'edit_spool') return window.wizardLinkPrusament(idx, rawUrl);
     const row = wizardState.spoolRows[idx];
     if (!row) return;
     const url = (rawUrl || '').trim();
@@ -5735,6 +5762,175 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
         window.wizardRenderSpoolRowBadge(idx);
         window.wizardUpdateSubmitGate();
     }
+};
+
+// --- EDIT SPOOL LINKS THE SPOOL TO ITS PRUSAMENT QR (Group 66.3, Derek's (B)) ---
+// The "📷 Per-spool Prusament scan" box showed a ✓ in Edit Spool and Save sent none of
+// it (only a create reads spool_overrides). Now a QR scanned (or pasted) there links the
+// spool being edited: its 📄 Product Link gets the QR's own link, and its BLANK
+// Prusament details (purchase link, manufacturing date, length) are filled, all as if
+// typed, so Save sends them through the edit's own diff (no new write). Prusament's
+// weights are shown, never sent: the dashboard scan of the QR offers them, checked
+// against the live spool first (/api/spool/prusament_apply_weights).
+// It changes nothing, and says why on the row and its note line, when:
+//   - the link isn't a Prusament spool's, or names no one spool (no spool code);
+//   - the spool's own Product Link holds another link (clear it first);
+//   - another spool already holds this QR (/api/prusament/linked_spools, the dashboard
+//     scan's own rule, archived spools included), or FCC couldn't check;
+//   - FCC couldn't read the QR's Prusament page;
+//   - the QR names a different product than the spool's filament (vendor or material,
+//     or a colour neither name contains).
+// A refusal never blocks Save (its own status, 'refused'); a check in flight does
+// ('pending'), briefly. A new scan, or the row's ✕, first puts back what an earlier link
+// filled in (each box only while it still shows the value put there). An answer that
+// lands after the wizard moved on (reset, another spool, another mode) changes nothing.
+const WIZ_ROWS_LABEL_ADD = '📷 Per-spool Prusament scan (optional)';
+const WIZ_ROWS_LABEL_EDIT = "📷 Link this spool to its Prusament QR (optional)";
+const _wizPrusamentLink = (url) => /prusament\.com\/spool\/(\d+)(?:\/([0-9a-z]+))?/i.exec(String(url || ''));
+const _wizLinkHolds = (link, pid, hash) => {
+    const s = String(link || '').replace(/^"+|"+$/g, '').trim().toLowerCase();
+    if (!s) return false;
+    return s.includes(`/spool/${pid}/${hash}`) || s.includes(`spoolid=${hash}`);
+};
+
+// The row's note line (its words, as text).
+window.wizardRenderLinkNote = () => {
+    const el = document.getElementById('wiz-spool-link-note');
+    if (!el) return;
+    const row = wizardState.mode === 'edit_spool' ? (wizardState.spoolRows || [])[0] : null;
+    const words = row && row.linkNote ? row.linkNote : '';
+    el.textContent = words;
+    el.style.display = words ? '' : 'none';
+};
+
+// Put back what an earlier link of this row filled in (each box only while it still
+// shows the value put there: a box the person changed since stays theirs).
+const _wizUndoLink = (row) => {
+    for (const f of (row.linkFills || [])) {
+        const el = document.getElementById(f.id);
+        if (el && el.value === f.value) el.value = f.before;
+    }
+    row.linkFills = [];
+    row.linkValue = '';
+};
+
+// Does the QR's product disagree with the spool's filament? Words when it clearly does.
+const _wizLinkMismatch = (temp, sid) => {
+    const orig = wizardState.editFilamentOriginal || {};
+    const vendorName = (() => {
+        const v = (wizardState.vendors || []).find((x) => String(x.id) === String(orig.vendor_id));
+        return v ? v.name : '';
+    })();
+    const qrVendor = (temp.vendor && temp.vendor.name) || 'Prusament';
+    const qrWhat = `${qrVendor} ${temp.material || ''} ${temp.color_name || temp.name || ''}`.replace(/\s+/g, ' ').trim();
+    const ourWhat = `${vendorName} ${orig.material || ''} ${orig.name || ''}`.replace(/\s+/g, ' ').trim();
+    const say = `That QR is ${qrWhat}, and #${sid} is ${ourWhat}: scan #${sid}'s own QR.`;
+    if (vendorName && _normalizeStr(vendorName) !== _normalizeStr(qrVendor)) return say;
+    if (orig.material && temp.material && !_materialMatches(_normalizeStr(orig.material), _normalizeStr(temp.material))) return say;
+    const qrColor = _normalizeStr(temp.color_name);
+    const ourName = _normalizeStr(orig.name);
+    if (qrColor && ourName && !ourName.includes(qrColor) && !qrColor.includes(ourName)) return say;
+    return '';
+};
+
+window.wizardLinkPrusament = async (idx, rawUrl) => {
+    const row = wizardState.spoolRows[idx];
+    if (!row) return;
+    const url = String(rawUrl || '').trim();
+    _wizUndoLink(row);
+    row.url = url;
+    row.override = null;           // an edit never sends a spool override
+    const done = (status, msg, note) => {
+        row.status = status;
+        row.errorMsg = msg || '';
+        row.linkNote = note || '';
+        window.wizardRenderSpoolRowBadge(idx);
+        window.wizardRenderLinkNote();
+        window.wizardUpdateSubmitGate();
+    };
+    if (!url) return done('empty');
+    const m = _wizPrusamentLink(url);
+    if (!m) return done('refused', "Not a Prusament spool's link", '');
+    if (!m[2]) {
+        return done('refused', 'No spool code in it',
+            "A Prusament spool's QR ends in its own spool code; this link has none, so it could be any spool of the product.");
+    }
+    const pid = m[1];
+    const hash = m[2].toLowerCase();
+    const canonical = `https://prusament.com/spool/${pid}/${hash}/`;
+    const sid = wizardState.editSpoolId;
+    const session = wizardState.session;
+    const stale = () => wizardState.session !== session || String(wizardState.editSpoolId) !== String(sid)
+        || wizardState.mode !== 'edit_spool' || row.url !== url;
+
+    // The spool's own Product Link.
+    const productBox = document.getElementById('wiz-spool-product_url');
+    const own = productBox ? productBox.value.trim() : '';
+    if (own && _wizLinkHolds(own, pid, hash)) return done('linked', 'Already linked to this QR', '');
+    if (own) {
+        return done('refused', 'Its Product Link holds another link',
+            `#${sid}'s 📄 Product Link holds another link. Clear it first if this QR is #${sid}'s.`);
+    }
+
+    done('pending');
+    // Another spool holding this QR?
+    let owners = null;
+    try {
+        const r = await fetch(`/api/prusament/linked_spools?url=${encodeURIComponent(url)}`);
+        const d = await r.json();
+        if (stale()) return;
+        if (d && d.success && Array.isArray(d.spools)) owners = d.spools.filter((s) => String(s.id) !== String(sid));
+    } catch (_) { if (stale()) return; }
+    if (owners === null) {
+        return done('refused', "Couldn't check this QR",
+            "FCC couldn't check whether another spool has this QR, so nothing changed. Try again in a moment.");
+    }
+    if (owners.length) {
+        const o = owners[0];
+        return done('refused', `Linked to #${o.id}`,
+            `That QR is already linked to ${o.display || '#' + o.id}${o.archived ? ' (archived)' : ''}. Scan #${sid}'s own QR.`);
+    }
+
+    // What Prusament says the spool is.
+    let temp = null;
+    try {
+        const r = await fetch(`/api/external/search?source=prusament&q=${encodeURIComponent(url)}`);
+        const d = await r.json();
+        if (stale()) return;
+        temp = d && d.success && Array.isArray(d.results) ? d.results[0] || null : null;
+    } catch (_) { if (stale()) return; }
+    if (!temp) {
+        return done('refused', "Couldn't read its Prusament page",
+            "FCC couldn't read this spool's Prusament page, so nothing changed. Try again in a moment.");
+    }
+    const mismatch = _wizLinkMismatch(temp, sid);
+    if (mismatch) return done('refused', 'A different product', mismatch);
+
+    // Link: the QR's own link, and the spool's blank Prusament details, as if typed.
+    const o = window.extractSpoolFieldsFromTemplate(temp) || {};
+    const ex = o.extra || {};
+    const unq = (v) => String(v == null ? '' : v).replace(/^"|"$/g, '');
+    const fills = [];
+    const fill = (id, value) => {
+        const el = document.getElementById(id);
+        if (!el || value == null || String(value).trim() === '' || el.value.trim() !== '') return;
+        fills.push({ id, before: el.value, value: String(value) });
+        el.value = String(value);
+    };
+    fill('wiz-spool-product_url', canonical);
+    if (temp.purchase_link) fill('wiz-spool-purchase_url', temp.purchase_link);
+    if (ex.prusament_manufacturing_date) fill('wiz_spool_ef_prusament_manufacturing_date', unq(ex.prusament_manufacturing_date));
+    const len = unq(ex.prusament_length_m);
+    if (len && len !== '0') fill('wiz_spool_ef_prusament_length_m', len);
+    row.linkFills = fills;
+    row.linkValue = canonical;
+    wizardState.isDirty = true;
+    const bits = [];
+    if (o.initial_weight !== undefined) bits.push(`${o.initial_weight} g of filament`);
+    if (o.spool_weight !== undefined) bits.push(`${o.spool_weight} g empty`);
+    const weights = bits.length ? `Prusament says ${bits.join(', ')}. ` : '';
+    return done('linked-new', 'Links at Save',
+        `${weights}To use its weights, Save and close the wizard, then scan this QR on the dashboard: FCC checks them against the spool first.`);
 };
 
 window.wizardAutoSwitchToExisting = (filament, parsedTemplate) => {

@@ -1523,6 +1523,55 @@ def test_the_wizards_tare_from_the_filament_is_readable(page: Page, base_url: st
     conftest.close_wizard(page)
 
 
+def test_edit_spools_prusament_link_words_are_readable(page: Page, base_url: str):
+    """Group 66.3 (Derek's (B)): Edit Spool's "📷 Link this spool to its Prusament QR" box,
+    its row's badge (green when the QR links at Save, amber when it won't) and its note
+    line, on the wizard's dark ground. The spool, the owner check and the QR's page are
+    stubs, every write is answered in the browser, and nothing is saved. Scored from the
+    box (the guard scores descendants only), the words proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    qr = "https://prusament.com/spool/17705/abc123def0"
+    spool = {"id": 9101, "archived": False, "extra": {}, "initial_weight": 1000.0, "used_weight": 100.0,
+             "remaining_weight": 900.0, "spool_weight": 0.0, "location": "", "registered": "2026-02-11T04:07:24Z",
+             "filament": {"id": 9102, "name": "Galaxy Black", "material": "PLA", "color_hex": "111111",
+                          "weight": 1000.0, "spool_weight": 193.0, "extra": {},
+                          "vendor": {"id": 9, "name": "Prusament", "extra": {}}}}
+    template = {"name": "Prusament PLA Galaxy Black", "material": "PLA", "vendor": {"name": "Prusament"},
+                "color_name": "Galaxy Black", "weight": 1012.0, "weight_is_default": False, "spool_weight": 193.0,
+                "external_link": qr, "purchase_link": "", "extra": {"prusament_manufacturing_date": "2026-03-01",
+                                                                    "prusament_length_m": "336"}}
+    _read_only(page, extra_get={
+        "/api/spool_details": spool,
+        "/api/prusament/linked_spools": {"success": True, "spool_id": "17705", "spool_hash": "abc123def0", "spools": []},
+        "/api/external/search": {"success": True, "results": [template]},
+    })
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditWizard === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openEditWizard(9101); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool'"
+                           " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    row = page.locator("[data-spool-row-idx='0'] input")
+    box = page.locator("#wiz-spool-rows-box")
+    row.fill(qr)
+    row.press("Tab")
+    page.wait_for_function("() => wizardState.spoolRows[0].status === 'linked-new'", timeout=10_000)
+    assert conftest.contrast_offenders(box) == []
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(box, min_ratio=100))
+    assert "Links at Save" in scored and "Prusament says 1012 g" in scored, scored   # the walker cuts long text
+    # Amber: a link that isn't a Prusament spool's (no request needed).
+    row.fill("https://example.com/not-a-spool")
+    row.press("Tab")
+    page.wait_for_function("() => wizardState.spoolRows[0].status === 'refused'", timeout=10_000)
+    assert conftest.contrast_offenders(box) == []
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(box, min_ratio=100))
+    assert "Not a Prusament spool's link" in scored, scored
+    page.evaluate("() => { wizardState.isDirty = false; }")
+    conftest.close_wizard(page)
+
+
 def test_the_missing_tare_questions_offer_is_readable(page: Page, base_url: str):
     """Group 63.9(a), Derek's option 2 (2026-11-19, the Group 63 review's round 4): a
     new spool's offered empty weight is a "Use about 245 g" button beside its words,
