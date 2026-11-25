@@ -47,8 +47,19 @@ WIZARD_ANSWER_READERS = ["window.wizardSubmit = ", "window.wizardEditLocationNot
                          "window.wizardSettleCreatePlacements = "]
 
 
+# Group 66.2: Save's body is _wizardSubmitInner, behind a wrapper that marks the Save on
+# its way (wizardState.saving); the wrapper must still call it, and it reads the answer.
+WIZARD_DELEGATES = {"window.wizardSubmit = ": "const _wizardSubmitInner = "}
+
+
 @pytest.mark.parametrize("header", WIZARD_ANSWER_READERS, ids=[h.split("=")[0].strip() for h in WIZARD_ANSWER_READERS])
 def test_every_wizard_answer_reader_takes_the_swapped_out_spool_into_the_buffer(header):
-    assert "takeIntoBuffer(" in _body(_read(MODULES / "inv_wizard.js"), header), (
+    src = _read(MODULES / "inv_wizard.js")
+    helper = WIZARD_DELEGATES.get(header)
+    if helper:
+        name = helper.replace("const ", "").replace(" = ", "")
+        assert f"{name}(" in _body(src, header), f"{header} no longer uses {name}"
+        header = helper
+    assert "takeIntoBuffer(" in _body(src, header), (
         f"inv_wizard.js: {header.strip()} reads a wizard move's answer but never calls window.takeIntoBuffer, "
         f"so a Swap's old spool would vanish from this page's buffer on its next save")
