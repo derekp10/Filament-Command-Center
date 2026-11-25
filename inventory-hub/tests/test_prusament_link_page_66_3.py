@@ -211,7 +211,11 @@ def test_an_answer_after_the_wizard_moved_on_changes_nothing(wizard):  # noqa: F
     wizard.locator(ROW).fill(QR)
     wizard.locator(ROW).press("Tab")
     wizard.wait_for_function("() => !!(window.__held && window.__held['/api/prusament/linked_spools'])")
-    wizard.evaluate("() => window.openWizardModal()")
+    # The typed link is an unsaved change: since Group 66.2 the open asks first, and its
+    # Discard is what starts the form over (never awaited here: it waits on that answer).
+    wizard.evaluate("() => { window.openWizardModal(); }")
+    wizard.wait_for_selector("#fcc-wiz-dirty-confirm")
+    wizard.locator("#fcc-wiz-dirty-confirm").click()
     wizard.wait_for_function("() => wizardState.mode === 'manual'")
     wizard.evaluate("() => window.__held['/api/prusament/linked_spools']({ success: true, spools: [] })")
     wizard.wait_for_timeout(100)
