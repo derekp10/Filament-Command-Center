@@ -2228,3 +2228,73 @@ def test_the_review_panels_outcome_line_and_held_card_head_are_readable(page: Pa
                  "FCC held these grams instead of charging them"):
         assert want in scored, (want, scored)
     page.keyboard.press("Escape")
+
+
+def test_the_wizards_filament_tare_from_its_brand_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.7 (Derek's D2 (a)): Edit Spool of a spool whose filament has no empty
+    weight of its own shows its brand's 167 g in the filament's Spool Wt box, marked
+    "↩ from vendor" beside the label and in the closed Physical Specs summary ("167g tare
+    ↩ from vendor"), in the spool box's look. The spool is a stub, every write is answered
+    in the browser, and nothing is saved. Each root is scored from its parent (the guard
+    scores descendants only), and each mark is proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    vendor = {"id": 9003, "name": "Example Brand", "extra": {}, "empty_spool_weight": 167.0}
+    filament = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+                "extra": {}, "vendor": vendor}
+    spool = {"id": 9001, "filament": filament, "initial_weight": 1000.0, "used_weight": 100.0,
+             "remaining_weight": 900.0, "location": "", "extra": {}, "archived": False}
+    _read_only(page, extra_get={"/api/spool_details": spool,
+                                "/api/external/vendors": {"success": True, "vendors": [vendor]}})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditWizard === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openEditWizard(9001); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool'"
+                           " && document.getElementById('wiz-fil-empty_weight').value === '167'"
+                           " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    toggle = page.locator('button.fcc-wiz-section-toggle[data-bs-target="#wiz-fil-physical-panel"]')
+    expect(toggle.locator(".fcc-wiz-section-summary")).to_contain_text("167g tare ↩ from vendor")
+    # The toggle's ▾ is left out, as in the price case: a state glyph, older than 66.
+    offenders = [o for o in conftest.contrast_offenders(toggle)
+                 if "fcc-wiz-section-chevron" not in (o.get("className") or "")]
+    assert offenders == [], offenders
+    scored = [o.get("text") for o in conftest.contrast_offenders(toggle, min_ratio=100)]
+    assert "↩ from vendor" in scored, scored
+    page.evaluate("() => bootstrap.Collapse.getOrCreateInstance("
+                  "document.getElementById('wiz-fil-physical-panel'), { toggle: false }).show()")
+    badge = page.locator("#wiz-fil-empty-inherited-badge")
+    expect(badge).to_be_visible()
+    column = badge.locator("xpath=ancestor::div[contains(@class, 'col-md-3')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "wiz-fil-empty-inherited-badge"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the filament's badge was never scored"
+    conftest.close_wizard(page)
+
+
+def test_edit_filaments_tare_from_its_brand_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.7 (Derek's D2 (a)): Edit Filament of a filament with no empty weight of its
+    own shows its manufacturer's 167 g on the Specs tab, marked "↩ from vendor" beside the
+    label, in the wizard's badge look. The filament is handed to the window, its vendor
+    list is a stub and every write is answered in the browser, so nothing is saved. The
+    badge is scored from its column and proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    vendor = {"id": 9003, "name": "Example Brand", "extra": {}, "empty_spool_weight": 167.0}
+    _read_only(page, extra_get={"/api/vendors": {"success": True, "vendors": [vendor]}})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditFilamentForm === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    fil = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+           "extra": {}, "vendor": vendor}
+    page.evaluate("(f) => { window.openEditFilamentForm(f); }", fil)
+    conftest.wait_modal_settled(page, "editFilamentModal")
+    page.locator("#editfil-tab-specs-btn").click()
+    badge = page.locator("#editfil-spool-weight-inherited-badge")
+    expect(badge).to_be_visible()
+    assert page.locator("#editfil-spool-weight").input_value() == "167"
+    column = badge.locator("xpath=ancestor::div[contains(@class, 'col-6')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "editfil-spool-weight-inherited-badge"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the badge was never scored"
