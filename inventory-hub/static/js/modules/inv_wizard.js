@@ -401,6 +401,9 @@ window.openWizardModal = async (opts = {}) => {
         window.hideAllDetailsModals();
     }
     wizardReset();
+    // Review round 1 of Group 66 (R3-06): an opener's prefill is loading from here, through
+    // the lists read below (a QR fed into a Spool box meanwhile was wiped by the prefill).
+    if (opts && opts.prefilling) wizardState.prefilling = opts.prefilling;
     if (window.modals && window.modals.wizardModal) {
         window.modals.wizardModal.show();
     } else {
@@ -5404,7 +5407,7 @@ const _wizReturnTarget = (spoolId) => {
 window.openCloneWizard = async (spoolId) => {
     const ret = _wizReturnTarget(spoolId);
     // Reset and Open Wizard (Wait for Extrad fields DOM injection!)
-    if (!(await openWizardModal())) return false;
+    if (!(await openWizardModal({ prefilling: 'clone' }))) return false;
     Object.assign(wizardState, ret);
     const session = wizardState.session;
     const mine = () => wizardState.session === session;
@@ -5502,7 +5505,7 @@ window.openCloneWizard = async (spoolId) => {
 // --- NEW SPOOL FROM FILAMENT LOGIC ---
 window.openNewSpoolFromFilamentWizard = async (filamentId) => {
     // Reset and Open Wizard (Wait for Extra fields DOM injection!)
-    if (!(await openWizardModal())) return false;
+    if (!(await openWizardModal({ prefilling: 'new' }))) return false;
     // Track filament for re-opening detail modal after wizard closes
     wizardState.returnToFilamentId = filamentId;
     wizardState.returnToSpoolId = null;
@@ -5580,7 +5583,7 @@ window.openEditWizard = async (spoolId) => {
     // visible at launch (_wizReturnTarget; Group 66.2: applied only once the wizard opens).
     const ret = _wizReturnTarget(spoolId);
     // Reset and Open Wizard (Wait for dynamically mapped DOM structures first!)
-    if (!(await openWizardModal())) return false;
+    if (!(await openWizardModal({ prefilling: 'edit' }))) return false;
     Object.assign(wizardState, ret);
     const session = wizardState.session;
     const mine = () => wizardState.session === session;
@@ -6172,6 +6175,25 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
         return;
     }
 
+    // Review round 1 of Group 66 (R3-11): a QR another Spool box holds already (a scanner's
+    // second read lands in the next box, which the eager focus advance below gives the
+    // keyboard). Save made two records of one spool. This box goes back to empty, and says
+    // where the QR is.
+    const qrKey = _wizQrKey(url);
+    const twin = wizardState.spoolRows.find((r) => r !== row && r.status !== 'empty' && r.url && _wizQrKey(r.url) === qrKey);
+    if (twin) {
+        const input = document.querySelector(`[data-spool-row-idx="${idx}"] input[type='url']`);
+        if (input) input.value = '';
+        row.url = '';
+        row.status = 'empty';
+        row.errorMsg = '';
+        row.override = null;
+        window.wizardRenderSpoolRowBadge(idx);
+        window.wizardUpdateSubmitGate();
+        if (window.showToast) window.showToast(`That spool's QR is in Spool ${twin.idx + 1} already.`, 'info', 4000);
+        return;
+    }
+
     // EAGER FOCUS ADVANCE — before the slow fetch begins, hop focus to
     // the next still-empty row. Hardware QR scanners send Enter at the
     // end of the scan, which blurs row N; the very next keystroke from
@@ -6424,12 +6446,39 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
 // loading, a Save is on its way, or the form never loaded; never in Edit Spool, whose box
 // links its own spool only through the box itself (the grounding's C4: a QR read from
 // outside it may be another spool's). Answers {row} when it took the link, else false.
+// Review round 1 of Group 66 (R3-01, R5-02, R3-02, R3-11): the feed took a QR into any Add's
+// empty Spool box. With a filament already picked (Existing Filament, the batch flow after a
+// create) the spool was created as THAT filament carrying another product's link, weights
+// and date, so every later scan of its QR matched the wrong spool; with one typed in New
+// Manual Form the QR's product page wrote over it, unasked. And a scanner's second read of
+// one QR filled a second box (two records of one spool), or asked to start over. Now:
+//   - a QR a Spool box (or Edit Spool's link box) holds already, by its spool id and hash,
+//     is a second read: answered `{already: idx}` and said, nothing more;
+//   - the QR goes into a box only in New Manual Form with nothing typed or picked for the
+//     filament (the QR names it, as in a fresh Add); otherwise the open asks first when the
+//     wizard holds changes, and starts a fresh Add for the QR when it doesn't.
+const _wizQrKey = (url) => {
+    const m = _wizPrusamentLink(url);
+    return m ? `${m[1]}/${String(m[2] || '').toLowerCase()}` : String(url || '').trim().toLowerCase();
+};
+const _wizStep2Untouched = () => wizardState.mode === 'manual'
+    && (wizardState.selectedFilamentId == null || String(wizardState.selectedFilamentId) === '')
+    && !wizardState.filamentLockedFromScan
+    && ['wiz-fil-color_name', 'wiz-fil-material', 'wiz-fil-vendor-search', 'wiz-fil-vendor-sel']
+        .every((id) => _wizBoxValue(id).trim() === '');
 window.wizardTakePrusamentLink = (url) => {
     const link = String(url || '').trim();
     const wizEl = document.getElementById('wizardModal');
     if (!link || !wizEl || !wizEl.classList.contains('show')) return false;
+    const key = _wizQrKey(link);
+    for (const row of (wizardState.spoolRows || [])) {
+        const input = document.querySelector(`[data-spool-row-idx="${row.idx}"] input[type='url']`);
+        const held = ((input && input.value) || row.url || '').trim();
+        if (held && row.status !== 'empty' && _wizQrKey(held) === key) return { already: row.idx };
+    }
     if (!['manual', 'existing', 'external'].includes(wizardState.mode)) return false;
     if (wizardState.prefilling || wizardState.saving != null || wizardState.editLoadFailed) return false;
+    if (!_wizStep2Untouched()) return false;
     const box = document.getElementById('wiz-spool-rows-box');
     if (box && box.getClientRects().length === 0) return false;
     for (const row of (wizardState.spoolRows || [])) {
@@ -6443,6 +6492,89 @@ window.wizardTakePrusamentLink = (url) => {
     }
     return false;
 };
+
+// Review round 1 of Group 66 (R3-07): the wizard on screen with a Save on its way.
+window.wizardIsSaving = () => {
+    const w = document.getElementById('wizardModal');
+    return !!(w && w.classList.contains('show')) && wizardState.saving != null;
+};
+
+// Review round 1 of Group 66 (R3-04, R4-10, R5-03): a new Prusament spool's QR read while Edit
+// Spool is open, from outside its link box (the open gives the keyboard to the window's ✕,
+// so the first scan after opening goes the dashboard's way, and a link box's Enter leaves the
+// keyboard on the page). An unchanged edit started over as an Add, unasked, and one press of
+// CREATE INVENTORY made a second record of the spool being edited, holding its QR. Now it
+// asks what the QR is: the edited spool's (it goes into the link box, whose own checks run:
+// another spool holding it, a different product), a new spool's (an Add starts: the edit
+// closes, and its changes are lost, as the words say), or neither (Keep Editing, the safe
+// answer, where the keyboard starts). Scans are held while it is up, and a bare CMD:CANCEL
+// keeps editing. Answers 'link', 'add' or 'keep'.
+window.wizardAskQrInEdit = (url) => new Promise((resolve) => {
+    const wizEl = document.getElementById('wizardModal');
+    const sid = wizardState.editSpoolId;
+    const changed = !!wizardState.isDirty;
+    let handle = null;
+    let release = null;
+    let settled = false;
+    const onClosed = (e) => {
+        if (handle && e && e.detail && e.detail.element === handle.element) { handle = null; settle('keep'); }
+    };
+    const settle = (answer) => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('fcc:overlay-closed', onClosed);
+        if (release) { release(); release = null; }
+        if (handle) { const h = handle; handle = null; h.cleanup(); }
+        if (answer === 'link') {
+            const input = document.querySelector("[data-spool-row-idx='0'] input[type='url']");
+            if (input) {
+                input.value = url;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                window.wizardScanSpoolRow(0, url);
+            }
+        } else if (answer === 'add') {
+            wizardState.isDirty = false;     // the person chose to drop the edit
+        }
+        resolve(answer);
+    };
+    const esc = window.escHtml || _wizEscape;
+    const lost = changed ? ' Its unsaved changes are lost.' : '';
+    handle = window.mountOverlay({
+        id: 'fcc-wiz-qr-in-edit',
+        host: wizEl,
+        initialFocus: '#fcc-wiz-qr-keep',
+        onEscape: () => settle('keep'),
+        content: `
+            <div style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:20px 24px; max-width:34rem; width:92%;">
+                <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">📷 A Prusament QR was scanned</div>
+                <div style="color:#ffc; margin-bottom:16px;">Spool #${esc(sid)} is open in Edit Spool. Is this QR #${esc(sid)}'s own? Linking it runs the link box's checks. An Add for a new spool closes this edit.${esc(lost)}</div>
+                <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
+                    <button id="fcc-wiz-qr-keep" class="btn btn-secondary btn-sm">Keep Editing</button>
+                    <button id="fcc-wiz-qr-add" class="btn btn-warning btn-sm">Start an Add for a new spool</button>
+                    <button id="fcc-wiz-qr-link" class="btn btn-info btn-sm">Link it to #${esc(sid)}</button>
+                </div>
+                <div id="fcc-wiz-qr-flash" role="alert" style="color:#ffc107; font-size:var(--fcc-fs-small); margin-top:10px;"></div>
+            </div>`,
+    });
+    document.addEventListener('fcc:overlay-closed', onClosed);
+    const ov = handle.element;
+    const shield = () => { if (window.fccShieldNextPress) window.fccShieldNextPress(); };
+    const arm = window.armedClick || ((fn) => fn);
+    const armMs = window.questionArmMs ? window.questionArmMs() : 0;
+    ov.querySelector('#fcc-wiz-qr-keep').addEventListener('click', () => { shield(); settle('keep'); });
+    ov.querySelector('#fcc-wiz-qr-add').addEventListener('click', arm(() => { shield(); settle('add'); }, armMs));
+    ov.querySelector('#fcc-wiz-qr-link').addEventListener('click', arm(() => { shield(); settle('link'); }, armMs));
+    const flash = (msg) => { const f = ov.querySelector('#fcc-wiz-qr-flash'); if (f) f.textContent = msg; };
+    if (window.fccHoldScans) {
+        release = window.fccHoldScans({
+            title: 'A Prusament QR was scanned',
+            element: ov,
+            hint: `Answer the question on screen first: Keep Editing, Link it to #${sid}, or Start an Add`,
+            cancel: () => settle('keep'),
+            flash,
+        });
+    }
+});
 
 // Group 66.2 (the grounding's C5): the spool open in Edit Spool, if any. The dashboard's
 // matched-spool question holds its weight correction for it: applied while the wizard is

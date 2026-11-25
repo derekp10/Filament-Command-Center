@@ -109,7 +109,8 @@ def _state(page):
     return page.evaluate("""() => ({ mode: wizardState.mode, session: wizardState.session,
         comment: document.getElementById('wiz-spool-comment').value,
         button: document.getElementById('btn-wiz-submit').innerText,
-        asked: !!document.getElementById('fcc-wiz-unsaved-changes') })""")
+        asked: !!document.getElementById('fcc-wiz-unsaved-changes'),
+        qr: !!document.getElementById('fcc-wiz-qr-in-edit') })""")
 
 
 def _changed_edit(page):
@@ -118,79 +119,177 @@ def _changed_edit(page):
     assert page.evaluate("() => wizardState.isDirty") is True
 
 
-def test_a_new_prusament_qr_over_a_changed_edit_asks_first(wiz):
-    """T1. RED on the base: no question; the Edit reset into an Add, its Comment gone."""
+def test_a_new_prusament_qr_over_a_changed_edit_asks_what_it_is(wiz):
+    """T1, since review round 1 (R3-04): Edit Spool asks what a QR read outside its link
+    box is, and the keyboard starts on Keep Editing. RED on the base: no question; the
+    Edit reset into an Add, its Comment gone."""
     _changed_edit(wiz)
     _scan(wiz)
     st = _state(wiz)
-    assert st["asked"], st
-    assert wiz.evaluate("() => document.activeElement && document.activeElement.id") == "fcc-wiz-dirty-cancel"
+    assert st["qr"] and not st["asked"], st
+    assert wiz.evaluate("() => document.activeElement && document.activeElement.id") == "fcc-wiz-qr-keep"
     assert (st["mode"], st["comment"], st["button"]) == ("edit_spool", "hand note", "SAVE CHANGES"), st
 
 
 @pytest.mark.parametrize("how", ["click", "enter", "escape"])
-def test_keep_editing_keeps_the_edit_and_says_the_qr_was_not_added(wiz, how):
+def test_keep_editing_keeps_the_edit_and_says_the_qr_was_not_used(wiz, how):
     """T2. RED on the base: already reset."""
     _changed_edit(wiz)
     session = wiz.evaluate("() => wizardState.session")
     _scan(wiz)
-    wiz.wait_for_selector("#fcc-wiz-dirty-cancel")
+    wiz.wait_for_selector("#fcc-wiz-qr-keep")
     if how == "click":
-        wiz.locator("#fcc-wiz-dirty-cancel").click()
+        wiz.locator("#fcc-wiz-qr-keep").click()
     elif how == "enter":
         wiz.keyboard.press("Enter")
     else:
         wiz.keyboard.press("Escape")
     wiz.wait_for_timeout(100)
     st = _state(wiz)
-    assert not st["asked"]
+    assert not st["qr"]
     assert (st["mode"], st["comment"], st["button"], st["session"]) == ("edit_spool", "hand note", "SAVE CHANGES", session)
     toasts = _toasts(wiz)
-    assert any("Kept the wizard as it was" in t["m"] and t["k"] == "warning" for t in toasts), toasts
+    assert any("Kept editing Spool #57" in t["m"] and t["k"] == "warning" for t in toasts), toasts
     logs = [p for p in wiz.evaluate("window.__posts") if p["url"].startswith("/api/log_event")]
-    assert len(logs) == 1 and "Kept the wizard as it was" in logs[0]["body"]["msg"], logs
+    assert len(logs) == 1 and "Kept editing Spool #57" in logs[0]["body"]["msg"], logs
 
 
-def test_discard_starts_the_add_with_the_qr_in_its_spool_box(wiz):
-    """T3, with the arming on: a mouse click on Discard at once does nothing, after the
-    700 ms it starts over, and the QR goes into Spool 1."""
+def test_start_an_add_starts_it_with_the_qr_in_its_spool_box(wiz):
+    """T3, with the arming on: a mouse click on Start an Add at once does nothing (a double
+    click's second press), after the 700 ms it starts over, and the QR goes into Spool 1."""
     wiz.evaluate("() => { delete window.fccQuestionArmMs; }")
     _changed_edit(wiz)
     _scan(wiz)
-    wiz.wait_for_selector("#fcc-wiz-dirty-confirm")
-    wiz.locator("#fcc-wiz-dirty-confirm").click()
+    wiz.wait_for_selector("#fcc-wiz-qr-add")
+    wiz.locator("#fcc-wiz-qr-add").click()
     wiz.wait_for_timeout(50)
-    assert _state(wiz)["asked"]                      # the first click waited out the double click
+    assert _state(wiz)["qr"]                         # the first click waited out the double click
     wiz.wait_for_timeout(750)
-    wiz.locator("#fcc-wiz-dirty-confirm").click()
+    wiz.locator("#fcc-wiz-qr-add").click()
     wiz.wait_for_function("() => wizardState.mode === 'manual'")
     wiz.wait_for_timeout(150)
     st = _state(wiz)
-    assert not st["asked"] and st["comment"] == "" and st["button"] == "CREATE INVENTORY", st
+    assert not st["qr"] and not st["asked"] and st["comment"] == "" and st["button"] == "CREATE INVENTORY", st
     assert wiz.locator("[data-spool-row-idx='0'] input").input_value() == QR
 
 
-def test_an_unchanged_edit_starts_over_with_no_question(wiz):
-    """T4, a pin (green on the base): nothing to lose, nothing asked."""
+def test_an_unchanged_edit_asks_too_and_link_puts_the_qr_in_its_link_box(wiz):
+    """T4, changed by review round 1 (R3-04, R4-10): an unchanged edit started over as an
+    Add, unasked, and one press of CREATE INVENTORY made a second record of the spool being
+    edited. It asks too, and Link puts the QR in the link box, whose own checks run. RED:
+    no question, and the Edit became an Add."""
     _open_edit(wiz)
     _scan(wiz)
-    wiz.wait_for_function("() => wizardState.mode === 'manual'")
-    assert not _state(wiz)["asked"]
+    wiz.wait_for_selector("#fcc-wiz-qr-link")
+    wiz.locator("#fcc-wiz-qr-link").click()
+    wiz.wait_for_timeout(150)
+    st = _state(wiz)
+    assert not st["qr"] and st["mode"] == "edit_spool" and st["button"] == "SAVE CHANGES", st
+    assert wiz.locator("[data-spool-row-idx='0'] input").input_value() == QR
+    assert wiz.evaluate("() => wizardState.spoolRows[0].status") != "empty"
 
 
-def test_a_changed_add_takes_the_qr_into_an_empty_spool_box(wiz):
-    """T5. RED on the base: the name typed was wiped and the session started over."""
-    wiz.evaluate("() => window.openWizardModal()")
-    wiz.wait_for_function("() => wizardState.mode === 'manual' && !!document.querySelector('[data-spool-row-idx]')")
-    wiz.evaluate("() => wizardSelectType('manual')")
-    wiz.locator("#wiz-fil-color_name").fill("Test Red")
+def _fresh_add(page):
+    page.evaluate("() => window.openWizardModal()")
+    page.wait_for_function("() => wizardState.mode === 'manual' && !!document.querySelector('[data-spool-row-idx]')")
+    page.evaluate("() => wizardSelectType('manual')")
+
+
+def _row(page, i):
+    return page.locator(f"[data-spool-row-idx='{i}'] input").input_value()
+
+
+def test_an_add_changed_only_for_its_spools_takes_the_qr_into_an_empty_spool_box(wiz):
+    """T5, narrowed by review round 1: an Add whose filament the QR will name (New Manual
+    Form, nothing typed or picked for the filament) takes the link with no question, and
+    keeps its other changes. RED on the base: the note typed was wiped and the session
+    started over."""
+    _fresh_add(wiz)
+    wiz.locator("#wiz-spool-comment").fill("hand note")
     session = wiz.evaluate("() => wizardState.session")
     _scan(wiz)
     st = _state(wiz)
-    assert not st["asked"] and st["session"] == session, st
-    assert wiz.locator("#wiz-fil-color_name").input_value() == "Test Red"
-    assert wiz.locator("[data-spool-row-idx='0'] input").input_value() == QR
+    assert not st["asked"] and st["session"] == session and st["comment"] == "hand note", st
+    assert _row(wiz, 0) == QR
     assert any("scanning it into Spool 1" in t["m"] for t in _toasts(wiz))
+
+
+def test_an_add_with_its_filament_typed_asks_before_taking_the_qr(wiz):
+    """Review round 1 (R5-02, R3-02): the QR's product page wrote over a filament typed in
+    New Manual Form, unasked. It now asks first, and Keep Editing keeps it. RED: the QR was
+    fed and no question asked (T5 as 66.2 first built it)."""
+    _fresh_add(wiz)
+    wiz.locator("#wiz-fil-color_name").fill("Test Red")
+    _scan(wiz)
+    assert _state(wiz)["asked"] is True
+    wiz.locator("#fcc-wiz-dirty-cancel").click()
+    wiz.wait_for_function("() => !document.getElementById('fcc-wiz-unsaved-changes')")
+    assert wiz.locator("#wiz-fil-color_name").input_value() == "Test Red" and _row(wiz, 0) == ""
+    assert any("wasn't added" in t["m"] for t in _toasts(wiz))
+
+
+def test_an_add_with_a_filament_picked_asks_before_taking_the_qr(wiz):
+    """Review round 1 (R3-01): with a filament picked from the list, the QR's spool was
+    created as that filament with another product's link, weights and date. It now asks
+    first. RED: the QR went into Spool 1 under the picked filament."""
+    wiz.evaluate("(f) => { window.__answers['/api/filaments'] = { success: true, filaments: [f] }; }",
+                 _details()["filament"])
+    _fresh_add(wiz)
+    wiz.locator("#btn-type-existing").click()
+    wiz.evaluate("() => window.wizardSearchExisting()")
+    wiz.wait_for_function("() => !!document.querySelector(\"#wiz-existing-results option[value='7']\")")
+    wiz.select_option("#wiz-existing-results", "7")
+    wiz.wait_for_function("() => String(wizardState.selectedFilamentId) === '7'")
+    wiz.locator("#wiz-spool-comment").fill("hand note")
+    _scan(wiz)
+    assert _state(wiz)["asked"] is True
+    assert _row(wiz, 0) == ""
+
+
+def test_a_scanners_second_read_of_the_qr_fills_nothing_more(wiz):
+    """Review round 1 (R3-11): a scanner's double read of one new spool's QR filled a second
+    Spool box (Save made two records of one spool), or with one box asked to start over.
+    The second read is said, and nothing more. RED: Spool 2 took the QR too."""
+    _fresh_add(wiz)
+    wiz.locator("#wiz-spool-qty").fill("2")
+    wiz.wait_for_function("() => document.querySelectorAll('[data-spool-row-idx]').length === 2")
+    _scan(wiz)
+    _scan(wiz)
+    assert (_row(wiz, 0), _row(wiz, 1)) == (QR, "")
+    assert _state(wiz)["asked"] is False
+    assert any("in Spool 1 already" in t["m"] for t in _toasts(wiz)), _toasts(wiz)
+
+
+def test_a_second_read_typed_into_the_next_spool_box_goes_back(wiz):
+    """Review round 1 (R3-11): the second read lands in the next box (the first box's Enter
+    gives it the keyboard): that box goes back to empty and says where the QR is. RED:
+    both boxes held the QR."""
+    _fresh_add(wiz)
+    wiz.locator("#wiz-spool-qty").fill("2")
+    wiz.wait_for_function("() => document.querySelectorAll('[data-spool-row-idx]').length === 2")
+    wiz.evaluate("(u) => { document.querySelector(\"[data-spool-row-idx='0'] input\").value = u;"
+                 " window.wizardScanSpoolRow(0, u); }", QR)
+    wiz.wait_for_timeout(100)
+    wiz.evaluate("(u) => { document.querySelector(\"[data-spool-row-idx='1'] input\").value = u;"
+                 " window.wizardScanSpoolRow(1, u); }", QR)
+    wiz.wait_for_timeout(100)
+    assert (_row(wiz, 0), _row(wiz, 1)) == (QR, "")
+    assert any("in Spool 1 already" in t["m"] for t in _toasts(wiz)), _toasts(wiz)
+
+
+def test_a_second_read_in_edit_spool_says_its_link_box_holds_the_qr(wiz):
+    """Review round 1 (R5-03): in Edit Spool, the QR being linked read again on the
+    dashboard asked to discard the edit and start an Add, whose yes made a second record
+    of the spool. It is said, and nothing more. RED: a question opened."""
+    _open_edit(wiz)
+    row = wiz.locator("[data-spool-row-idx='0'] input")
+    row.fill(QR)
+    row.press("Tab")
+    wiz.wait_for_function("() => wizardState.spoolRows[0].status !== 'empty'")
+    _scan(wiz)
+    st = _state(wiz)
+    assert not st["asked"] and not st["qr"] and st["mode"] == "edit_spool", st
+    assert any("in the link box already" in t["m"] for t in _toasts(wiz)), _toasts(wiz)
 
 
 def test_a_save_on_its_way_is_never_started_over(wiz):
@@ -208,18 +307,33 @@ def test_a_save_on_its_way_is_never_started_over(wiz):
 
 
 def test_the_question_holds_scans_and_a_cancel_keeps_editing(wiz):
-    """T8. RED on the base: no question; every scan went on behind the wizard."""
+    """T8 (Edit Spool's QR question since review round 1). RED on the base: no question;
+    every scan went on behind the wizard."""
     _changed_edit(wiz)
     _scan(wiz)
-    wiz.wait_for_selector(QUESTION)
+    wiz.wait_for_selector("#fcc-wiz-qr-in-edit")
     posted = len([p for p in wiz.evaluate("window.__posts") if p["url"] == "/api/identify_scan"])
     _scan(wiz, "LOC:SHELF-1")
     assert len([p for p in wiz.evaluate("window.__posts") if p["url"] == "/api/identify_scan"]) == posted
-    assert "Ignored: LOC:SHELF-1" in wiz.locator("#fcc-wiz-dirty-flash").inner_text()
+    assert "Ignored: LOC:SHELF-1" in wiz.locator("#fcc-wiz-qr-flash").inner_text()
     _scan(wiz, "CMD:CANCEL")
     wiz.wait_for_timeout(100)
     st = _state(wiz)
-    assert not st["asked"] and st["mode"] == "edit_spool" and st["comment"] == "hand note", st
+    assert not st["qr"] and st["mode"] == "edit_spool" and st["comment"] == "hand note", st
+
+
+def test_the_unsaved_changes_question_holds_scans_too(wiz):
+    """T8 for the Add's question (wizardAskDiscard): a typed filament, then a QR: scans are
+    held while it is up, and a bare CMD:CANCEL keeps editing."""
+    _fresh_add(wiz)
+    wiz.locator("#wiz-fil-color_name").fill("Test Red")
+    _scan(wiz)
+    wiz.wait_for_selector(QUESTION)
+    _scan(wiz, "LOC:SHELF-1")
+    assert "Ignored: LOC:SHELF-1" in wiz.locator("#fcc-wiz-dirty-flash").inner_text()
+    _scan(wiz, "CMD:CANCEL")
+    wiz.wait_for_timeout(100)
+    assert not _state(wiz)["asked"] and wiz.locator("#wiz-fil-color_name").input_value() == "Test Red"
 
 
 def test_the_legacy_pickers_add_new_spool_asks_too(wiz):
