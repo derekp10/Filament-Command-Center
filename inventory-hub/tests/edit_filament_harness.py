@@ -20,10 +20,11 @@ outside the dialog all reach the window the way they do in the browser:
   - `FakeTab`, `FakeOffcanvas`: enough for the calls the page makes.
 
 The fetch stub: every request in `__fetches` ({url, method, body}), every non-GET in
-`__posts`; an answer is `__answers[path]` (default `{success: true}`), the string
-'__reject__' (a fetch that fails, as with no network), or `{__status: 409, __body: {...}}`
-for an answer with that HTTP status. Page errors and unhandled rejections land in
-`__errors`.
+`__posts`; an answer is `__answers[path]` (or `__answers['POST /path']` for one method;
+default `{success: true}`), a function of {url, method, body}, the string '__reject__' (a
+fetch that fails, as with no network), '__hold__' (answered later by the test:
+`window.__held[path](body, status)`), or `{__status: 409, __body: {...}}` for an answer
+with that HTTP status. Page errors and unhandled rejections land in `__errors`.
 
 Created by Group 66.6 (the first member that needed it); 66.1, 66.7, 66.8 and 66.9
 reuse it (the grounding's cross-check, C14).
@@ -63,6 +64,17 @@ window.fetch = function (url, opts) {
     let answer = key in window.__answers ? window.__answers[key] : { success: true };
     if (typeof answer === 'function') answer = answer({ url, method, body });
     if (answer === '__reject__') return Promise.reject(new TypeError('Failed to fetch'));
+    if (answer === '__hold__') {
+        // An answer the test sends later: window.__held[path](body, status).
+        return new Promise((resolve) => {
+            (window.__held = window.__held || {})[path] = (b, st) => {
+                const s = st || 200;
+                const t = JSON.stringify(b === undefined ? null : b);
+                resolve({ ok: s >= 200 && s < 300, status: s,
+                    json: () => Promise.resolve(JSON.parse(t)), text: () => Promise.resolve(t) });
+            };
+        });
+    }
     let status = 200;
     if (answer && typeof answer === 'object' && '__status' in answer) {
         status = answer.__status;

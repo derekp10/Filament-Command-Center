@@ -1161,6 +1161,12 @@ def test_modal_escape_with_unsaved_changes_prompts_confirm(page: Page):
 
     fil = {"id": 605, "name": "Old", "material": "PLA"}
     _open_modal_with(page, fil)
+    # PIN UPDATED DELIBERATELY (Group 66.8): the question now comes from the window's
+    # hide.bs.modal (every way out asks, not Escape alone), and Bootstrap 5.3 drops a
+    # hide while the window is still fading in, so an Escape in its first ~300 ms does
+    # nothing: the window stays, the edit with it. The Escape-only guard this replaced
+    # asked even then. Wait out the fade, as the clean-form case below does.
+    page.wait_for_timeout(400)
 
     # Modify a field.
     page.locator("#editfil-name").fill("NewName")

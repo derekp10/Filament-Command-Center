@@ -353,6 +353,33 @@ window.armedClick = armedClick;
     };
 })();
 
+// --- A QUESTION HOLDS SCANS WHILE IT IS UP (Group 66) ---
+// processScan brings every scan to the open question on top (window._fccOpenMoveQuestion,
+// the registry Group 40.3 made for the move questions): the question's own
+// `route(text, source)` may take it, a bare CMD:CANCEL calls its `cancel()` (its safe
+// answer), and anything else is refused, said in a toast and on the question's `flash`
+// line, so a scan never acts behind a question nobody has answered. `question`:
+// {title, element, hint, cancel, flash, route?}. Returns release(), which the question
+// calls as it closes (a second call does nothing). A question that is a mountOverlay
+// (its `element` the overlay's root) is released when the overlay closes by any path
+// too, its host window's close included (fcc:overlay-closed).
+window.fccHoldScans = (question) => {
+    window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
+    window._fccOpenMoveQuestion = question;
+    let released = false;
+    const release = () => {
+        if (released) return;
+        released = true;
+        document.removeEventListener('fcc:overlay-closed', onClosed);
+        const open = (window._fccOpenMoveQuestions || []).filter((q) => q !== question);
+        window._fccOpenMoveQuestions = open;
+        window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+    };
+    const onClosed = (e) => { if (e && e.detail && e.detail.element === question.element) release(); };
+    document.addEventListener('fcc:overlay-closed', onClosed);
+    return release;
+};
+
 // --- A SPOOL AS A COLOUR TILE (Group 58; Derek, 2026-11-03) ---
 // The audit panel's look for a spool in a list nobody presses: Done's question and the
 // audit's report window. Its swatch (makeSwatchHtml, as the panel's tiles), its name

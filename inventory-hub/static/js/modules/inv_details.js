@@ -2380,6 +2380,57 @@ const _editfilOpenModal = (fil) => {
     if (!modalEl) { showToast('Edit Filament modal missing', 'error'); return; }
     const bsModal = bootstrap.Modal.getOrCreateInstance(modalEl);
 
+    // --- This open's session (Group 66.8): what the form held when it opened ---
+    // Every input, textarea and select in the window, and the attribute chips. The Import
+    // from External panel's own controls (its source, query, results and row ticks) hold
+    // no filament data, so a search typed there is no edit; Apply Selected writes into
+    // the real boxes, which count. A checkbox counts by its tick (its value is "on" either
+    // way). The baseline is taken right before the window shows, once every box is
+    // filled; a value code sets afterwards goes through codeSet, so it is no edit.
+    const readForm = () => {
+        const m = new Map();
+        modalEl.querySelectorAll('input, textarea, select').forEach((el, i) => {
+            if (el.closest('#editfil-import-panel')) return;
+            const v = (el.type === 'checkbox' || el.type === 'radio') ? String(el.checked) : el.value;
+            m.set(el.id || el.name || `#${i}`, v);
+        });
+        m.set('chips', attrSelected.join(','));
+        return m;
+    };
+    let baseline = new Map();
+    const session = {
+        closing: false,
+        isDirty: () => {
+            const now = readForm();
+            for (const k of new Set([...baseline.keys(), ...now.keys()])) {
+                if (baseline.get(k) !== now.get(k)) return true;
+            }
+            return false;
+        },
+        // A value code sets is no edit: the baseline follows it, but only where the box
+        // still showed its baseline value (a box the person changed stays changed).
+        codeSet: (fn) => {
+            const before = readForm();
+            try {
+                return fn();
+            } finally {
+                const after = readForm();
+                for (const k of new Set([...before.keys(), ...after.keys()])) {
+                    if (after.get(k) === before.get(k) || baseline.get(k) !== before.get(k)) continue;
+                    if (after.has(k)) baseline.set(k, after.get(k)); else baseline.delete(k);
+                }
+            }
+        },
+        // A close that asks nothing (Save, Close Anyway). The flag is set and cleared
+        // around Bootstrap's synchronous hide(), which fires hide.bs.modal inside it, so a
+        // hide Bootstrap drops (the window still fading in) never leaves it set for the
+        // person's next close.
+        closeUnasked: () => {
+            session.closing = true;
+            try { bsModal.hide(); } finally { session.closing = false; }
+        },
+    };
+
     // --- Populate fields ---
     const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val == null ? '' : val; };
     const title = isCreate ? '➕ Add Filament' : `✏️ Edit Filament #${fil.id}`;
@@ -2788,8 +2839,12 @@ const _editfilOpenModal = (fil) => {
     });
     fetch('/api/vendors').then(r => r.json()).then(d => {
         if (!d || !d.success) return;
-        vendorCache = d.vendors || [];
-        refreshVendorBadge();
+        // Code, not the person (Group 66.8): a box this read redraws (the vendor's
+        // hidden id, which a list holding two vendors of one name moved) is no edit.
+        session.codeSet(() => {
+            vendorCache = d.vendors || [];
+            refreshVendorBadge();
+        });
     }).catch(() => {});
 
     // --- Empty-Spool-Wt: bind <EmptyWeightField> on the Specs tab ---
@@ -2968,7 +3023,8 @@ const _editfilOpenModal = (fil) => {
         const slicerField = filamentFields.find(f => f.key === 'slicer_profile');
         if (slicerField && Array.isArray(slicerField.choices)) {
             slicerChoices = slicerField.choices.slice();
-            renderSlicerSelect();
+            // Code redraws the list (Group 66.8): no edit of the form.
+            session.codeSet(() => renderSlicerSelect());
         }
     }).catch(() => {});
     renderAttrChips();
@@ -3227,7 +3283,7 @@ const _editfilOpenModal = (fil) => {
             payload = changed;
             if (Object.keys(payload).length === 0 && !pendingNewVendorName) {
                 showToast('No changes to save.', 'info');
-                bsModal.hide();
+                session.closeUnasked();   // Group 66.8: Save closes without the question
                 return;
             }
         }
@@ -3284,7 +3340,7 @@ const _editfilOpenModal = (fil) => {
                 if (d.warning) showToast(d.warning, 'warning', 7000);
                 if (window.refreshFilamentSpools) window.refreshFilamentSpools();
                 if (isCreate && window.fetchLocations) window.fetchLocations();
-                bsModal.hide();
+                session.closeUnasked();   // Group 66.8: Save closes without the question
                 // 23.3 — if this edit changed a field that PRINTS on the filament
                 // swatch label, the physical sample is now stale. Nudge a reprint
                 // (only when the label was previously CONFIRMED). Uses payload/
@@ -3303,51 +3359,37 @@ const _editfilOpenModal = (fil) => {
         }
     };
 
-    // --- Escape-with-unsaved-changes guard ---
-    // Tracks whether the user has modified ANY input since open. Compared to
-    // a DOM snapshot at show-time so arbitrary input changes (text + hex +
-    // chips + color rows) all mark the form dirty. Escape pops a small
-    // confirm overlay instead of dismissing the modal outright.
-    const snapshotFormState = () => {
-        // Hash every input/textarea/select value + the chip set + color rows.
-        const parts = [];
-        modalEl.querySelectorAll('input, textarea, select').forEach(el => {
-            parts.push(`${el.id || el.name}=${el.value}`);
-        });
-        parts.push('chips=' + attrSelected.join(','));
-        return parts.join('|');
-    };
-    let baselineState = '';
-    // A capture-phase keydown listener on the modal, so it sees Escape before
-    // Bootstrap's built-in dismiss handler (on the same element, registered first).
-    // When the form is dirty, it swallows the Escape and asks. Group 62.8: it was a
-    // bubble listener, so Bootstrap's dismiss ran first and closed the window, and
-    // the question was drawn inside a window already gone; stopImmediatePropagation
-    // also stops Bootstrap's listener when the Escape is the window's own (the
-    // location manager hands it one with the focus on the page, Group 62.4).
-    const escGuardHandler = (e) => {
-        if (e.key !== 'Escape') return;
-        // A combobox / chip dropdown open in the form answers its own Escape (it
-        // closes the list only, and stops propagation): its field's handler runs
-        // after this one now, so the guard steps aside while a list shows. Each
-        // list hides on its field's blur, so only the focused field's can show.
-        const listOpen = Array.from(modalEl.querySelectorAll('[id^="editfil-"][id$="-dropdown"]'))
-            .some((d) => d.style.display !== 'none' && d.getClientRects().length > 0);
-        if (listOpen) return;
-        if (snapshotFormState() === baselineState) return; // Clean — let Bootstrap close.
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        _editfilShowEscapeConfirm(bsModal);
-    };
-    modalEl.addEventListener('keydown', escGuardHandler, true);
-    // Re-snapshot when the modal finishes opening (after we populate fields).
-    modalEl.addEventListener('shown.bs.modal', () => { baselineState = snapshotFormState(); }, { once: true });
-    modalEl.addEventListener('hidden.bs.modal', () => {
-        modalEl.removeEventListener('keydown', escGuardHandler, true);
-    }, { once: true });
+    // --- Ask before closing unsaved, every way out (Group 66.8) ---
+    // The baseline is what every box holds now, filled and before the window shows; the
+    // late reads go through codeSet. The window's hide.bs.modal guard (below,
+    // _editfilSession) asks while the form differs from it, for Cancel, ✕, a click
+    // outside and Escape alike: Escape reaches Bootstrap's own keydown listener, which
+    // hides the window. The Escape-only guard this replaces asked for Escape alone, and
+    // stepped aside while a list was drawn, which a vendor saved from inside the window
+    // left drawn: its next Escape closed the changed form unasked. A list's own Escape
+    // closes only the list (its box stops the key), so Bootstrap never hears it.
+    baseline = readForm();
+    _editfilSession = session;
 
     bsModal.show();
 };
+
+// --- EDIT FILAMENT ASKS BEFORE IT CLOSES UNSAVED (Group 66.8) ---
+// One guard on the window's hide.bs.modal, which every close goes through. It is on the
+// document and reads the event's target, so the vendor editor (a sibling window drawn
+// over Edit Filament) never counts. _editfilSession is the open Edit Filament's
+// (_editfilOpenModal sets it at each open; a late hidden.bs.modal of an earlier close
+// never clears a newer one). A close it lets through: a form unchanged since it opened,
+// or one of its own closes that ask nothing (Save, Close Anyway: session.closing).
+let _editfilSession = null;
+document.addEventListener('hide.bs.modal', (e) => {
+    if (!e.target || e.target.id !== 'editFilamentModal') return;
+    const s = _editfilSession;
+    if (!s || s.closing || !s.isDirty()) return;
+    e.preventDefault();
+    // Its question's Close Anyway closes through the session, so it never asks again.
+    _editfilShowEscapeConfirm({ hide: () => s.closeUnasked() });
+});
 
 // "Close without saving?" for Edit Filament. Group 62.8: a mountOverlay; it was drawn
 // inside the window (position:absolute) with a document key listener and a Tab trap of
@@ -3356,18 +3398,31 @@ const _editfilOpenModal = (fil) => {
 // (scripts.html) answer its keys: a person's Enter presses the focused button, a scan's
 // Enter presses nothing (the scan goes to the scan path and the question stays for a
 // person, Group 61), and a Space inside a scan presses nothing.
+// Group 66.8: it asks on every way out now (the window's hide.bs.modal guard above), so a
+// click can open it with its answers under the pointer:
+//   - Close Anyway loses the edits, so it takes no mouse click until a double click has
+//     passed (62.3, window.armedClick); a keyboard's click, Enter and Escape never wait.
+//   - Both answers close the question with the pointer over the window (and Close
+//     Anyway the window, over the one under it), so each shields the next press: the
+//     second press of a double click reaches nothing behind (window.fccShieldNextPress).
+//   - While it is up it holds scans (window.fccHoldScans): a scan said nothing and acted
+//     behind it (a Prusament QR opened the wizard under it). A bare CMD:CANCEL keeps
+//     editing; any other scan is refused, said on its own line.
 const _editfilShowEscapeConfirm = (bsModal) => {
     const modalEl = document.getElementById('editFilamentModal');
     if (!modalEl) return;
     // One at a time: a mashed Escape doesn't stack them.
     if (window.getOverlay && window.getOverlay('editfil-esc-confirm')) return;
     let handle = null;
+    let release = null;
     const cleanup = () => {
+        if (release) { release(); release = null; }
         if (!handle) return;
         const h = handle;
         handle = null;
         h.cleanup();
     };
+    const shield = () => { if (window.fccShieldNextPress) window.fccShieldNextPress(); };
     handle = window.mountOverlay({
         id: 'editfil-esc-confirm',
         tier: 'standard',
@@ -3383,11 +3438,25 @@ const _editfilShowEscapeConfirm = (bsModal) => {
                     <button type="button" id="editfil-esc-yes" class="btn btn-danger btn-sm" style="min-width:120px;">Close Anyway</button>
                     <button type="button" id="editfil-esc-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Keep Editing</button>
                 </div>
+                <div id="editfil-esc-flash" role="alert"
+                     style="color:#ffc107; font-size:var(--fcc-fs-small); margin-top:10px;"></div>
             </div>`,
     });
     const ov = handle.element;
-    ov.querySelector('#editfil-esc-no').onclick = cleanup;
-    ov.querySelector('#editfil-esc-yes').onclick = () => { cleanup(); bsModal.hide(); };
+    const flash = (msg) => { const f = ov.querySelector('#editfil-esc-flash'); if (f) f.textContent = msg; };
+    const arm = window.armedClick || ((fn) => fn);
+    const armMs = window.questionArmMs ? window.questionArmMs() : 0;
+    ov.querySelector('#editfil-esc-no').onclick = () => { cleanup(); shield(); };
+    ov.querySelector('#editfil-esc-yes').onclick = arm(() => { cleanup(); shield(); bsModal.hide(); }, armMs);
+    if (window.fccHoldScans) {
+        release = window.fccHoldScans({
+            title: 'Close without saving?',
+            element: ov,
+            hint: 'Answer the question on screen first: Keep Editing, or Close Anyway',
+            cancel: () => cleanup(),
+            flash,
+        });
+    }
 };
 
 // 23.3 — Filament label-invalidation reprint nudge.
@@ -4310,10 +4379,15 @@ document.addEventListener('vendor:updated', (e) => {
         const nameInput = document.getElementById('editfil-vendor-name');
         const idInput = document.getElementById('editfil-vendor-id');
         if (nameInput && idInput && idInput.value === String(vid)) {
-            nameInput.value = v.name || nameInput.value;
-            // Fire input event so bindComboDropdown's onInput handler
-            // re-runs refreshVendorBadge → re-renders the info pill.
-            nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+            // Code, not the person (Group 66.8): a vendor saved over the window is no
+            // edit of this form, so its close asks nothing for it.
+            const write = () => {
+                nameInput.value = v.name || nameInput.value;
+                // Fire input event so bindComboDropdown's onInput handler
+                // re-runs refreshVendorBadge → re-renders the info pill.
+                nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+            };
+            if (_editfilSession) _editfilSession.codeSet(write); else write();
         }
     }
 });
