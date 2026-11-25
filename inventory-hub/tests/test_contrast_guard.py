@@ -2326,3 +2326,37 @@ def test_the_wizards_unsaved_changes_question_is_readable(page: Page, base_url: 
     page.locator("#fcc-wiz-dirty-cancel").click()
     page.evaluate("() => { wizardState.isDirty = false; }")
     conftest.close_wizard(page)
+
+
+def test_edit_spools_qr_question_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.2 (review round 1, R3-04): Edit Spool's "A Prusament QR was scanned"
+    question (Keep Editing / Start an Add / Link it), and its line saying a scan was held
+    off while it is up, on its dark ground. The spool is a stub, every write is answered
+    in the browser, and the question is answered Keep Editing: nothing is saved. Scored
+    from the overlay (the guard scores descendants only), the line proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+                "extra": {}, "vendor": {"id": 9003, "name": "Example Brand", "extra": {}}}
+    spool = {"id": 9001, "filament": filament, "initial_weight": 1000.0, "used_weight": 100.0,
+             "remaining_weight": 900.0, "location": "", "extra": {}, "archived": False}
+    _read_only(page, extra_get={"/api/spool_details": spool})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditWizard === 'function' && typeof window.processScan === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openEditWizard(9001); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool'"
+                           " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    page.evaluate("() => { window.wizardAskQrInEdit('https://prusament.com/spool/17705/abc123def0/'); }")
+    page.wait_for_selector("#fcc-wiz-qr-keep")
+    page.evaluate("() => window.processScan('ID:57', 'barcode')")
+    flash = page.locator("#fcc-wiz-qr-flash")
+    expect(flash).not_to_have_text("")
+    root = page.locator("#fcc-wiz-qr-in-edit")
+    assert_contrast(root)
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(root, min_ratio=100))
+    assert "A Prusament QR was scanned" in scored and flash.inner_text()[:20] in scored, scored
+    page.locator("#fcc-wiz-qr-keep").click()
+    page.evaluate("() => { wizardState.isDirty = false; }")
+    conftest.close_wizard(page)

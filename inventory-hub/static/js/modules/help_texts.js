@@ -127,7 +127,7 @@
             'CREATE INVENTORY (SAVE CHANGES when editing) saves. After a create the window stays open for the next batch, and 🖨️ #42 queues that new spool\'s label. Anything that would lose unsaved changes asks first: Cancel, ✕, Esc, or starting over.',
             'When adding spools, scan a Prusament spool\'s QR into its Spool box under 📷 Per-spool Prusament scan in Step 3: that spool is created with the weights and date it reads.',
             'When editing a spool, scan its QR into 📷 Link this spool to its Prusament QR: Save links the spool to it (its 📄 Product Link and blank Prusament details), unless another spool has that QR or it is a different product.',
-            'Its weights aren\'t saved there: Save and close, then scan the QR on the dashboard to check them.',
+            "Its weights aren't saved there: Save and close, then scan the QR on the dashboard to check them. A QR scanned outside that box while editing asks first: link it to this spool, start an Add for a new one, or keep editing.",
         ],
         scopes: ['Wizard'],
     });
