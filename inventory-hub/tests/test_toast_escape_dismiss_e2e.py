@@ -89,7 +89,7 @@ def test_toast_beats_modal_close(page: Page):
     expect(page.locator("#wizardModal")).to_be_visible()
 
     # Escape #2 → wizard closes (nothing intercepts now).
-    page.evaluate("try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}")
+    page.evaluate("try { wizardState.isDirty = false; } catch (_) {}")
     page.keyboard.press("Escape")
     expect(page.locator("#wizardModal")).not_to_be_visible(timeout=5_000)
 
@@ -127,7 +127,7 @@ def test_escape_consumed_during_toast_fadeout_keeps_modal_open(page: Page):
     page.evaluate(
         "document.querySelectorAll('#toast-container .toast-msg').forEach(t => t.remove())"
     )
-    page.evaluate("try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}")
+    page.evaluate("try { wizardState.isDirty = false; } catch (_) {}")
     page.keyboard.press("Escape")
     expect(page.locator("#wizardModal")).not_to_be_visible(timeout=5_000)
 

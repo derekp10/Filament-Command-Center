@@ -2942,6 +2942,11 @@ window.promptPrusamentMatched = (res) => {
     const name = res.filament_name || 'filament';
     const filled = res.filled || [];
     const conflicts = res.conflicts || [];
+    // Group 66.2 (the grounding's C5) and its review round 1 (R3-03): while this very spool
+    // is open in Edit Spool, its next Save would write the wizard's old values back over an
+    // update made here: the temps and the weights both wait.
+    const editingThis = !!(window.wizardEditingSpool && window.wizardEditingSpool() === String(sid));
+    const heldWords = `#${sid} is open in the wizard: close it first, then scan its QR again.`;
     const LABELS = {
         settings_extruder_temp: 'Nozzle (min)', nozzle_temp_max: 'Nozzle (max)',
         settings_bed_temp: 'Bed (min)', bed_temp_max: 'Bed (max)',
@@ -2961,7 +2966,8 @@ window.promptPrusamentMatched = (res) => {
                     <span>${esc(c.label || LABELS[c.field] || c.field)}</span>
                     <span><span style="color:#adb5bd;">${esc(c.current)}°C</span> &rarr; <span class="text-info fw-bold">${esc(c.scanned)}°C</span></span>
                 </div>`).join('')}
-            <button id="pm-update-temps" class="btn btn-sm btn-warning w-100 mt-2">Update to Prusament's spec</button>
+            ${editingThis ? `<div class="text-warning small mt-1">⚠️ ${esc(heldWords)}</div>`
+                : `<button id="pm-update-temps" class="btn btn-sm btn-warning w-100 mt-2">Update to Prusament's spec</button>`}
         </div>` : '';
 
     // L200 — spool weight-field corrections (total / tare), confirm-gated.
@@ -2984,15 +2990,12 @@ window.promptPrusamentMatched = (res) => {
             </div>` : '';
         // Group 66.2 (the grounding's C5): held while this very spool is open in Edit
         // Spool, whose next Save would write its old weights back over the correction.
-        const heldByWizard = !!(sw.rows && sw.rows.length && window.wizardEditingSpool
-            && window.wizardEditingSpool() === String(sid));
-        const heldWords = `#${sid} is open in the wizard: close it first, then scan its QR again.`;
+        const heldByWizard = !!(sw.rows && sw.rows.length && editingThis);
         const blockedLine = sw.blocked
             ? `<div class="text-warning small mt-1">⚠️ ${esc(sw.blocked)}</div>`
             : (heldByWizard ? `<div class="text-warning small mt-1">⚠️ ${esc(heldWords)}</div>` : '');
         const applyBtn = (sw.rows && sw.rows.length && !heldByWizard)
             ? `<button id="pm-update-weights" class="btn btn-sm btn-success w-100 mt-2">📦 Update spool weights</button>` : '';
-        if (heldByWizard) showToast(heldWords, 'warning', 7000);
         weightHtml = `
             <div id="pm-weight-section" class="border border-success rounded p-2 mb-2" style="background:#2a2a2a;">
                 <div class="text-success small mb-1">📦 Prusament's spec differs from this spool's weights:</div>
@@ -3003,6 +3006,7 @@ window.promptPrusamentMatched = (res) => {
             </div>`;
     }
 
+    if (editingThis && (conflicts.length || (sw && sw.rows && sw.rows.length))) showToast(heldWords, 'warning', 7000);
     const content = `
         <div class="p-3" style="max-width:26.25rem; background:#1e1e1e; color:#fff; border:1px solid #444; border-radius:8px;">
             <h6 class="text-info mb-1">🎯 Matched Prusament spool</h6>

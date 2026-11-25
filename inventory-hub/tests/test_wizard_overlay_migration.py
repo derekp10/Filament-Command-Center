@@ -70,7 +70,7 @@ def _force_close_wizard(page: Page) -> None:
             const m = bootstrap.Modal.getInstance(el)
                 || bootstrap.Modal.getOrCreateInstance(el);
             // wizardState is script-scoped, not on window — reference by name.
-            try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}
+            try { wizardState.isDirty = false; } catch (_) {}
             if (m) m.hide();
         """)
 

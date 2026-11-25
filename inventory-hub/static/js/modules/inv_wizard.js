@@ -214,6 +214,9 @@ window.wizardSetFilEmptyWeightInherited = (value, source) => {
                 if (msg) msg.innerHTML = '';
             }
         };
+        // For code that puts a person's result in the form (review round 1 of Group 66,
+        // R3-05): a value set by code fires no event, so nothing counted it.
+        window.wizardMarkChanged = _onDirty;
         // A dialog drawn inside the wizard (Force Location's list, from the refill
         // question's Pick a place…: Group 63 review, round 2) is no edit of the form:
         // typing its search marked the wizard changed, and closing it asked.
@@ -1194,6 +1197,8 @@ const wizardReset = () => {
     // Spool Wt box shows its brand's ('vendor', 66.7).
     wizardState.spoolEmptyWeightVendorId = null;
     wizardState.filEmptyWeightFrom = null;
+    // Review round 1 (R3-03): what an edit's link boxes showed at its open.
+    wizardState.linkShown = null;
     wizardState.spoolBoxesFollowFilament = false;
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
@@ -1934,6 +1939,9 @@ window.wizardOpenWeightEntry = () => {
             window.wizardCalcRemainingFromUsed();
             setVal('wiz-spool-scale', '');
             window.wizardRecheckScale();
+            // The person's reading is their change (review round 1 of Group 66, R3-05): set by
+            // code, it marked nothing, and 66.2's guard started an Edit over with no question.
+            if (window.wizardMarkChanged) window.wizardMarkChanged();
         },
     });
 };
@@ -1964,7 +1972,7 @@ window.WIZ_SCAN_STATE_SKIPS = ['mode', 'session', 'saving', 'prefilling', 'typed
     'extraFields', 'spoolRows', 'editSpoolId', 'editSpoolLocation', 'editFilamentOriginal',
     'editLoadFailed', 'externalMetaData', 'returnToSpoolId', 'returnToFilamentId', 'forceClose',
     'spoolBoxesFollowFilament', 'filamentLockedFromScan', 'original_used_weight', 'usedShown',
-    'profileSuggestion', '_dupPicker', '_mismatches'];
+    'profileSuggestion', '_dupPicker', '_mismatches', 'linkShown'];
 const _wizScanFields = () => {
     const wizEl = document.getElementById('wizardModal');
     if (!wizEl) return [];
@@ -2480,6 +2488,11 @@ const WIZ_NATIVE_CLEARABLE = {
     'wiz-fil-empty_weight': 'fil:spool_weight',
     'wiz-fil-settings_extruder_temp': 'fil:settings_extruder_temp',
     'wiz-fil-settings_bed_temp': 'fil:settings_bed_temp',
+    // Review round 1 of Group 66 (R3-03): the two max temps (extras), so Edit Spool clears one
+    // only when the person emptied it. Sent for every blank box, the clear undid a matched
+    // Prusament scan's fill made while the wizard was open.
+    'wiz-fil-nozzle_temp_max': 'fil:nozzle_temp_max',
+    'wiz-fil-bed_temp_max': 'fil:bed_temp_max',
 };
 // Records that the user changed one of those boxes (the wizard's `input`
 // listener). A value set by code fires no event, so a box the page filled or
@@ -4779,8 +4792,14 @@ const _wizardSubmitInner = async () => {
 
         // Purchase Link (Spool Extra)
         const purchaseUrl = document.getElementById('wiz-spool-purchase_url')?.value?.trim();
-        if (purchaseUrl) sp_payload.extra.purchase_url = purchaseUrl;
-        else if (isWizardEdit) sp_payload.extra.purchase_url = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
+        // Review round 1 of Group 66 (R3-03): in an edit a link box goes out only when it
+        // changed from what the edit opened with (a person's edit, or the link box's fill).
+        // Sent as drawn, it wrote the old link over one a matched Prusament scan saved while
+        // the wizard was open, and a blank one cleared it.
+        const linkChanged = (key, v) => !isWizardEdit || !wizardState.linkShown
+            || String(v || '') !== String(wizardState.linkShown[key] || '');
+        if (purchaseUrl) { if (linkChanged('purchase_url', purchaseUrl)) sp_payload.extra.purchase_url = purchaseUrl; }
+        else if (isWizardEdit && linkChanged('purchase_url', '')) sp_payload.extra.purchase_url = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
 
         // Product Link (Spool Extra). L351 — on CREATE, gated on a truthy typed
         // value so an empty input never clobbers a product_url supplied by a
@@ -4788,8 +4807,8 @@ const _wizardSubmitInner = async () => {
         // placeholder). On EDIT the field holds the spool's OWN value, so a
         // cleared input is a real delete intent → send the sentinel (23.4).
         const productUrl = document.getElementById('wiz-spool-product_url')?.value?.trim();
-        if (productUrl) sp_payload.extra.product_url = productUrl;
-        else if (isWizardEdit) sp_payload.extra.product_url = window.FCC_DELETE_EXTRA;
+        if (productUrl) { if (linkChanged('product_url', productUrl)) sp_payload.extra.product_url = productUrl; }
+        else if (isWizardEdit && linkChanged('product_url', '')) sp_payload.extra.product_url = window.FCC_DELETE_EXTRA;
 
         // Extract Dynamic Spool Fields (never a key with its own input above:
         // its copy would overwrite what the user typed there).
@@ -4858,13 +4877,13 @@ const _wizardSubmitInner = async () => {
             // inv_details.js:1617 by wrapping in literal quotes.
             if (getVal('wiz-fil-nozzle_temp_max') !== "") {
                 f_payload.extra.nozzle_temp_max = `"${getVal('wiz-fil-nozzle_temp_max')}"`;
-            } else if (isWizardEdit) {
-                f_payload.extra.nozzle_temp_max = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
+            } else if (isWizardEdit && wizardNativeTouched('fil', 'nozzle_temp_max')) {
+                f_payload.extra.nozzle_temp_max = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit (emptied: R3-03)
             }
             if (getVal('wiz-fil-bed_temp_max') !== "") {
                 f_payload.extra.bed_temp_max = `"${getVal('wiz-fil-bed_temp_max')}"`;
-            } else if (isWizardEdit) {
-                f_payload.extra.bed_temp_max = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
+            } else if (isWizardEdit && wizardNativeTouched('fil', 'bed_temp_max')) {
+                f_payload.extra.bed_temp_max = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit (emptied: R3-03)
             }
 
             // Cross-Inherit empty-spool-weight along the chain: Spool → Filament → Vendor.
@@ -5791,6 +5810,11 @@ window.openEditWizard = async (spoolId) => {
             // Group 10.4 smart fallback (same as clone path above).
             wizardApplyPurchaseLinkFallback(d.extra?.purchase_url, d.filament?.extra?.purchase_url);
             wizardApplyProductLinkFallback(d.extra?.product_url, d.filament?.extra?.product_url);
+            // What the link boxes showed, for Save (review round 1 of Group 66, R3-03).
+            wizardState.linkShown = {
+                purchase_url: (document.getElementById('wiz-spool-purchase_url') || {}).value || '',
+                product_url: (document.getElementById('wiz-spool-product_url') || {}).value || '',
+            };
             if (document.getElementById('wiz-spool-archived')) {
                 document.getElementById('wiz-spool-archived').checked = d.archived || false;
             }

@@ -2298,3 +2298,31 @@ def test_edit_filaments_tare_from_its_brand_is_readable(page: Page, base_url: st
     assert_contrast(column)
     assert any(o.get("id") == "editfil-spool-weight-inherited-badge"
                for o in conftest.contrast_offenders(column, min_ratio=100)), "the badge was never scored"
+
+
+def test_the_wizards_unsaved_changes_question_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.2 (review round 1, R3-09): the wizard's "Unsaved Changes" question, and the
+    line under its buttons that says a scan was held off while it is up, on its dark
+    ground. Every write is answered in the browser; the question is answered Keep Editing,
+    and nothing is saved. Scored from the overlay (the guard scores descendants only), the
+    line proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openWizardModal === 'function' && typeof window.processScan === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openWizardModal(); }")
+    conftest.wait_modal_settled(page, "wizardModal")
+    page.evaluate("() => { wizardState.isDirty = true; window.openWizardModal(); }")
+    page.wait_for_selector("#fcc-wiz-dirty-confirm")
+    page.evaluate("() => window.processScan('ID:57', 'barcode')")
+    flash = page.locator("#fcc-wiz-dirty-flash")
+    expect(flash).not_to_have_text("")
+    root = page.locator("#fcc-wiz-unsaved-changes")
+    assert_contrast(root)
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(root, min_ratio=100))
+    assert "Unsaved Changes" in scored and flash.inner_text()[:20] in scored, scored
+    page.locator("#fcc-wiz-dirty-cancel").click()
+    page.evaluate("() => { wizardState.isDirty = false; }")
+    conftest.close_wizard(page)

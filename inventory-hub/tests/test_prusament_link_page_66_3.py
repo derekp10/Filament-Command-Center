@@ -146,8 +146,11 @@ def test_a_spool_with_another_link_is_left_alone_and_save_still_works(wizard):  
     assert row["status"] == "refused", row
     assert "Product Link holds another link" in row["note"]
     assert _value(wizard, "#wiz-spool-product_url") == "https://example.com/my-own-link"
-    # A refusal never blocks Save.
-    assert _save(wizard, EDIT)["spool_data"]["extra"]["product_url"] == "https://example.com/my-own-link"
+    # A refusal never blocks Save, and the spool keeps its link: since review round 1
+    # (R3-03) an untouched link box isn't sent at all (it wrote the drawn link back over
+    # one saved meanwhile), so the record keeps what it holds.
+    extra = _save(wizard, EDIT)["spool_data"].get("extra") or {}
+    assert extra.get("product_url", "https://example.com/my-own-link") == "https://example.com/my-own-link", extra
 
 
 def test_a_qr_another_spool_holds_is_refused(wizard):  # noqa: F811

@@ -156,7 +156,7 @@ def test_closing_the_wizard_cancels_its_open_move_question(
     # request stubbed the question arrives within that fade (CLAUDE.md, Group
     # 45.8): wait for the show transition first.
     conftest.wait_modal_settled(page, "wizardModal")
-    page.evaluate("() => { wizardState.forceClose = true; window.modals.wizardModal.hide(); return true; }")
+    page.evaluate("() => { wizardState.isDirty = false; window.modals.wizardModal.hide(); return true; }")
     page.wait_for_selector("#fcc-active-print-confirm-overlay", state="detached", timeout=6_000)
     page.wait_for_timeout(300)
     assert be.bodies("/api/smart_move") == [], json.dumps(be.posts)
