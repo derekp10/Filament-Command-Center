@@ -89,6 +89,7 @@ EXPECTED_ROUTES = [
     ("/api/printer_map", "GET", "api_printer_map"),
     ("/api/printer_map", "PUT", "api_put_printer_map"),
     ("/api/printer_state/<path:toolhead_id>", "GET", "api_printer_state"),
+    ("/api/prusament/linked_spools", "GET", "api_prusament_linked_spools"),  # Group 66.3 (B)
     ("/api/quickswap", "POST", "api_quickswap"),
     ("/api/quickswap/return", "POST", "api_quickswap_return"),
     ("/api/search", "GET", "api_search_inventory"),

@@ -243,7 +243,8 @@ from routes_scan import (  # noqa: E402,F401
     api_manage_contents, api_bulk_move, api_bulk_move_session_action, _pm_norm,
     _PM_TEMP_LABELS, _PM_WEIGHT_TOL,
     _pm_num, _pm_first_pos, _compute_prusament_spool_weight_diff,
-    _handle_prusament_url_scan, api_identify_scan, api_buffer_clear, api_audit_park,
+    _handle_prusament_url_scan, _prusament_needles, _spools_linked_to, api_prusament_linked_spools,
+    api_identify_scan, api_buffer_clear, api_audit_park,
     api_audit_report, api_audit_found, api_audit_needs_label, api_audit_needs_label_undo,
 )
 
