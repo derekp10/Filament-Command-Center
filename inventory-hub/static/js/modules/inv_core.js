@@ -1641,6 +1641,40 @@ window.fccIsLabel = (text) => WHOLE_LABEL.test(String(text == null ? '' : text))
 // off the 🏷️ Backlog with no label printed. A label FCC prints keeps ID: (labels_csv.py).
 window.fccSpoolCardQr = (id) => `SPL:${id}`;
 
+// --- A FILAMENT'S ATTRIBUTE TAGS, BY THE SERVER'S ONE RULE (Group 66.6) ---
+// spoolman_api._parse_filament_attrs_value, mirrored exactly (pinned against it by
+// tests/test_filament_attrs_one_reading_66_6.py): a list is its text items, each as it
+// is, never split; a JSON string holding a list is that list; any other string is a
+// comma list (each piece trimmed, blanks and repeats dropped), so an old record's
+// "Silk, Matte" is Silk and Matte; a JSON number is one tag, its text as written; JSON
+// true / false / null, an object or any other value is no tag. It takes the wire form
+// (/api/filaments) and FCC's parsed one (the details and spool reads) alike. Read only
+// while code runs (the load-order canary): no top-level name of its own.
+window.fccFilamentAttrs = (raw) => {
+    const splitText = (text) => {
+        const out = [];
+        for (const piece of String(text).split(',')) {
+            const tag = piece.trim();
+            if (tag && !out.includes(tag)) out.push(tag);
+        }
+        return out;
+    };
+    const textItems = (list) => list.filter((x) => typeof x === 'string');
+    if (raw == null || raw === '') return [];
+    if (Array.isArray(raw)) return textItems(raw);
+    if (typeof raw !== 'string') return [];
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch (_) { return splitText(raw); }
+    if (Array.isArray(parsed)) return textItems(parsed);
+    if (typeof parsed === 'string') {
+        let inner = null;
+        try { inner = JSON.parse(parsed); } catch (_) { inner = null; }
+        return Array.isArray(inner) ? textItems(inner) : splitText(parsed);
+    }
+    if (typeof parsed === 'number') return splitText(raw);
+    return [];
+};
+
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
     if ('wakeLock' in navigator) {

@@ -4776,10 +4776,9 @@ const printLabel = (sid) => {
                 const colorHex = fil.color_hex || '000000';
                 const rgb = hexToRgb(colorHex);
                 let typeStr = fil.material || "Unknown";
-                try {
-                    let attrs = (typeof extra.filament_attributes === 'string') ? JSON.parse(extra.filament_attributes) : extra.filament_attributes;
-                    if (Array.isArray(attrs) && attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr;
-                } catch (err) { }
+                // Group 66.6: the server's one reading of the tags (window.fccFilamentAttrs).
+                const attrs = window.fccFilamentAttrs(extra.filament_attributes);
+                if (attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr;
                 const qrEl = document.getElementById('print-qr');
                 if (qrEl) {
                     qrEl.innerHTML = "";

@@ -3580,11 +3580,11 @@ window.wizardBuildFilamentLabelDiff = (orig, fPayload) => {
     const changedExtras = {};
     const origExtra = orig.extra || {};
     const newExtra = fPayload.extra || {};
+    // Group 66.6: the server's one reading (window.fccFilamentAttrs), so an old
+    // "Silk, Matte" compares as Silk and Matte, not as one tag that no chip list
+    // matches (which flagged every spool's label at each Save of such a filament).
     const attrKey = (a) => {
-        let arr = a;
-        if (a === window.FCC_DELETE_EXTRA) arr = [];   // every chip removed (cleared)
-        else if (typeof a === 'string') { try { arr = JSON.parse(a); } catch (_) { arr = a ? [a] : []; } }
-        if (!Array.isArray(arr)) arr = (arr == null || arr === '') ? [] : [arr];
+        const arr = (a === window.FCC_DELETE_EXTRA) ? [] : window.fccFilamentAttrs(a);   // every chip removed (cleared)
         return arr.map(x => String(x).trim().toLowerCase()).filter(Boolean).sort().join('|');
     };
     if (attrKey(origExtra.filament_attributes) !== attrKey(newExtra.filament_attributes)) {
@@ -5207,19 +5207,10 @@ window.openEditWizard = async (spoolId) => {
                         if (input.type === 'checkbox') {
                             input.checked = v === true || v === 'true';
                         } else if (input.classList.contains('sync-source-fil') && document.getElementById(`chip-container-fil-${k}`)) {
-                            // Populate chips (Coerce strings to Arrays if necessary)
-                            let parsedArr = [];
-                            if (Array.isArray(v)) {
-                                parsedArr = v;
-                            } else if (typeof v === 'string') {
-                                if (v.startsWith('[') && v.endsWith(']')) {
-                                    try { parsedArr = JSON.parse(v); } catch (e) { parsedArr = [v]; }
-                                } else {
-                                    parsedArr = v.split(',').map(s => s.trim()).filter(s => s);
-                                }
-                            } else {
-                                parsedArr = [v];
-                            }
+                            // Populate chips by the server's one reading (Group 66.6,
+                            // window.fccFilamentAttrs): a value encoded twice kept its quotes
+                            // here ('"Silk' and 'Matte"'), and a repeat made two chips.
+                            const parsedArr = window.fccFilamentAttrs(v);
 
                             const cContainer = document.getElementById(`chip-container-fil-${k}`);
                             cContainer.innerHTML = '';
@@ -5752,19 +5743,9 @@ window.wizardAutoSwitchToExisting = (filament, parsedTemplate) => {
 // the inv_details.js Edit Filament dirty-diff `same()` helper convention.
 const _isUnset = (v) => v === null || v === undefined || v === '' || v === 0 || v === '0';
 
-const _normalizeFilamentAttrs = (raw) => {
-    if (!raw) return [];
-    if (Array.isArray(raw)) return raw.map(String);
-    if (typeof raw === 'string') {
-        try {
-            const parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? parsed.map(String) : [];
-        } catch (e) {
-            return [];
-        }
-    }
-    return [];
-};
+// Group 66.6: the server's one reading (window.fccFilamentAttrs). An old "Silk, Matte"
+// read as no tags here, so a Prusament backfill wrote only the scanned tags over it.
+const _normalizeFilamentAttrs = (raw) => window.fccFilamentAttrs(raw);
 
 // Pure function — given an existing filament record and a fresh parser
 // template, decide what to silently backfill vs surface as a mismatch

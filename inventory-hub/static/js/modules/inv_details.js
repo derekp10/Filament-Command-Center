@@ -11,22 +11,14 @@ const unquoteExtra = (v) => {
     return s;
 };
 
-// Parse a Spoolman `filament_attributes` extra (JSON array, JSON-quoted
-// string, or bare string) into a clean array of trimmed non-empty strings.
-// Mirrors the parsing in _editfilOpenModal so the read-only detail modals and
-// the Edit Filament form agree on shape.
-const parseFilamentAttributes = (raw) => {
-    if (raw == null || raw === '') return [];
-    try {
-        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        if (Array.isArray(parsed)) return parsed.map(String).map(s => s.trim()).filter(Boolean);
-        if (parsed) return [String(parsed).trim()].filter(Boolean);
-    } catch (_) {
-        const fallback = String(raw).replace(/^"|"$/g, '').trim();
-        if (fallback) return [fallback];
-    }
-    return [];
-};
+// A Spoolman `filament_attributes` extra as the tags a person sees: the server's
+// one reading (window.fccFilamentAttrs, Group 66.6: an old "Silk, Matte" is Silk and
+// Matte, never one tag), each trimmed of spaces and stray quotes, blanks dropped, as
+// spoolman_api.filament_attribute_list cleans them for search and Low stock. The
+// read-only detail windows and Edit Filament's chips and baseline all read it here.
+const parseFilamentAttributes = (raw) => window.fccFilamentAttrs(raw)
+    .map((s) => s.trim().replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, '').trim())
+    .filter(Boolean);
 
 // Populate a read-only attribute chip row (shared by the Spool Details and
 // Filament Details modals). Hides the wrapping row entirely when there are no
@@ -2375,21 +2367,14 @@ const _editfilOpenModal = (fil) => {
     const currentNozzleMax = unquoteExtra(rawExtra.nozzle_temp_max);
     const currentBedMax = unquoteExtra(rawExtra.bed_temp_max);
     const currentSlicerProfile = unquoteExtra(rawExtra.slicer_profile);
-    let currentAttributes = [];
-    const rawAttrs = rawExtra.filament_attributes;
-    if (rawAttrs != null && rawAttrs !== '') {
-        try {
-            const parsed = typeof rawAttrs === 'string' ? JSON.parse(rawAttrs) : rawAttrs;
-            if (Array.isArray(parsed)) {
-                currentAttributes = parsed.map(String).map(s => s.trim()).filter(Boolean);
-            } else if (parsed) {
-                currentAttributes = [String(parsed)];
-            }
-        } catch (_) {
-            const fallback = String(rawAttrs).replace(/^"|"$/g, '').trim();
-            if (fallback) currentAttributes = [fallback];
-        }
-    }
+    // Group 66.6: the chips and Save's baseline read the value one way (an old
+    // "Silk, Matte" is Silk and Matte: it was one chip here and [] in the baseline,
+    // so every Save sent ["Silk, Matte"], which Spoolman refuses).
+    const currentAttributes = parseFilamentAttributes(rawExtra.filament_attributes);
+    // A stored value that isn't the multi-choice list (an old record's text), which
+    // Spoolman refuses with any other extra Save sends back (see the mend at Save).
+    const storedAttrsNotAList = rawExtra.filament_attributes != null
+        && rawExtra.filament_attributes !== '' && !Array.isArray(rawExtra.filament_attributes);
 
     const modalEl = document.getElementById('editFilamentModal');
     if (!modalEl) { showToast('Edit Filament modal missing', 'error'); return; }
@@ -3102,14 +3087,8 @@ const _editfilOpenModal = (fil) => {
         if (slicerSelect && slicerSelect.value === '__new__' && newSlicerProfile && !slicerChoices.includes(newSlicerProfile)) {
             slicerPendingNew = newSlicerProfile;
         }
-        const prevAttrsArr = (() => {
-            try {
-                const p = typeof rawExtra.filament_attributes === 'string'
-                    ? JSON.parse(rawExtra.filament_attributes)
-                    : rawExtra.filament_attributes;
-                return Array.isArray(p) ? p.map(String).map(s => s.trim()).filter(Boolean) : [];
-            } catch (_) { return []; }
-        })();
+        // Group 66.6: the chips' own reading, so an untouched old value is no change.
+        const prevAttrsArr = currentAttributes.slice();
         if (JSON.stringify(attrsArr) !== JSON.stringify(prevAttrsArr)) {
             dirtyExtras.filament_attributes = attrsArr;
         }
@@ -3233,6 +3212,15 @@ const _editfilOpenModal = (fil) => {
                     } else {
                         mergedExtra[k] = `"${String(v)}"`;
                     }
+                }
+                // Group 66.6, the mend: an old record's attribute text goes back with
+                // every extra this Save sends (the copy above; update_filament merges the
+                // stored extras in too), and Spoolman 0.27 refuses the whole write for
+                // it. So it goes as the list the chips show, the shape the wizard's Edit
+                // Spool Save already writes. Outside dirtyExtras on purpose: the tags
+                // didn't change, so no label is flagged for a reprint.
+                if (storedAttrsNotAList && !('filament_attributes' in dirtyExtras)) {
+                    mergedExtra.filament_attributes = JSON.stringify(attrsArr);
                 }
                 changed.extra = mergedExtra;
             }
