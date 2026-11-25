@@ -233,6 +233,7 @@ Line numbers drift, so re-grep before editing.
   - `test_wizard_e2e.py:46-47`: through the wizard, Material `Pytest-PLA` and Colour name `E2E Ruby Red`, which names the filament (`inv_wizard.js:4236`). Its `finally` deletes both records, so only a killed run leaves them.
 - The vendor: `test_backfill_spool_weights.py:101-144`. It reads dev's first vendor (`:106-111`) and PATCHes its empty weight to 0 at `:112-114`, *before* `try:` at `:131`; so `assert fil.ok` at `:129` failing skips the restore. The restore runs only when the saved weight wasn't None (`:139-144`).
 - `inventory-hub/tests/debug_console.py`: a by-hand Playwright script (not collected) that submits the same wizard form (`:18-19`) and deletes nothing.
+- FCC's own store (added 2026-11-24, after Group 65's full sweep): a weigh save through the container stamps its spool in dev's live `data/weigh_stamps.json` (Group 64's Decision 1, `weigh_stamps.note`), so the weigh-out tests' throwaway spools leave stamps that outlive them (#302, "the weigh-out list", 17:18). Spoolman hands a deleted top id out again (dev's top spool id was 301 after #302 was deleted), so the next spool made on dev gets that id and the stamp. Inert for Decision 1 (a stamp from before a print's end read never counts); the sweep could drop its throwaway spools' stamps, or the store forget a deleted spool's.
 
 ### Smaller leftovers (68.9)
 - **The unpatched read:** `tests/test_buffer_ejection_logic.py:71-93`; `logic.py:4434` (the non-strict `get_spools_at_location_detailed`); the patched siblings are at `:130` and `:170`.
