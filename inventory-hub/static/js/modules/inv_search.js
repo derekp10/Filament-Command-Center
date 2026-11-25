@@ -22,6 +22,21 @@ const SearchEngine = {
                 }
             });
 
+            // Group 66.4: a label scanned while one of the panel's boxes has the keyboard
+            // goes on as a scan (a spool's joins the scan buffer, as anywhere outside a
+            // box), never searched as words, and the box keeps what was typed (its own
+            // search runs again for that). The audit Find's install.
+            if (!this._scanCaptured && typeof window.installFieldScanCapture === 'function') {
+                this._scanCaptured = true;
+                window.installFieldScanCapture({
+                    match: (n) => !!n && n.tagName === 'INPUT' && ['text', 'number'].includes(n.type)
+                        && !!n.closest && !!n.closest('#offcanvasSearch'),
+                    isScanPayload: (t) => (typeof window.looksLikeScanPayload === 'function'
+                        ? window.looksLikeScanPayload(t) : /[:/]/.test(t)),
+                    labels: true,
+                });
+            }
+
             // Search Type Toggle. In select mode the panel's words follow the type
             // (Group 66.8: they said "spool" with Filaments checked).
             document.querySelectorAll('input[name="global-search-type"]').forEach(radio => {

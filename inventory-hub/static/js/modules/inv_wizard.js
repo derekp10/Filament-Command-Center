@@ -241,9 +241,13 @@ window.wizardSetFilEmptyWeightInherited = (value, source) => {
         });
         // Which extras the user changed (window.wizardNoteExtraTouched). A chip's
         // own onclick removes it, so its click is read in the capture phase,
-        // while the chip still sits in its box.
+        // while the chip still sits in its box. `input` only (Group 66.4, as 54.5's
+        // plain boxes): a person's pick in a select and a checkbox's tick fire it
+        // before their `change`, while a text box that kept the focus through a reset
+        // fires a `change` at blur for an edit made in the last session (a blank extra
+        // then went out as a clear). The single-choice ➕ notes its own touch
+        // (wizardOnNewChoiceAdded).
         wizEl.addEventListener('input', (e) => { if (!_inDialog(e)) window.wizardNoteExtraTouched(e.target); });
-        wizEl.addEventListener('change', (e) => { if (!_inDialog(e)) window.wizardNoteExtraTouched(e.target); });
         // Which plain boxes the user changed (window.wizardNoteNativeTouched,
         // Group 54.5): `input` only. A number box fires `input` for every change a
         // person makes (a key, a paste, the spinner, the wheel); its `change` comes
@@ -1475,6 +1479,24 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
         return rows.find(el => String(el.dataset.value) === String(hidden.value)
             && (el.dataset.label || '').toLowerCase() === text) || null;
     };
+    // Group 66.4: the wizard's scan capture reaches the closure through the box. Its
+    // snapshot keeps `typed` (a label's keys set it, and a Tab through the field then
+    // confirmed the list's first item), and a place's label scanned into Location picks
+    // through `pick`, as Enter's pick does (onPick gets the field as it stood at focus).
+    freshSearch._fccCombo = {
+        get typed() { return typed; },
+        set typed(v) { typed = !!v; },
+        pick: (value, label) => {
+            freshSearch.value = label;
+            dropdown.style.display = 'none';
+            typed = false;
+            if (String(hidden.value) !== String(value)) {
+                hidden.value = String(value);
+                hidden.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            picked(String(value), label);
+        },
+    };
     // The blur's late hide of the list (below), so a focus back before it fires keeps the
     // list it shows: it hid the list a quick return had just shown, and Tab then confirmed
     // nothing (Group 55 review).
@@ -1912,6 +1934,149 @@ window.wizardOpenWeightEntry = () => {
         },
     });
 };
+
+// --- A LABEL SCANNED INTO A WIZARD BOX (Group 66.4) ---
+// A label scanned while one of the wizard's boxes had the keyboard was typed there, and
+// its keys ran the wizard's listeners as a person's typing does: Bed Min read 57, the
+// box counted as the person's (54.5's touched set: an emptied one became a clear), the
+// inherited empty weight and the filament's price lost their marks and were saved as
+// the spool's own (54.8), a label in Scale Gross worked out a used weight from its
+// digits (Save wrote it), one in Location blanked the place the field held (Save moved
+// the spool to Unassigned), and the form counted as changed. The shared capture
+// (installFieldScanCapture) now sends such a label on as a scan, and hands on a
+// snapshot of the wizard taken before the label's first key, which wizardTookScan puts
+// back: every box (values, ticks, hidden ids), the state below, the Save button, the
+// status line, what the marks and summaries are drawn from, and each combobox's
+// "typed". The key canary (tests/test_wizard_scan_capture_66_4.py) holds every
+// wizardState key to one of these two lists: a new key fails it until someone decides.
+// What a label's keys can change, put back:
+window.WIZ_SCAN_STATE_KEYS = ['isDirty', 'lockedAfterSuccess', 'touchedExtras', 'touchedNative',
+    'spoolPriceFrom', 'spoolEmptyWeightFrom', 'spoolEmptyWeightVendorId', 'filEmptyWeightFrom',
+    'usedRead', 'usedAdd', 'pendingPlacement', 'selectedFilamentId'];
+// What they can't (set by an open, a pick, a Save or a read), or what is put back
+// another way (typedSinceReset: the scanned box's own entry; spoolRows: drawn again
+// from Quantity):
+window.WIZ_SCAN_STATE_SKIPS = ['mode', 'session', 'saving', 'prefilling', 'typedSinceReset',
+    'vendors', 'existingFilaments', 'allFilaments', 'allLocationRows', 'locations', 'materials',
+    'extraFields', 'spoolRows', 'editSpoolId', 'editSpoolLocation', 'editFilamentOriginal',
+    'editLoadFailed', 'externalMetaData', 'returnToSpoolId', 'returnToFilamentId', 'forceClose',
+    'spoolBoxesFollowFilament', 'filamentLockedFromScan', 'original_used_weight', 'usedShown',
+    'profileSuggestion', '_dupPicker', '_mismatches'];
+const _wizScanFields = () => {
+    const wizEl = document.getElementById('wizardModal');
+    if (!wizEl) return [];
+    return Array.from(wizEl.querySelectorAll('input, select, textarea'))
+        .filter((f) => !(f.closest && f.closest('.swal2-container')));
+};
+const _wizScanCopy = (v) => (v instanceof Set ? new Set(v) : v);
+const WIZ_SCAN_SHOWS = ['wiz-spool-empty-inherited-badge', 'wiz-spool-scale-note', 'wiz-fil-vendor-edit-btn'];
+const WIZ_SCAN_TEXTS = ['wiz-spool-empty-inherited-source', 'wiz-spool-scale-note'];
+window.wizardScanSnapshot = (el = null) => {
+    const state = {};
+    window.WIZ_SCAN_STATE_KEYS.forEach((k) => { state[k] = _wizScanCopy(wizardState[k]); });
+    const shows = {};
+    WIZ_SCAN_SHOWS.forEach((id) => { const n = document.getElementById(id); if (n) shows[id] = n.style.display; });
+    const texts = {};
+    WIZ_SCAN_TEXTS.forEach((id) => { const n = document.getElementById(id); if (n) texts[id] = n.innerHTML; });
+    const save = document.getElementById('btn-wiz-submit');
+    const status = document.getElementById('wiz-status-msg');
+    const fields = _wizScanFields();
+    return {
+        el,
+        typed: !!(el && wizardState.typedSinceReset && wizardState.typedSinceReset.has(el)),
+        fields: fields.map((f) => [f, f.value, f.checked]),
+        combos: fields.filter((f) => f._fccCombo).map((f) => [f, f._fccCombo.typed]),
+        state, shows, texts,
+        saveDisabled: save ? save.disabled : null,
+        status: status ? status.innerHTML : null,
+    };
+};
+window.wizardScanRestore = (snap) => {
+    if (!snap || !Array.isArray(snap.fields)) return;
+    const qty = document.getElementById('wiz-spool-qty');
+    const qtyNow = qty ? qty.value : null;
+    snap.fields.forEach(([f, value, checked]) => {
+        if (!f.isConnected) return;     // drawn again meanwhile (a Spool box)
+        if (f.type === 'checkbox' || f.type === 'radio') { if (f.checked !== checked) f.checked = checked; }
+        else if (f.value !== value) f.value = value;
+    });
+    Object.keys(snap.state).forEach((k) => { wizardState[k] = _wizScanCopy(snap.state[k]); });
+    if (snap.el && !snap.typed && wizardState.typedSinceReset) wizardState.typedSinceReset.delete(snap.el);
+    (snap.combos || []).forEach(([f, typed]) => { if (f._fccCombo) f._fccCombo.typed = typed; });
+    Object.keys(snap.shows).forEach((id) => { const n = document.getElementById(id); if (n) n.style.display = snap.shows[id]; });
+    Object.keys(snap.texts).forEach((id) => { const n = document.getElementById(id); if (n) n.innerHTML = snap.texts[id]; });
+    const save = document.getElementById('btn-wiz-submit');
+    if (save && snap.saveDisabled != null) save.disabled = snap.saveDisabled;
+    const status = document.getElementById('wiz-status-msg');
+    if (status && snap.status != null) status.innerHTML = snap.status;
+    // What is drawn from the state follows it.
+    if (window.wizardRefreshSpoolPriceMark) window.wizardRefreshSpoolPriceMark();
+    if (window.wizardRefreshFilEmptyWeightMark) window.wizardRefreshFilEmptyWeightMark();
+    if (window.wizardApplyShoreHardnessGate) window.wizardApplyShoreHardnessGate();
+    if (window.wizardRefreshAllSectionSummaries) window.wizardRefreshAllSectionSummaries();
+    document.querySelectorAll('#wizardModal [id^="dropdown-"]').forEach((d) => { d.style.display = 'none'; });
+    if (qty && qty.value !== qtyNow && window.wizardSyncSpoolRows) window.wizardSyncSpoolRows();
+};
+
+// A place's label scanned into Location (its scan's last label, any case): the place
+// it names is picked as a pick from the list is (a box with slots, or a printer, opens
+// its picker; a slot's label picks its box, whose picker reads the slot's label in
+// turn). A place the list doesn't offer (a head, an unknown id) is refused, on the
+// status line, in a warning toast and one Activity Log line, as the location editor's
+// parent picker refuses one; nothing goes to the scan path.
+const _wizLocationLabel = (lab, id, text, el) => {
+    const key = _wizLocKey(id);
+    const row = key === '' ? { LocationID: '', Name: '' }
+        : (wizardState.locations || []).find((l) => l && _wizLocKey(l.LocationID) === key);
+    if (row && el && el._fccCombo) {
+        const label = row.LocationID === '' ? '-- Unassigned --'
+            : (row.Name ? `${row.Name} (${row.LocationID})` : row.LocationID);
+        el._fccCombo.pick(row.LocationID, label);
+        return;
+    }
+    const why = `${lab} isn't a place this list offers. Pick one from the list.`;
+    const status = document.getElementById('wiz-status-msg');
+    if (status) status.textContent = why;
+    if (window.showToast) window.showToast(why, 'warning', 7000);
+    if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${_wizEscape(text)}" ignored: ${_wizEscape(why)}`, 'WARNING');
+};
+
+// The shared capture's onScan: the wizard as it was before the label's first key, then
+// the label goes on (a place's label in Location picks it).
+window.wizardTookScan = (text, el, info) => {
+    window.wizardScanRestore(info && info.snapshot);
+    if (el && el.id === 'wiz-search-existing' && window.wizardSearchExisting) window.wizardSearchExisting();
+    if (el && el.id === 'wiz-spool-location-search') {
+        const lab = window.lastScanLabel ? window.lastScanLabel(text) : String(text || '').trim().toUpperCase();
+        const m = /^LOC:([^:]+?)(?::SLOT:\d+)?$/.exec(lab || '');
+        if (m) { _wizLocationLabel(lab, m[1], text, el); return; }
+    }
+    if (typeof window.processScan === 'function') window.processScan(text, (info && info.source) || 'barcode');
+};
+
+// Installed once at load (inv_core.js, loaded before this module, defines the capture).
+// Every text, number and link box of the wizard, not a dialog drawn inside it (Force
+// Location's list). A box that takes a web address (the Spool boxes, Purchase Link,
+// Product Link, Import Database's search) keeps one, and an FCC label there is a scan
+// (Claude's call (c)). The page's payload rule (the cross-check's C9): a prefixed label
+// is a scan at any pace (labels mode), digits alone at scanner pace too, and a fast
+// "PLA" + Enter in Material stays the person's.
+(function () {
+    if (typeof window.installFieldScanCapture !== 'function') return;
+    const takesLinks = (el) => el.type === 'url' || el.id === 'wiz-search-external';
+    const fccLabel = (t) => !!(window.fccIsLabel && window.fccIsLabel(t)) && !/^https?:\/\//i.test(t);
+    window.installFieldScanCapture({
+        labels: true,
+        match: (el) => !!el && el.tagName === 'INPUT' && ['text', 'number', 'search', 'url'].includes(el.type)
+            && !!el.closest && !!el.closest('#wizardModal') && !el.closest('.swal2-container'),
+        isScanPayload: (t) => (typeof window.looksLikeScanPayload === 'function'
+            ? window.looksLikeScanPayload(t) : /[:/]/.test(t)),
+        snapshot: (el) => window.wizardScanSnapshot(el),
+        keep: (text, el) => takesLinks(el) && !fccLabel(text),
+        restoreEvent: false,
+        onScan: (text, el, info) => window.wizardTookScan(text, el, info),
+    });
+})();
 
 // --- DATA FETCHERS ---
 const wizardFetchMaterials = () => {
@@ -2823,6 +2988,9 @@ window.wizardOnNewChoiceAdded = (apiEntity, key, value, info) => {
         // / sync handlers fire.
         input.value = value;
         input.dispatchEvent(new Event('change', { bubbles: true }));
+        // Picking it is the person's change (Group 66.4: the touched set no longer
+        // hears `change`, which is all this pick fires).
+        window.wizardNoteExtraTouched(input);
         wizardState.isDirty = true;
     } else if (input.tagName === 'INPUT' && info && info.wasNew) {
         // Multi-choice path (chips) — wizardAddMultiChoiceChip already handles
@@ -3255,9 +3423,14 @@ window.wizardPopulateColors = (hexString, direction) => {
 };
 
 // --- EXISTING FILAMENT LOGIC ---
+// Group 66.4: the newest search paints. Each key typed in the box searches (its keyup),
+// a scanner's label included, and an older answer landing last painted the list for
+// text the box no longer holds.
+let _wizExistingSearchSeq = 0;
 window.wizardSearchExisting = () => {
     // Basic frontend filter based on standard filament pool
     // In a production environment this should likely ping a dedicated /api/v1/filament?query endpoint
+    const seq = ++_wizExistingSearchSeq;
     const term = document.getElementById('wiz-search-existing').value.toLowerCase();
     const sel = document.getElementById('wiz-existing-results');
     sel.innerHTML = '<option disabled>Searching...</option>';
@@ -3265,6 +3438,7 @@ window.wizardSearchExisting = () => {
     fetch('/api/filaments')
         .then(r => r.json())
         .then(d => {
+            if (seq !== _wizExistingSearchSeq) return;
             sel.innerHTML = "";
             let count = 0;
             if (d.success && d.filaments) {
@@ -3289,6 +3463,7 @@ window.wizardSearchExisting = () => {
         })
         .catch(e => {
             console.error("Filament fetch failed", e);
+            if (seq !== _wizExistingSearchSeq) return;
             sel.innerHTML = '<option disabled>Network Error</option>';
         });
 };
