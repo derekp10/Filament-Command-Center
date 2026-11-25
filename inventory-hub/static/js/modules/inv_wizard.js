@@ -1954,79 +1954,195 @@ window.wizardOpenWeightEntry = () => {
 // the spool's own (54.8), a label in Scale Gross worked out a used weight from its
 // digits (Save wrote it), one in Location blanked the place the field held (Save moved
 // the spool to Unassigned), and the form counted as changed. The shared capture
-// (installFieldScanCapture) now sends such a label on as a scan, and hands on a
-// snapshot of the wizard taken before the label's first key, which wizardTookScan puts
-// back: every box (values, ticks, hidden ids), the state below, the Save button, the
-// status line, what the marks and summaries are drawn from, and each combobox's
-// "typed". The key canary (tests/test_wizard_scan_capture_66_4.py) holds every
-// wizardState key to one of these two lists: a new key fails it until someone decides.
+// (installFieldScanCapture) now sends such a label on as a scan, and wizardTookScan
+// undoes what the label's keys changed: every box (values, ticks, hidden ids), the
+// state below, the Save button, the status line, what the marks and summaries are
+// drawn from, each combobox's "typed", the Spool rows and a slicer profile FCC
+// suggested.
+// Review round 2 of Group 66: it put back a snapshot of the whole form taken at the
+// label's first key. An answer that landed while the label was being typed (a
+// Prusament QR's lookup, filling Step 2 and freeing Save) was undone with it, and what
+// the snapshot didn't hold stayed as the keys left it: Quantity's Spool rows (the box
+// read 3 again while Save made 357 spools, or 1) and a slicer profile FCC suggested
+// (the brand box's keys dropped it). Now each key typed into a wizard box is journaled
+// with what its own listeners changed (from its keydown to the end of its `input`, and
+// through its `keyup`), the capture's snapshot hook marks where the label's first key
+// is in that journal, and the undo puts each thing back, the label's last key first,
+// only while it still holds what that key left it: what an answer wrote meanwhile stays.
+// The key canary (tests/test_wizard_scan_capture_66_4.py) holds every wizardState key to
+// one of these two lists: a new key fails it until someone decides.
 // What a label's keys can change, put back:
 window.WIZ_SCAN_STATE_KEYS = ['isDirty', 'lockedAfterSuccess', 'touchedExtras', 'touchedNative',
     'spoolPriceFrom', 'spoolEmptyWeightFrom', 'spoolEmptyWeightVendorId', 'filEmptyWeightFrom',
-    'usedRead', 'usedAdd', 'pendingPlacement', 'selectedFilamentId'];
+    'usedRead', 'usedAdd', 'pendingPlacement', 'selectedFilamentId', 'spoolRows', 'profileSuggestion'];
 // What they can't (set by an open, a pick, a Save or a read), or what is put back
-// another way (typedSinceReset: the scanned box's own entry; spoolRows: drawn again
-// from Quantity):
+// another way (typedSinceReset: the scanned box's own entry). A key that changes one of
+// these all the same is noted in window.wizardScanUntracked, which the scan tests read.
 window.WIZ_SCAN_STATE_SKIPS = ['mode', 'session', 'saving', 'prefilling', 'typedSinceReset',
     'vendors', 'existingFilaments', 'allFilaments', 'allLocationRows', 'locations', 'materials',
-    'extraFields', 'spoolRows', 'editSpoolId', 'editSpoolLocation', 'editFilamentOriginal',
+    'extraFields', 'editSpoolId', 'editSpoolLocation', 'editFilamentOriginal',
     'editLoadFailed', 'externalMetaData', 'returnToSpoolId', 'returnToFilamentId', 'forceClose',
     'spoolBoxesFollowFilament', 'filamentLockedFromScan', 'original_used_weight', 'usedShown',
-    'profileSuggestion', '_dupPicker', '_mismatches', 'linkShown'];
+    '_dupPicker', '_mismatches', 'linkShown'];
+window.wizardScanUntracked = [];
 const _wizScanFields = () => {
     const wizEl = document.getElementById('wizardModal');
     if (!wizEl) return [];
     return Array.from(wizEl.querySelectorAll('input, select, textarea'))
         .filter((f) => !(f.closest && f.closest('.swal2-container')));
 };
-const _wizScanCopy = (v) => (v instanceof Set ? new Set(v) : v);
+// A Set is copied; a list (the Spool rows) is copied as the same rows, so a lookup still
+// on its way writes into a row the undo puts back.
+const _wizScanCopy = (v) => (v instanceof Set ? new Set(v) : (Array.isArray(v) ? v.slice() : v));
+const _wizScanEq = (a, b) => {
+    if (a === b) return true;
+    if (a instanceof Set || b instanceof Set) {
+        if (!(a instanceof Set) || !(b instanceof Set) || a.size !== b.size) return false;
+        for (const x of a) if (!b.has(x)) return false;
+        return true;
+    }
+    if (Array.isArray(a) || Array.isArray(b)) {
+        return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]);
+    }
+    if (a && b && typeof a === 'object' && typeof b === 'object') {
+        try { return JSON.stringify(a) === JSON.stringify(b); } catch (_) { return false; }
+    }
+    return false;
+};
 const WIZ_SCAN_SHOWS = ['wiz-spool-empty-inherited-badge', 'wiz-spool-scale-note', 'wiz-fil-vendor-edit-btn'];
 const WIZ_SCAN_TEXTS = ['wiz-spool-empty-inherited-source', 'wiz-spool-scale-note'];
-window.wizardScanSnapshot = (el = null) => {
-    const state = {};
-    window.WIZ_SCAN_STATE_KEYS.forEach((k) => { state[k] = _wizScanCopy(wizardState[k]); });
-    const shows = {};
-    WIZ_SCAN_SHOWS.forEach((id) => { const n = document.getElementById(id); if (n) shows[id] = n.style.display; });
-    const texts = {};
-    WIZ_SCAN_TEXTS.forEach((id) => { const n = document.getElementById(id); if (n) texts[id] = n.innerHTML; });
-    const save = document.getElementById('btn-wiz-submit');
-    const status = document.getElementById('wiz-status-msg');
-    const fields = _wizScanFields();
-    return {
-        el,
-        typed: !!(el && wizardState.typedSinceReset && wizardState.typedSinceReset.has(el)),
-        fields: fields.map((f) => [f, f.value, f.checked]),
-        combos: fields.filter((f) => f._fccCombo).map((f) => [f, f._fccCombo.typed]),
-        state, shows, texts,
-        saveDisabled: save ? save.disabled : null,
-        status: status ? status.innerHTML : null,
-    };
-};
-window.wizardScanRestore = (snap) => {
-    if (!snap || !Array.isArray(snap.fields)) return;
-    const qty = document.getElementById('wiz-spool-qty');
-    const qtyNow = qty ? qty.value : null;
-    snap.fields.forEach(([f, value, checked]) => {
-        if (!f.isConnected) return;     // drawn again meanwhile (a Spool box)
-        if (f.type === 'checkbox' || f.type === 'radio') { if (f.checked !== checked) f.checked = checked; }
-        else if (f.value !== value) f.value = value;
+// Everything a key can change, each { get, set, rank }: rank 0 is put back first (the
+// Spool rows and the profile list's options, whose boxes and value come after), then the
+// boxes, then the rest. A `watch` item is never put back: a change to it is noted.
+const _wizScanItems = (target) => {
+    const items = new Map();
+    const add = (id, get, set, rank, extra = {}) => items.set(id, Object.assign({ get, set, rank }, extra));
+    add('rows', () => (wizardState.spoolRows || []).slice(), (v) => {
+        wizardState.spoolRows = v.slice();
+        wizardState.spoolRows.forEach((r, i) => { r.idx = i; });
+    }, 0, { rows: true });
+    const sel = _profileSelect();
+    if (sel) {
+        add('profile-options', () => Array.from(sel.options), (v) => {
+            const keep = new Set(v);
+            Array.from(sel.options).forEach((o) => { if (!keep.has(o)) o.remove(); });
+            v.forEach((o) => sel.appendChild(o));
+        }, 0, { alive: () => sel.isConnected });
+        add('profile-marks', () => JSON.stringify([sel.dataset.fccSuggested ?? null, sel.dataset.fccUserSet ?? null]),
+            (v) => {
+                const [suggested, userSet] = JSON.parse(v);
+                if (suggested == null) delete sel.dataset.fccSuggested; else sel.dataset.fccSuggested = suggested;
+                if (userSet == null) delete sel.dataset.fccUserSet; else sel.dataset.fccUserSet = userSet;
+            }, 2, { alive: () => sel.isConnected });
+    }
+    add('profile-note', () => {
+        const n = document.getElementById('wiz-fil-profile-note');
+        return n ? JSON.stringify([n.textContent, n.style.display]) : null;
+    }, (v) => {
+        const n = document.getElementById('wiz-fil-profile-note');
+        if (!n) return;
+        const [text, display] = v == null ? ['', 'none'] : JSON.parse(v);
+        n.textContent = text;
+        n.style.display = display;
+    }, 2);
+    _wizScanFields().forEach((f) => {
+        const tick = f.type === 'checkbox' || f.type === 'radio';
+        add(f, () => (tick ? f.checked : f.value), (v) => { if (tick) f.checked = v; else f.value = v; }, 1,
+            { alive: () => f.isConnected });
+        if (f._fccCombo) {
+            const c = f._fccCombo;
+            add(c, () => c.typed, (v) => { c.typed = v; }, 2, { alive: () => f.isConnected });
+        }
     });
-    Object.keys(snap.state).forEach((k) => { wizardState[k] = _wizScanCopy(snap.state[k]); });
-    if (snap.el && !snap.typed && wizardState.typedSinceReset) wizardState.typedSinceReset.delete(snap.el);
-    (snap.combos || []).forEach(([f, typed]) => { if (f._fccCombo) f._fccCombo.typed = typed; });
-    Object.keys(snap.shows).forEach((id) => { const n = document.getElementById(id); if (n) n.style.display = snap.shows[id]; });
-    Object.keys(snap.texts).forEach((id) => { const n = document.getElementById(id); if (n) n.innerHTML = snap.texts[id]; });
+    window.WIZ_SCAN_STATE_KEYS.forEach((k) => {
+        if (k === 'spoolRows') return;          // 'rows' above
+        add(`state:${k}`, () => _wizScanCopy(wizardState[k]), (v) => { wizardState[k] = _wizScanCopy(v); }, 2);
+    });
+    window.WIZ_SCAN_STATE_SKIPS.forEach((k) => {
+        if (k === 'typedSinceReset') return;    // 'typed' below
+        add(`skip:${k}`, () => wizardState[k], null, 3, { watch: k, eq: (a, b) => a === b });
+    });
+    if (target) {
+        add('typed', () => !!(wizardState.typedSinceReset && wizardState.typedSinceReset.has(target)), (v) => {
+            if (!wizardState.typedSinceReset) return;
+            if (v) wizardState.typedSinceReset.add(target); else wizardState.typedSinceReset.delete(target);
+        }, 2);
+    }
+    WIZ_SCAN_SHOWS.forEach((id) => {
+        const n = document.getElementById(id);
+        if (n) add(`show:${id}`, () => n.style.display, (v) => { n.style.display = v; }, 2);
+    });
+    WIZ_SCAN_TEXTS.forEach((id) => {
+        const n = document.getElementById(id);
+        if (n) add(`text:${id}`, () => n.innerHTML, (v) => { n.innerHTML = v; }, 2);
+    });
     const save = document.getElementById('btn-wiz-submit');
-    if (save && snap.saveDisabled != null) save.disabled = snap.saveDisabled;
+    if (save) add('save', () => save.disabled, (v) => { save.disabled = v; }, 2);
     const status = document.getElementById('wiz-status-msg');
-    if (status && snap.status != null) status.innerHTML = snap.status;
+    if (status) add('status', () => status.innerHTML, (v) => { status.innerHTML = v; }, 2);
+    return items;
+};
+const _wizScanImage = (target) => {
+    const img = new Map();
+    _wizScanItems(target).forEach((item, id) => {
+        try { img.set(id, { item, v: item.get() }); } catch (_) { /* unreadable now */ }
+    });
+    return img;
+};
+// The journal: one record per key typed into a wizard box, of what that key changed.
+const WIZ_KEY_JOURNAL_MAX = 400;
+let _wizKeyJournal = [];
+let _wizKeySeq = 0;
+let _wizKeyDown = null;     // { rec, target, img }: a key whose keydown is being journaled
+let _wizKeyUp = null;       // { rec, target, img }: a keyup being journaled
+const _wizScanDiff = (rec, a, b) => {
+    a.forEach((was, id) => {
+        const now = b.get(id);
+        if (!now) return;
+        if ((was.item.eq || _wizScanEq)(was.v, now.v)) return;
+        if (was.item.watch) {
+            if (window.wizardScanUntracked.length < 50) window.wizardScanUntracked.push(was.item.watch);
+            return;
+        }
+        rec.changes.push({ item: was.item, before: was.v, after: now.v });
+    });
+};
+const _wizKeyDownEnd = () => {
+    const o = _wizKeyDown;
+    _wizKeyDown = null;
+    if (o) _wizScanDiff(o.rec, o.img, _wizScanImage(o.target));
+};
+// The capture's snapshot hook: where the label's first key is in the journal (the
+// record that key is about to open).
+window.wizardScanSnapshot = (el = null) => ({ seq: _wizKeySeq, el });
+// Undoes what the keys from the snapshot's on changed, the last key first, each thing
+// only while it holds what that key left it.
+window.wizardScanRestore = (snap) => {
+    if (!snap || typeof snap.seq !== 'number') return;
+    _wizKeyDownEnd();
+    let rows = false;
+    const recs = _wizKeyJournal.filter((r) => r.seq >= snap.seq);
+    for (let i = recs.length - 1; i >= 0; i--) {
+        recs[i].changes.slice().sort((x, y) => x.item.rank - y.item.rank).forEach((c) => {
+            if (c.item.alive && !c.item.alive()) return;
+            let now;
+            try { now = c.item.get(); } catch (_) { return; }
+            if (!_wizScanEq(now, c.after)) return;       // changed again since: what changed it stays
+            try { c.item.set(c.before); } catch (_) { return; }
+            if (c.item.rows) rows = true;
+        });
+    }
+    _wizKeyJournal = [];
     // What is drawn from the state follows it.
+    if (rows) {
+        window.wizardRenderSpoolRows();
+        window.wizardUpdateSubmitGate();
+    }
     if (window.wizardRefreshSpoolPriceMark) window.wizardRefreshSpoolPriceMark();
     if (window.wizardRefreshFilEmptyWeightMark) window.wizardRefreshFilEmptyWeightMark();
     if (window.wizardApplyShoreHardnessGate) window.wizardApplyShoreHardnessGate();
     if (window.wizardRefreshAllSectionSummaries) window.wizardRefreshAllSectionSummaries();
     document.querySelectorAll('#wizardModal [id^="dropdown-"]').forEach((d) => { d.style.display = 'none'; });
-    if (qty && qty.value !== qtyNow && window.wizardSyncSpoolRows) window.wizardSyncSpoolRows();
 };
 
 // A place's label scanned into Location (its scan's last label, any case): the place
@@ -2076,16 +2192,53 @@ window.wizardTookScan = (text, el, info) => {
     if (typeof window.installFieldScanCapture !== 'function') return;
     const takesLinks = (el) => el.type === 'url' || el.id === 'wiz-search-external';
     const fccLabel = (t) => !!(window.fccIsLabel && window.fccIsLabel(t)) && !/^https?:\/\//i.test(t);
+    const match = (el) => !!el && el.tagName === 'INPUT' && ['text', 'number', 'search', 'url'].includes(el.type)
+        && !!el.closest && !!el.closest('#wizardModal') && !el.closest('.swal2-container');
     window.installFieldScanCapture({
         labels: true,
-        match: (el) => !!el && el.tagName === 'INPUT' && ['text', 'number', 'search', 'url'].includes(el.type)
-            && !!el.closest && !!el.closest('#wizardModal') && !el.closest('.swal2-container'),
+        match,
         isScanPayload: (t) => (typeof window.looksLikeScanPayload === 'function'
             ? window.looksLikeScanPayload(t) : /[:/]/.test(t)),
         snapshot: (el) => window.wizardScanSnapshot(el),
         keep: (text, el) => takesLinks(el) && !fccLabel(text),
         restoreEvent: false,
         onScan: (text, el, info) => window.wizardTookScan(text, el, info),
+    });
+    // The key journal (review round 2 of Group 66). Its keydown listener is added after
+    // the capture's, on the same node and phase, so it runs after it: a scan's Enter,
+    // which the capture takes, opens no record, and the snapshot the capture asked for at
+    // this key names the record this key opens.
+    const MODIFIERS = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock', 'AltGraph'];
+    document.addEventListener('keydown', (e) => {
+        if (!match(e.target) || MODIFIERS.includes(e.key)) return;
+        _wizKeyDownEnd();
+        const rec = { seq: _wizKeySeq++, changes: [] };
+        _wizKeyJournal.push(rec);
+        if (_wizKeyJournal.length > WIZ_KEY_JOURNAL_MAX) _wizKeyJournal.splice(0, _wizKeyJournal.length - WIZ_KEY_JOURNAL_MAX);
+        const open = { rec, target: e.target, img: _wizScanImage(e.target) };
+        _wizKeyDown = open;
+        // A key the box took nothing from fires no `input`: what its keydown did ends with
+        // this task, before an answer can land.
+        setTimeout(() => { if (_wizKeyDown === open) _wizKeyDownEnd(); }, 0);
+    }, true);
+    // The key's own `input`, once every listener has heard it (the window hears it last;
+    // a page with no window events, the node harnesses' stub, the document).
+    const lastNode = typeof window.addEventListener === 'function' ? window : document;
+    lastNode.addEventListener('input', (e) => {
+        if (_wizKeyDown && e.target === _wizKeyDown.target) _wizKeyDownEnd();
+    });
+    // A keyup's own listeners (the weight grid works its sums out on keyup), journaled
+    // into the last key's record.
+    document.addEventListener('keyup', (e) => {
+        if (!match(e.target) || MODIFIERS.includes(e.key)) return;
+        _wizKeyDownEnd();
+        const rec = _wizKeyJournal[_wizKeyJournal.length - 1];
+        _wizKeyUp = rec ? { rec, target: e.target, img: _wizScanImage(e.target) } : null;
+    }, true);
+    lastNode.addEventListener('keyup', () => {
+        const o = _wizKeyUp;
+        _wizKeyUp = null;
+        if (o) _wizScanDiff(o.rec, o.img, _wizScanImage(o.target));
     });
 })();
 

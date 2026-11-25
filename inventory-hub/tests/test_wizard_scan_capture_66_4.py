@@ -58,7 +58,12 @@ SCAN_STUB = r"""() => {
 @pytest.fixture
 def scanning(wiz):  # noqa: F811
     wiz.evaluate(SCAN_STUB)
-    return wiz
+    yield wiz
+    # Review round 2 of Group 66 (Q4-02): every case, not only those that save, fails on an
+    # error thrown on the page (the slot label's case passed over one), and on a key that
+    # changed a wizardState key the undo leaves alone.
+    assert wiz.evaluate("() => window.__errors") == []
+    assert wiz.evaluate("() => window.wizardScanUntracked") == []
 
 
 def _scans(page):
@@ -222,7 +227,8 @@ def test_a_slot_label_picks_its_box_and_opens_its_picker(scanning):
     scanning.evaluate("() => { window.__answers['/api/locations'] = ["
                       " { LocationID: 'SHELF-1', Name: 'Shelf', Type: 'Section' },"
                       " { LocationID: 'BOX-1', Name: 'Dryer', Type: 'Dryer Box', 'Max Spools': '4' }];"
-                      " window.__picker = []; window.placeOneWithPicker = (o) => { window.__picker.push(o && o.loc); };"
+                      " window.__picker = []; window.placeOneWithPicker = (o) => { window.__picker.push(o && o.loc);"
+                      "   return Promise.resolve({ outcome: 'moved' }); };"
                       " window.openSlotPicker = () => {}; }")
     _open_new_filament(scanning)
     _scan_into(scanning, LOCATION, "LOC:BOX-1:SLOT:2")
