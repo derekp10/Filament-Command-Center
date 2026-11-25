@@ -1814,7 +1814,7 @@ def test_print_end_review_notes_are_readable(page: Page, base_url: str, assert_c
     # Each element's text is scored by its first 80 characters (contrast_offenders).
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
     for said in ("had #42 when the print started", "is on HEAD-7 now", "isn't sure which spool printed",
-                 "isn't sure which spool it came from", "changed mid-print at position(s)"):
+                 "isn't sure which spool it came from", "changed mid-print on HEAD-5"):
         assert said in scored, (said, scored)
     page.keyboard.press("Escape")
 

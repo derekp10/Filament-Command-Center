@@ -4217,6 +4217,27 @@ def _carry_uncharged(record, unresolved, printer_name, fb_url, active_locs=None,
             + " had no spool loaded (pick it in the review)")
 
 
+def _changed_heads_words(changed_positions, rows, heads=None):
+    """The heads a spool changed on, for the spool_changed line: each as the card's rows
+    name it (its toolhead; else the head the card's heads give it), else T<n>, the
+    slicer's tool as the card's lines say it with no name, escaped: "XL-1",
+    "XL-1 and XL-3". Group 65's picture walk (Derek, 2026-11-24): the card's rows said
+    HEAD-1 and its banner "toolhead position(s) 0"; this line said "position(s) [0]"."""
+    names = []
+    for pos in sorted(changed_positions or []):
+        def _named(x):
+            return isinstance(x, dict) and str(x.get('position')) == str(pos) and x.get('toolhead')
+        name = (next((r['toolhead'] for r in rows or [] if _named(r)), None)
+                or next((h['toolhead'] for h in heads or [] if _named(h)), None)
+                or f"T{pos}")
+        if name not in names:
+            names.append(name)
+    names = [_esc(n) for n in names]
+    if len(names) > 1:
+        return ", ".join(names[:-1]) + " and " + names[-1]
+    return names[0] if names else ""
+
+
 def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_url,
                                changed_positions, active_locs=None, swap_log=None,
                                start_spools=None, heads=None, heads_source=None,
@@ -4508,9 +4529,9 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
     except Exception:
         pass
     how = "auto-split proposed" if auto_split else "full footer NOT auto-applied"
+    on = _changed_heads_words(changed_positions, rows, record.get('heads_at_end'))
     state.add_log_entry(
-        f"🔁 {printer_name}: spool changed mid-print ('{_esc(filename)}') at toolhead "
-        f"position(s) {sorted(changed_positions)} — {how}; "
+        f"🔁 {printer_name}: spool changed mid-print ('{_esc(filename)}'){' on ' + on if on else ''} — {how}; "
         f"review the split: {total:.2f}g across {len(rows)} spool(s){uncharged}.",
         "WARNING", rows[0]['color'],
         meta={"type": "cancel_deduct_pending",

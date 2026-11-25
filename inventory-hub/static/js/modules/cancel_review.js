@@ -169,6 +169,24 @@
         });
         return Math.max(0, ...Object.values(n));
     }
+    // Group 65's picture walk (Derek, 2026-11-24: the rows said HEAD-1 and the
+    // banner "toolhead position(s) 0"): the heads a spool_changed card's banner
+    // names, each as its rows name it (its toolhead), else T<n>, the slicer's tool
+    // as the card's lines say it when they have no name for it: " on <b>XL-1</b>",
+    // " on <b>XL-1</b> and <b>XL-3</b>"; '' with none.
+    function changedHeadsWords(rec) {
+        const names = [];
+        (rec.changed_positions || []).forEach((pos) => {
+            const same = (x) => x && String(x.position) === String(pos) && x.toolhead;
+            const row = (rec.spools || []).find(same);
+            const head = (Array.isArray(rec.heads_at_end) ? rec.heads_at_end : []).find(same);
+            const name = (row && row.toolhead) || (head && head.toolhead) || `T${pos}`;
+            if (names.indexOf(name) < 0) names.push(name);
+        });
+        if (!names.length) return '';
+        const b = names.map((n) => `<b>${esc(n)}</b>`);
+        return ` on ${b.length > 1 ? `${b.slice(0, -1).join(', ')} and ${b[b.length - 1]}` : b[0]}`;
+    }
     // Review fix: whether a card's held line is a set of spools (scope B), whose
     // Apply needs each spool's grams rather than one pick.
     function isSetLine(rec, pos) {
@@ -1608,7 +1626,10 @@
         // (it would dump the whole tool's usage on the replacement + record 0g on
         // the run-out spool); the user splits the grams manually.
         const spoolChanged = kind === 'spool_changed';
-        const changedPos = (rec.changed_positions || []).join(', ');
+        // Group 65's picture walk (Derek, 2026-11-24: the rows said HEAD-1 and the
+        // banner "toolhead position(s) 0"): the banner names each changed head as
+        // the rows do.
+        const changedOn = spoolChanged ? changedHeadsWords(rec) : '';
         // Ambiguous (2026-06-13): the print reached idle without an observed
         // terminal state, so FCC couldn't confirm cancel vs completion. Reword
         // the header + banner; the grams are computed at the last seen progress
@@ -1632,19 +1653,19 @@
             headerColor = '#ffb74d';
             header = `🔁 ${esc(rec.printer_name)} — spool changed mid-print`;
             banner = held
-                ? `🔁 A spool feeding this print was <b>changed mid-print</b> at position(s)
-               <b>${esc(changedPos)}</b>, so the slicer total was <b>NOT auto-applied</b>. FCC can't tell
+                ? `🔁 A spool feeding this print was <b>changed mid-print</b>${changedOn}, so the
+               slicer total was <b>NOT auto-applied</b>. FCC can't tell
                which spool printed there, so it charges ${heldNone} by itself: each such head is listed
                below with every spool it had. ${pickWords}, then <b>Confirm</b>. Or <b>Discard</b>.`
                 : autoSplit
                 ? `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament run-out
-               or M600) at toolhead position(s) <b>${esc(changedPos)}</b>. FCC <b>auto-split</b>
+               or M600)${changedOn}. FCC <b>auto-split</b>
                the slicer total by ${cut.by} — each row below is charged only <b>its own
                segment</b> (${cut.rows}), pre-filled.
                ${confirmWords} ${cut.own} sensor→nozzle
                remnant is included when a per-printer path value is configured. Or <b>Discard</b>.`
                 : `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament
-               run-out or M600) at toolhead position(s) <b>${esc(changedPos)}</b>, so the full
+               run-out or M600)${changedOn}, so the full
                slicer total was <b>NOT auto-applied</b> — it would charge the whole tool's usage
                to the <b>replacement</b> spool and leave the run-out spool at 0g. The rows below
                are the <b>replacement</b> spool(s) at completion: nudge each <b>down</b> to what
