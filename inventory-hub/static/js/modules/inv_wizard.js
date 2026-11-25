@@ -1082,6 +1082,26 @@ const _wizFollowApply = (fil) => {
     }
 };
 
+// Claude's call 6b (Group 66.5): the plain wizard's boxes never fill from a pick (only New
+// Spool and Clone follow a filament), but since 66.5 its spool box shows New Manual Form's
+// filament value, marked. After a switch to Existing Filament that filament isn't the one
+// Save uses: the box is emptied, as a direct pick leaves it (it showed the stale value
+// unmarked, and Create saved it as the new spool's own). Back in New Manual Form or Import
+// Database it shows that form's value again. A value the person typed stays, and Edit
+// Spool has its own rule.
+const _wizPlainFollow = () => {
+    const mode = wizardState.mode;
+    if (mode === 'edit_spool' || wizardNativeTouched('spool', 'spool_weight')) return;
+    const from = wizardState.spoolEmptyWeightFrom;
+    if (mode === 'existing') {
+        if (from !== 'filament' && from !== 'vendor') return;
+        window.wizardSetSpoolEmptyWeightInherited(null, null);
+        if (window.wizardRefreshSectionSummary) window.wizardRefreshSectionSummary('wiz-spool-weight-panel');
+    } else if (mode === 'manual' || mode === 'external') {
+        window.wizardFilamentEmptyWeightChanged(_wizBoxValue('wiz-fil-empty_weight'));
+    }
+};
+
 const _wizKnownFilament = (id) => {
     const key = String(id);
     for (const list of [wizardState.existingFilaments, wizardState.allFilaments]) {
@@ -1098,10 +1118,16 @@ const _wizKnownFilament = (id) => {
 // which has no price (the wizard has no price box for one) and the empty weight
 // its own form shows, else its brand's.
 window.wizardFollowFilament = (record = null) => {
-    if (!wizardState.spoolBoxesFollowFilament) return;
+    if (!wizardState.spoolBoxesFollowFilament) { _wizPlainFollow(); return; }
     const mode = wizardState.mode;
     if (mode === 'manual' || mode === 'external') {
-        _wizFollowApply({ price: null, spool_weight: _wizBoxValue('wiz-fil-empty_weight'), vendor: _wizSelectedVendor() });
+        // Group 66.7: a filament box showing its brand's weight is no value of the
+        // filament's: the spool's box then says "↩ from vendor".
+        _wizFollowApply({
+            price: null,
+            spool_weight: wizardFilEmptyWeightIsInherited() ? '' : _wizBoxValue('wiz-fil-empty_weight'),
+            vendor: _wizSelectedVendor(),
+        });
         return;
     }
     if (mode !== 'existing') return;
@@ -2089,18 +2115,11 @@ const _wizardBindVendorEditBtn = () => {
 // follows, and both summaries are drawn again. Code, never the person: this used to
 // dispatch a synthetic `input`, which the wizard counted as the person's edit (54.5's
 // touched set, so Edit Spool saved the brand's weight as the filament's own) and as an
-// unsaved change. The spool's box follows the filament form only where Save uses that
-// form (Existing Filament hides it: there the selected filament drives the box), and
-// outside Edit Spool the copy is a plain copy until 66.5, so it is made only into a box
-// that follows (never over a value typed there).
+// unsaved change. The spool's box follows by wizardFilamentEmptyWeightChanged's one rule.
 const _wizFilEmptyWeightFromVendor = (vendor) => {
     const { value } = resolveEmptySpoolWeightSource({ vendor });
     window.wizardSetFilEmptyWeightInherited(value, 'vendor');
-    const mode = wizardState.mode;
-    if (mode === 'edit_spool'
-            || ((mode === 'manual' || mode === 'external') && _wizEmptyWeightFollowsFilament())) {
-        window.wizardFilamentEmptyWeightChanged(_wizBoxValue('wiz-fil-empty_weight'));
-    }
+    window.wizardFilamentEmptyWeightChanged(_wizBoxValue('wiz-fil-empty_weight'));
     if (window.wizardRefreshSectionSummary) {
         window.wizardRefreshSectionSummary('wiz-fil-physical-panel');
         window.wizardRefreshSectionSummary('wiz-spool-weight-panel');
@@ -2410,23 +2429,22 @@ const wizardFetchExtraFields = () => {
         });
 };
 
-// The filament's Spool Wt box changed (typed, or emptied): the spool's box shows it.
-// Create and Clone, as before: the spool's box takes the filament's value. Edit
-// Spool (Group 54 review, S1): never over the spool's own value, which a correction
-// of its filament's used to replace on every key, unseen in its section that opens
-// closed, and Save then wrote it as the spool's own (Derek, L349: "as long as we
-// aren't overwriting filaments/spools that have data for that field"). A spool box
-// that shows what the spool inherits (its badge), or nothing, shows what it
-// inherits now: the filament's new value, else its brand's, with its badge, or
-// nothing. A box the person typed in or emptied is theirs, and is left alone.
+// The filament's Spool Wt box changed (typed, emptied, or filled by code): the spool's
+// box shows it, by one rule in every mode (Group 54 review's S1 for Edit Spool; Group
+// 66.5 for the rest, which made a plain copy). Never over a value of the spool's own (an
+// edit's, a clone's source spool's, the weigh window's tare), which a correction of its
+// filament's used to replace (Derek, L349: "as long as we aren't overwriting
+// filaments/spools that have data for that field"), or over a box the person typed in or
+// emptied. A box that shows what the spool inherits (its badge), or nothing, shows what
+// it inherits now: the filament's value "↩ from filament", else its brand's "↩ from
+// vendor", or nothing. New spools still take what their box shows as their own (L34),
+// and Edit Spool's Save still leaves an inherited one out (54.8). Under Existing Filament
+// the filament form is hidden and Save doesn't use it: the selected filament drives the
+// box there (wizardFollowFilament).
 window.wizardFilamentEmptyWeightChanged = (value) => {
     const spoolEmptyWt = document.getElementById('wiz-spool-empty_weight');
     if (!spoolEmptyWt) return;
-    if (wizardState.mode !== 'edit_spool') {
-        spoolEmptyWt.value = value;
-        if (window.wizardRecheckScale) window.wizardRecheckScale();
-        return;
-    }
+    if (wizardState.mode === 'existing') return;
     if (!_wizEmptyWeightFollowsFilament()) return;     // typed in, emptied, or the spool's own
     // Group 66.7: a filament box that shows its brand's weight is no value of the
     // filament's: the spool's box says "↩ from vendor", as Edit Spool's open does.
@@ -2446,12 +2464,16 @@ window.wizardSetupFieldSync = () => {
         // Group 66.7: the person's edit is noted first. This listener, on the box itself,
         // runs before the wizard's delegated one that notes it, and the copy reads the
         // marks: one `input` over the brand's weight (a paste) still read as the brand's.
+        // `input` only (Group 66.5, as 54.5's touched set): a number box fires it for every
+        // change a person makes, and its `change` at blur only repeats one, while Chromium
+        // still fires it in the next session for an edit made before the reset when the box
+        // kept the focus, which ran the copy against the new spool's box (emptying New
+        // Spool's inherited weight).
         filEmptyWt.addEventListener('input', (e) => {
             window.wizardNoteNativeTouched(e.target);
             window.wizardRefreshFilEmptyWeightMark();
             window.wizardFilamentEmptyWeightChanged(e.target.value);
         });
-        filEmptyWt.addEventListener('change', (e) => window.wizardFilamentEmptyWeightChanged(e.target.value));
     }
 
     // Lock all auto-synced Spool fields on initial render
