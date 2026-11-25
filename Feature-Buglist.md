@@ -1,4 +1,6 @@
 # **New and Unsorted Features/Bugs**
+* **🟡 Print Watch at a park: five edges left by Group 65's reviews (2026-11-24).** Since Group 65.1 a print FCC first meets at a park (ATTENTION: FCC lost contact, or restarted, while the print waited at a prompt) is latched there and its park read stands for its start. Each fix review judged these too rare or too small to hold the group: (a) a print FCC first meets while BUSY isn't latched there (only at a park or printing); (b) when all 5 of a park's head reads fail, the resume takes its start after the prompt, so a spool changed at the prompt reads as the start spool (a warning says so); (c) a cancel or reset at the prompt of a print met at its park, or a reload of the same spool there, doesn't mark a spool weighed at the prompt before FCC saw the park, so its card can fill in grams the scale already counted (the card still asks); (d) a queued retry of a job change's review is said in the Activity Log as the print reaching idle; (e) a park read that landed only on a retry still pre-picks its spool on the card, with honest words, a note under the row and a warning, never a hold. Direction: (c) first, the only one that can fill in a charge, each with a test red on today's code. **Standalone.**
+* **🟡 Three ends FCC can't measure still give no figures (left by Group 65.1 (1c), 2026-11-23).** Since 65.1 (1c) an ambiguous end FCC never sampled reads its file once, on its own thread, for the card's figures, and a file whose moves can't be read keeps Charge the whole print. Not built: (a) that one download isn't retried through the 72 h queue, so a printer that won't serve the file just then leaves the card with no figures; (b) an end FCC only learns of once the printer runs the next print (`replaced`) reads no file for its figures; (c) an ambiguous end FCC saw at 0% (`nothing_reached`) still closes at 0 g with no card, so there is nothing to charge the whole print on. **Standalone.**
 * **🟡 A review card's spool picker cuts its options' words (found 2026-11-23 in Group 64's picture-walk pictures; older than Group 64).** On a 🛑 review card the "charge to" picker is narrower than its options, so an option reads "#61 — on HEAD-2 when FCC logged the pri", and the end of the sentence, where the head and its moment are said, is cut. Direction: let the picker take the card's width, or wrap its chosen option under it; a picture first (the standing order on looks). **Standalone.**
 * **🟡 Printer Status's 🛑 counts keep their number with no mark after a review list FCC couldn't read (found 2026-11-23 with Group 64's walk).** Since Group 64's fix review 4 (UP7) a failed read keeps every 🛑 count, and since Derek's pick at the walk (sample (d), `0d1ef032`) the Live Activity header's count wears the title bar counts' stale look, a "?" and a dashed edge, its tooltip saying why. The per-printer 🛑 counts in Printer Status (the info line and the folded strip, `cancel_review.js` `decoratePrinterStatus`) still keep theirs with nothing to say it may be out of date. Direction: the same look, a picture first. **Standalone.**
 * **🧪 The leftover sweep for test records misses archived ones (found 2026-11-23 checking dev after Group 64's full sweep).** `tests/conftest.py`'s `_cleanup_orphan_test_records` (run only with RUN_INTEGRATION) lists spools without `allow_archived=true`, so an archived `__fcc_test_` spool would be left on dev's Spoolman unseen (none was, that time). Direction: list with `allow_archived=true`, and pin it. Hygiene, any time. **Standalone.**
@@ -9,42 +11,12 @@
 * **🎨 Two older dialogs fail the contrast rule (found 2026-11-03 by Group 58's pictures).** _(→ **Group 59.6**, 2026-11-16)_ The ⛔ SAFETY INTERLOCK dialog's message is Bootstrap's danger red (rgb 220, 53, 69) on #1a1a1a at 28 px bold, 3.84:1 against FCC's 4.5:1, and its ⛔ blends into the red header (`review-samples/2026-11-01-audit/2026-11-03-old-contrast-safety-interlock.png`). The 🧵 Multi-Spool Search's ✕ close button is white on cyan (about 2.0:1). Both predate Group 58, which fixed the titles of the same headers. A look change, so a sample first: a lighter red for the message; for the ✕, the dark one Derek picked for the Print Queue. _(The Print Queue's ✕, white on yellow at about 1.6:1 (`2026-11-03-old-contrast-print-queue-close.png`), ✅ is dark since Group 55: Derek's pick of 2026-11-11.)_
 * **🏷️ Try printing labels straight to the P-touch again, without the CSV step (Derek, 2026-11-10).** _(→ **Group 70.5**, 2026-11-16)_ Today FCC writes label CSVs (`labels_csv.py`) and Derek's P-touch Editor templates (the `.lbx` files) read them as their database to print. Only `print_settings.csv_path` is read: the old `print_settings.mode` switch (csv, or browser to print straight to the P-touch) is read nowhere. Derek: *"The main reason we use csv's was because I couldn't get labels to print correctly using the ptouch as a printer. I'd love to try again, as the last LLM wasn't good at it, it was fiddly, and it ended up overwriting the whole thing later on. So Yah, maybe we come back and try again some time."* The old attempt printed from the browser with a CSS label layout (commits of February 2026, e.g. `dbd846e` "Fix the Garbled CSS" and `c58b822`, both 02-09; it ended on 02-10 at `687f580`: "Last revision on this. Not going to bother anymore on it. Sticking with CSV for now."). Start by asking Derek what printed wrong, and keep the CSVs working beside it until direct printing is proven: they are his templates' data source today. Found while retiring the stale "Label Printer Options" note in `docs/Filament-Command-Center (FCC)/Notes.md` (Group 55.2).
 
-* **📡 A printer that drops off the network mid-print: say so, and say what FCC missed (Derek, 2026-11-09).** _(→ **Group 65.1**, 2026-11-16)_
-  _(Found when both printers showed offline after a router reboot: they answered ping, but PrusaLink timed
-  out on every port, from the PC and from the container, until Derek pressed each printer's reset button.)_ Derek: *"the
-  biggest problem, is if the network drops mid print, and fcc doesn't receive data when everything re-connects."* What
-  FCC does now is safe: `print_monitor._track_print_edge` keeps the latched job through every failed probe, so on
-  reconnect a FINISHED charges as usual, a STOPPED runs the cancel partial, an IDLE (the finish screen cleared, or a
-  reset) opens the ❓ ambiguous review and never charges by itself, and a new job started meanwhile opens the job-changed
-  review. Three gaps:
-  **(1) The review's percentage is where FCC lost sight of the print, and it doesn't say so (M, ~4–6 h).** The latch
-  keeps no time for its last good sample, so a print that lost contact at 30% and finished unseen reads "❓ XL — ended at
-  ~30%" (`cancel_review.js`), its grams worked out at 30%. Record the last good sample's time and the first failed probe
-  after it on the latch (persisted with it, `data/print_tracker_latch.json`), and when the edge comes after a gap, word
-  the review from it: "FCC lost contact with XL at ~30% (14:02) and next saw it idle at 16:40, so the print may have gone
-  further." **Derek's answer (2026-11-09):** "the 30% last seen is the real issue, we should have a charge the whole
-  print, or a way to change the percentage (in case the user actually did see the percentage before interruption (either
-  power, or reset/otherwise))". So every ❓ ambiguous review, whatever ended it (a network drop, a power cut, a reset),
-  gets (a) a one-tap **Charge the whole print** (each head's footer grams) and (b) an editable **percentage**, pre-filled
-  with the last % FCC saw, that works the grams out again from the print file at the % typed (the cancel partial's own
-  walk, `prusalink_api.measure_filament_usage`, so a server round trip, not a page-side scale). Today the card offers only
-  each spool's grams to edit (`cancel_review.js`). The per-spool grams stay editable after either.
-  **(2) Nothing is logged (S, ~2 h).** `prusalink_api._probe_printer_state` answers None on a timeout without a word, and
-  hub.log held no printer line all day. Log once per change, never per tick: a WARNING after a few failed probes in a row
-  (so a one-tick blip says nothing), "Lost contact with XL (it was printing 'x.bgcode', ~30%)" or "… (idle)", and an INFO
-  "XL is back (PRINTING, ~62%)" on the first good probe after it.
-  **(3) Say when PrusaLink, not the printer, is stuck (S, ~2 h, after a check on TrueNAS).** On 2026-11-09 the printers
-  answered ping while every TCP port timed out, and only a reset brought PrusaLink back. Where the container can ping
-  (ICMP needs NET_RAW: check it on TrueNAS first), the lost-contact line and the Printer Status badge could tell "XL is on
-  the network but PrusaLink isn't answering: restart the printer once its print ends" from "XL doesn't answer at all (off,
-  or off the network)". A reset mid-print ends the print, so the words must say to wait; the ambiguous review covers a
-  reset that ends one.
 * **🔎 Catch print-file changes early: a per-printer print-file watch, and the 2% walk check on finished prints too
-  (Derek, 2026-11-03).** _(→ **Group 65.2, step 1**, 2026-11-16)_ _(Scoped 2026-11-03 in `docs/agent_docs/scoping-2026-11-03-change-detection.md`: hook points, the replay on his real files, the tag
+  (Derek, 2026-11-03).** _(Step 1 ✅ shipped in **Group 65.2** (2026-11-24); step 2 waits for a follow-on group)_ _(Scoped 2026-11-03 in `docs/agent_docs/scoping-2026-11-03-change-detection.md`: hook points, the replay on his real files, the tag
   lists, tests. No decision needed to start.)_ Derek: *"Is there any way to have FCC find and flag any bgcode that uses
   something new … I'd like to try to prevent changes in how the systems perform from sneaking up on us like this in the
   future."* The INDX `;EXCLUDE_E` problem (hotfix `main` `626a10e`) was caught only by Group 56.2's walk-vs-footer
-  WARNING, which runs on cancels alone. **Step 1 (S, ~3–4 h):** in `print_deduct._compute_cancel_usage`, where every
+  WARNING, which runs on cancels alone. **Step 1 (S, ~3–4 h), ✅ shipped in Group 65.2:** in `print_deduct._compute_cancel_usage`, where every
   print file FCC reads already arrives decoded, (a) run the whole-file walk on finished prints too and log the same
   2% / 0.1 g warning, never changing the charge, and (b) scan the body for slicer tags FCC doesn't know and for tag words
   written without their ';'. Replayed on 71 of Derek's real files it stays silent except where it should speak: (b)
@@ -54,10 +26,10 @@
   changes. It would have said on 2026-10-22 (job 1130) that the INDX's tool-change G-code changed and uses `;EXCLUDE_E`
   tags. The replay gave 6 notices across 84 files in five months, with no false alarm.
 * **⚖️ Weigh-in drift: each weighing says what FCC expected, and weighed spools become a per-printer accuracy check
-  (Derek, 2026-11-03).** _(→ **Group 65.3, step 1**, 2026-11-16)_ _(Builds on the `<WeightEntry>` component Group 12 shipped (2026-04-27) and must not route
+  (Derek, 2026-11-03).** _(Step 1 ✅ shipped in **Group 65.3** (2026-11-24); steps 2 and 3 wait for a follow-on group)_ _(Builds on the `<WeightEntry>` component Group 12 shipped (2026-04-27) and must not route
   around it. Scoped 2026-11-03 in the same file, with open questions and their defaults.)_ It is the only check that
   catches the slicer's own accounting being wrong, as the old INDX profile's was: a weighing compares what FCC expected
-  a spool to hold with what the scale says. **Step 1 (S, ~3–4 h):** Quick Weigh and the weigh-out list send what they
+  a spool to hold with what the scale says. **Step 1 (S, ~3–4 h), ✅ shipped in Group 65.3:** Quick Weigh and the weigh-out list send what they
   did with the save (source, mode, reading, empty-spool weight, a skipped tare), and the Activity Log says it:
   "⚖️ Weighed — Spool #57: 655.0 g left (scale 875 g − empty spool 220 g). FCC expected 654.7 g: 0.3 g heavier.",
   or "✏️ Weight edited by hand …" for Additive / Set Used; a request without it keeps today's line. The two empty-spool
@@ -69,12 +41,12 @@
   spools wear printed edge guards; he tries to take them off before weighing, but not always. They can't touch the 2%
   file check (both its numbers come from the file), but a weighing counts them as filament: 3 g is 0.3% of a full spool
   and 6% of a 50 g remnant.
-* **🗂️ Keep the history longer: a 100 MB `hub.log` now, then a permanent spool-history journal (Derek, 2026-11-03).** _(→ **Group 65.4, step 1**, 2026-11-16)_
+* **🗂️ Keep the history longer: a 100 MB `hub.log` now, then a permanent spool-history journal (Derek, 2026-11-03).** _(Step 1 ✅ shipped in **Group 65.4** (2026-11-24); step 2 waits for a follow-on group)_
   _(Scoped 2026-11-03 in the same file.)_ Derek: *"I didn't realize how handy those logs are, and I'm
   beginning to wonder if we shouldn't keep them longer."* `hub.log` is a 6 MB rolling buffer (`state.py`'s
   `RotatingFileHandler('hub.log', maxBytes=1000000, backupCount=5)`). At 2026's normal ~66 KB a month that is years, but
   four of prod's five old files hold one February burst (2026-02-16 to 18), which pushed out everything before it.
-  **Step 1 (S, ~1 h):** 20 files of 5 MB (100 MB; a February-size burst would take ~38 days to roll it), with one pinned
+  **Step 1 (S, ~1 h), ✅ shipped in Group 65.4:** 20 files of 5 MB (100 MB; a February-size burst would take ~38 days to roll it), with one pinned
   test. **Step 2 (M, ~8–10 h):** an append-only, never-rotated `data/history/<year>.jsonl`, one JSON line per change FCC
   makes to a spool (written in `spoolman_api.update_spool` / `create_spool` / `delete_spool`, plus each print's charge
   beside the ledger write), each tagged with what made it; about 1 MB a year on prod. A spool's history and the drift
@@ -92,8 +64,12 @@
 
 * **⏸️ PENDING DEREK — once Group 65 is on prod, the first time a printer drops off the network: read its 📡 line.** _(Added 2026-11-23, Derek: "IF there's a follow up here, I'll need to be aware of it to try and remember to keep an eye out for it.")_ Since Group 65.1 FCC says when it loses contact with a printer ("📡 Lost contact with XL …"), and then pings the printer to tell PrusaLink being stuck from the printer being off. Whether prod's container may send a ping is the one thing not checked (dev's can, checked 2026-11-23; Derek expects prod's can too, as nothing on his network blocks it). If that line goes on with "… is on the network, but PrusaLink isn't answering …" or "… doesn't answer at all …", prod can ping: nothing to do. If it says only "Lost contact with …" (with no second sentence), prod's container can't ping: tell Claude (the read-only TrueNAS checks are in the Group 65 task file, "A prod fact"). Nothing breaks either way: without a ping FCC keeps today's words. Claude takes this off once either line is seen.
 * **⏸️ PENDING DEREK — if the Activity Log ever shows "FCC's G-code walk of … came to … against the slicer's …",
-  tell Claude: FCC may be misreading that file.** (That warning is how the INDX profile's new tags were caught on
-  2026-11-02. Nothing to set up.)
+  "… uses a slicer tag FCC doesn't know …" or "… without the ';' that makes it a slicer tag …", tell Claude: FCC
+  may be misreading that printer's files.** (The walk warning is how the INDX profile's new tags were caught on
+  2026-11-02. Since Group 65.2 it is said for finished prints too, one line per print naming every head past the
+  rule: "This finished print was charged the slicer's figures, so its charge stands, but FCC reads this file
+  differently from the slicer …"; and every file FCC reads is scanned for slicer tags it doesn't know and for tag
+  words written without their ';' (`print_file_watch.py`). Each only logs, never changes a charge. Nothing to set up.)
 * **⏸️ PENDING DEREK — Bulk Moves (L298) hands-on pass.** Built, merged to `dev`, covered by the
   automated suite, and **shipped OFF behind `fcc.bulkMove.enabled`** (schema default `False`, so
   prod is dark; dev's own `config.json` has it `True`). Derek, 2026-10-08: *"I'm so unexcited about
