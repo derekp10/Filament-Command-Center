@@ -256,6 +256,14 @@ const SearchEngine = {
             ctxNode.style.display = 'none';
         }
 
+        // Review round 1 of Group 66 (R4-08): cards drawn in the other mode (a pick for the
+        // wizard, or opening the item) are drawn again for this one. Reopened with its query
+        // held, the panel's cards picked nothing, or opened a filament instead of picking it.
+        if (hasState && Array.isArray(this.lastResults) && this.lastResults.length
+                && this.renderedSelect !== !!this.currentCallback) {
+            this.renderResults(this.lastResults);
+        }
+
         this.offcanvas.show();
         // Auto-focus search box
         setTimeout(() => document.getElementById('global-search-query').focus(), 400);
@@ -342,6 +350,7 @@ const SearchEngine = {
 
     renderResults(results) {
         this.lastResults = results; // Cache locally to support zero-latency patches
+        this.renderedSelect = !!this.currentCallback;   // the mode the cards were drawn in
         const resBox = document.getElementById('global-search-results');
 
         if (!results || results.length === 0) {
