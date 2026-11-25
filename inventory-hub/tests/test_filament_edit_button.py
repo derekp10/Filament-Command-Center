@@ -75,9 +75,11 @@ def test_openEditFilamentForm_is_on_window(page: Page):
     page.wait_for_function("typeof window.openEditFilamentForm === 'function'", timeout=5_000)
 
 
-def _stub_editfil_fetches(page: Page):
+def _stub_editfil_fetches(page: Page, vendors=None):
     """Install fetch stubs so the modal never mutates live Spoolman or
-    waits for a slow /api/vendors. Exposes window.__lastFetchPayload."""
+    waits for a slow /api/vendors. Exposes window.__lastFetchPayload.
+    `vendors`: the list /api/vendors answers (default Alpha and Beta, no weights)."""
+    page.evaluate("(v) => { window.__stubVendors = v; }", vendors)
     page.evaluate(
         """
         window.__lastFetchPayload = null;
@@ -90,7 +92,7 @@ def _stub_editfil_fetches(page: Page):
             if (url === '/api/vendors' && method === 'GET') {
                 return new Response(JSON.stringify({
                     success: true,
-                    vendors: [{id: 1, name: 'Alpha'}, {id: 2, name: 'Beta'}]
+                    vendors: window.__stubVendors || [{id: 1, name: 'Alpha'}, {id: 2, name: 'Beta'}]
                 }), {status: 200, headers: {'Content-Type': 'application/json'}});
             }
             if (url === '/api/vendors' && method === 'POST') {
@@ -860,11 +862,14 @@ def test_modal_vendor_combobox_keyboard_arrow_and_enter_selects(page: Page):
 
 def test_modal_copy_vendor_weight_button(page: Page):
     """When the filament's vendor has an empty_spool_weight, clicking the ⇩
-    button on the Specs tab should copy it into the spool-weight input."""
+    button on the Specs tab should copy it into the spool-weight input.
+    The vendor list answers that vendor with its weight too, as Spoolman does: since Group
+    66.1 the list read at the open decides what comes from the vendor (it is the fresher
+    record), and the old stub's list said Alpha had none (updated deliberately)."""
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
-    _stub_editfil_fetches(page)
+    _stub_editfil_fetches(page, vendors=[{"id": 1, "name": "Alpha", "empty_spool_weight": 185}, {"id": 2, "name": "Beta"}])
 
     fil = {
         "id": 504, "name": "T", "material": "PLA",
@@ -1087,11 +1092,13 @@ def test_modal_hex_enter_commits_color_to_picker(page: Page):
 
 def test_modal_copy_vendor_wt_button_has_visible_text(page: Page):
     """Regression: the Use-Vendor button must render visible text so the
-    user can see it (the earlier ⇩ glyph alone was missed)."""
+    user can see it (the earlier ⇩ glyph alone was missed). The vendor list answers
+    the vendor with its weight, as the filament's copy has it (Group 66.1; updated
+    deliberately, as test_modal_copy_vendor_weight_button)."""
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.openEditFilamentForm === 'function'")
-    _stub_editfil_fetches(page)
+    _stub_editfil_fetches(page, vendors=[{"id": 1, "name": "Alpha", "empty_spool_weight": 185}, {"id": 2, "name": "Beta"}])
 
     fil = {
         "id": 603, "name": "T", "material": "PLA",
