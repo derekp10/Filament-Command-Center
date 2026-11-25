@@ -22,9 +22,16 @@ const SearchEngine = {
                 }
             });
 
-            // Search Type Toggle
+            // Search Type Toggle. In select mode the panel's words follow the type
+            // (Group 66.8: they said "spool" with Filaments checked).
             document.querySelectorAll('input[name="global-search-type"]').forEach(radio => {
-                radio.addEventListener('change', () => this.debounceTrigger());
+                radio.addEventListener('change', () => {
+                    if (this.currentCallback) {
+                        const ctx = document.getElementById('global-search-context');
+                        if (ctx) ctx.innerText = this._selectPrompt();
+                    }
+                    this.debounceTrigger();
+                });
             });
 
             // Deployment filter (select) — re-run search on change.
@@ -129,6 +136,7 @@ const SearchEngine = {
             // Cleanup on hide
             el.addEventListener('hidden.bs.offcanvas', () => {
                 this.currentCallback = null;
+                this.currentPrompts = null;
                 document.getElementById('global-search-context').style.display = 'none';
             });
 
@@ -178,7 +186,10 @@ const SearchEngine = {
 
     /**
      * Open the search UI.
-     * @param {Object} options - Configuration overrides e.g. { mode: 'select', callback: fn }
+     * @param {Object} options - Configuration overrides e.g. { mode: 'select', callback: fn }.
+     *   Group 66.8: `type` ('filament' | 'spool') checks that type (the wizard picks a
+     *   filament), and `prompts` ({filament, spool}) are a select-mode caller's own words,
+     *   shown by the type checked; without them the panel says its own.
      */
     open(options = {}) {
         if (!this.offcanvas) this.init();
@@ -206,21 +217,43 @@ const SearchEngine = {
             `;
         }
 
+        // The type a caller asks for. A programmatic tick fires no change, so a panel
+        // still showing an earlier query searches again for the new type.
+        const typeId = options.type === 'filament' ? 'searchTypeFilaments'
+            : (options.type === 'spool' ? 'searchTypeSpools' : null);
+        const typeRadio = typeId ? document.getElementById(typeId) : null;
+        if (typeRadio && !typeRadio.checked) {
+            typeRadio.checked = true;
+            if (hasState) this.debounceTrigger();
+        }
+
         const ctxNode = document.getElementById('global-search-context');
         if (options.callback) {
             this.currentCallback = options.callback;
-            ctxNode.innerText = "Select a spool to insert it into the form.";
+            this.currentPrompts = options.prompts || null;
+            ctxNode.innerText = this._selectPrompt();
             ctxNode.classList.remove('text-light');
             ctxNode.classList.add('text-warning');
             ctxNode.style.display = 'block';
         } else {
             this.currentCallback = null;
+            this.currentPrompts = null;
             ctxNode.style.display = 'none';
         }
 
         this.offcanvas.show();
         // Auto-focus search box
         setTimeout(() => document.getElementById('global-search-query').focus(), 400);
+    },
+
+    // Select mode's words for the type checked: the caller's (`prompts`), else the
+    // panel's own (Group 66.8).
+    _selectPrompt() {
+        const t = document.querySelector('input[name="global-search-type"]:checked');
+        const kind = t ? t.value : 'spool';
+        const p = this.currentPrompts || {};
+        if (kind === 'filament') return p.filament || 'Select a filament to insert it into the form.';
+        return p.spool || 'Select a spool to insert it into the form.';
     },
 
     debounceTrigger() {
@@ -276,14 +309,19 @@ const SearchEngine = {
             const response = await fetch(`/api/search?${params.toString()}`);
             const data = await response.json();
 
+            // The server's words and an error's are text, never markup (Group 66.8).
+            const esc = window.escHtml || ((s) => String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
             if (!data.success) {
-                resBox.innerHTML = `<div class="text-danger p-3">${data.msg}</div>`;
+                resBox.innerHTML = `<div class="text-danger p-3">${esc(data.msg)}</div>`;
                 return;
             }
 
             this.renderResults(data.results);
         } catch (e) {
-            resBox.innerHTML = `<div class="text-danger p-3">Connection error: ${e.message}</div>`;
+            const esc = window.escHtml || ((s) => String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+            resBox.innerHTML = `<div class="text-danger p-3">Connection error: ${esc(e.message)}</div>`;
         }
     },
 
@@ -292,10 +330,13 @@ const SearchEngine = {
         const resBox = document.getElementById('global-search-results');
 
         if (!results || results.length === 0) {
+            // Group 66.8: the words name the type searched.
+            const t = document.querySelector('input[name="global-search-type"]:checked');
+            const what = t && t.value === 'filament' ? 'filaments' : 'spools';
             resBox.innerHTML = `
                 <div class="text-center text-warning mt-5">
                     <h1 class="opacity-25 mb-3">👻</h1>
-                    <p>No matching spools found.</p>
+                    <p>No matching ${what} found.</p>
                 </div>
             `;
             return;

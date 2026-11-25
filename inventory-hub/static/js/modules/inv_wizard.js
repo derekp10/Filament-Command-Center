@@ -3035,63 +3035,91 @@ window.wizardExistingSelected = (filament = null) => {
     }
 };
 
+// Group 66.8 (ii): the newest Advanced Search pick (an older pick's answer that lands
+// later changes nothing).
+let _wizAdvancedPick = 0;
+
+// The wizard's 🔍 Advanced Search: the search panel in select mode, asked for filaments,
+// in the wizard's own words. A pick is used only while it is the newest, in the same
+// wizard (its session) and the same mode. A spool is used only when the answer is that
+// spool with its filament; anything else (a 404, Spoolman's 5xx body handed on as data,
+// no answer) is refused in words, on the status line and in a 7 s toast: it used to be
+// the browser's own alert(), and a failed fetch an unhandled rejection with the pick
+// silently lost. A filament is used when the answer is that filament; otherwise it stays
+// picked by its id, as it always was (Group 54.8 pins that its boxes then show nothing),
+// in words saying its details couldn't be read (it read as "Generic Unknown - Unnamed").
+// Names go in as text (CLAUDE.md: Spoolman's free text in the page is text).
 window.wizardOpenGlobalSearch = () => {
-    if (window.SearchEngine) {
-        // Force the offcanvas search engine to look for Filaments if possible
-        const filRadio = document.getElementById('searchTypeFilaments');
-        if (filRadio) filRadio.checked = true;
-
-        SearchEngine.open({
-            mode: 'select',
-            callback: (id, type) => {
-                const processFilament = (filId, filData = null) => {
-                    wizardState.selectedFilamentId = filId;
-
-                    let displayString = `Filament ID: ${filId} (From Advanced Search)`;
-                    if (filData) {
-                        const vendor = filData.vendor ? filData.vendor.name : "Generic";
-                        const mat = filData.material || "Unknown";
-                        const name = filData.name || "Unnamed";
-                        displayString = `${vendor} ${mat} - ${name} (ID: ${filId})`;
-                        document.getElementById('wiz-status-msg').innerHTML = `Selected via Advanced Search: <strong>${displayString}</strong>`;
-                    } else {
-                        document.getElementById('wiz-status-msg').innerHTML = `Selected via Advanced Search (Filament ID: <strong>${filId}</strong>)`;
-                    }
-
-                    // Spoof the native select box so the UI knows
-                    const sel = document.getElementById('wiz-existing-results');
-                    sel.innerHTML = `<option value="${filId}" selected>${displayString}</option>`;
-                    wizardValidateSubmit();
-                    // Group 54 review (R2-1, R2-3): the spool's boxes follow the pick.
-                    window.wizardFollowFilament(filData);
-                };
-
-                if (type === 'spool') {
-                    // Extract filament ID from the spool
-                    fetch(`/api/spools/${id}`)
-                        .then(r => r.json())
-                        .then(d => {
-                            if (d.success && d.data && d.data.filament) {
-                                processFilament(d.data.filament.id, d.data.filament);
-                            } else {
-                                alert("Could not resolve Filament from this Spool.");
-                            }
-                        });
-                } else {
-                    // Fetch full Filament details since we only have the ID from SearchEngine
-                    fetch(`/api/filaments/${id}`)
-                        .then(r => r.json())
-                        .then(d => {
-                            if (d.success && d.data) {
-                                processFilament(id, d.data);
-                            } else {
-                                processFilament(id); // Fallback to raw ID
-                            }
-                        });
+    if (!window.SearchEngine) return;
+    window.SearchEngine.open({
+        mode: 'select',
+        type: 'filament',
+        prompts: {
+            filament: 'Pick a filament to use it in the form.',
+            spool: 'Pick a spool to use its filament in the form.',
+        },
+        callback: (id, type) => {
+            const ask = ++_wizAdvancedPick;
+            const session = wizardState.session;
+            const mode = wizardState.mode;
+            const current = () => ask === _wizAdvancedPick && wizardState.session === session && wizardState.mode === mode;
+            const statusEl = () => document.getElementById('wiz-status-msg');
+            const say = (words) => {
+                const el = statusEl();
+                if (el) el.innerHTML = `<span class="text-warning">${_wizEscape(words)}</span>`;
+                if (window.showToast) window.showToast(words, 'warning', 7000);
+            };
+            const processFilament = (filId, filData = null) => {
+                wizardState.selectedFilamentId = filId;
+                let text = `Filament #${filId}`;
+                if (filData) {
+                    const vendor = filData.vendor ? filData.vendor.name : 'Generic';
+                    const mat = filData.material || 'Unknown';
+                    const name = filData.name || 'Unnamed';
+                    text = `${vendor} ${mat} - ${name} (ID: ${filId})`;
                 }
+                const el = statusEl();
+                if (el) el.innerHTML = `Selected via Advanced Search: <strong>${_wizEscape(text)}</strong>`;
+                // Spoof the native select box so the UI knows (its words as text).
+                const sel = document.getElementById('wiz-existing-results');
+                if (sel) sel.replaceChildren(new Option(text, String(filId), true, true));
+                wizardValidateSubmit();
+                // Group 54 review (R2-1, R2-3): the spool's boxes follow the pick.
+                window.wizardFollowFilament(filData);
+            };
+            if (type === 'spool') {
+                const refused = () => say(`Couldn't read spool #${id}'s filament from Spoolman, so nothing was picked. `
+                    + 'Pick it again in a moment, or pick its filament.');
+                fetch(`/api/spools/${encodeURIComponent(id)}`)
+                    .then(r => r.json())
+                    .then(d => {
+                        if (!current()) return;
+                        const sp = d && d.success ? d.data : null;
+                        if (sp && String(sp.id) === String(id) && sp.filament && sp.filament.id != null) {
+                            processFilament(sp.filament.id, sp.filament);
+                        } else {
+                            refused();
+                        }
+                    })
+                    .catch(() => { if (current()) refused(); });
+            } else {
+                const unread = () => {
+                    processFilament(id);
+                    say(`Picked filament #${id}, but FCC couldn't read its details just now, `
+                        + 'so its name isn\'t shown and nothing is filled in from it.');
+                };
+                fetch(`/api/filaments/${encodeURIComponent(id)}`)
+                    .then(r => r.json())
+                    .then(d => {
+                        if (!current()) return;
+                        const f = d && d.success ? d.data : null;
+                        if (f && String(f.id) === String(id)) processFilament(id, f);
+                        else unread();
+                    })
+                    .catch(() => { if (current()) unread(); });
             }
-        });
-    }
+        },
+    });
 };
 
 // --- EXTERNAL DATABASE LOGIC ---
