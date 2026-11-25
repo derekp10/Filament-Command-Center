@@ -2290,6 +2290,10 @@ const _askArchiveEmptyWeight = async (spoolId, filamentId, prefillWeight = null,
                 const vd = await vr.json();
                 if (vr.ok && vd && vd.success) {
                     showToast(`Saved ${n}g on Filament #${fil.id} and as ${vendorName}'s default.`, 'success');
+                    // Group 66.1: every open window hears of the vendor's new weight.
+                    document.dispatchEvent(new CustomEvent('vendor:updated', { detail: {
+                        id: String(vendorId),
+                        vendor: vd.vendor || Object.assign({}, fil.vendor || {}, { empty_spool_weight: n }) } }));
                 } else {
                     showToast(`Filament saved; ${vendorName} default failed: ${(vd && (vd.error || vd.msg)) || 'error'}`, 'warning', 7000);
                 }
@@ -2462,13 +2466,21 @@ const _editfilOpenModal = (fil) => {
         rawSaveBtn.dataset.mode = isCreate ? 'create' : 'edit';
     }
 
-    // Vendor empty_spool_weight hint (shown as small muted text next to the label).
-    const vendorWt = fil.vendor && fil.vendor.empty_spool_weight
-        ? Number(fil.vendor.empty_spool_weight) : null;
+    // What comes from the vendor the box holds (Group 66.1): the "(vendor: N g)" hint, the
+    // box's placeholder, and the <EmptyWeightField> binding's vendor (Use Vendor, and a
+    // box that only shows what it inherits). Drawn at the open, and again whenever the
+    // vendor the box holds changes or is saved: it was drawn once, from the filament as it
+    // opened, so a weight saved in the vendor editor (or a vendor picked) never reached it.
     const vendorWtHint = document.getElementById('editfil-vendor-wt-hint');
-    if (vendorWtHint) vendorWtHint.innerText = vendorWt ? `(vendor: ${vendorWt}g)` : '';
     const spoolWtEl = document.getElementById('editfil-spool-weight');
-    if (spoolWtEl) spoolWtEl.placeholder = vendorWt ? String(vendorWt) : '';
+    let emptyField = null;   // the binding below
+    const drawVendorWeight = (v) => {
+        const w = v && v.empty_spool_weight ? Number(v.empty_spool_weight) : null;
+        if (vendorWtHint) vendorWtHint.innerText = w ? `(vendor: ${w}g)` : '';
+        if (spoolWtEl) spoolWtEl.placeholder = w ? String(w) : '';
+        if (emptyField) emptyField.setVendor(v || null);
+    };
+    drawVendorWeight(fil.vendor || null);
 
     // Reset any prior error banner + default-tab selection.
     const errEl = document.getElementById('editfil-error');
@@ -2659,12 +2671,23 @@ const _editfilOpenModal = (fil) => {
     //     onInput: () => void,                          // called on any keystroke
     //     newHintText: (typed) => 'Press Enter to add "<typed>"' | null
     //   }
-    const bindComboDropdown = (opts) => {
-        const input = document.getElementById(opts.inputId);
-        const dropdown = document.getElementById(opts.dropdownId);
+    // Group 66.1: bound ONCE per box. The window is reused, and each open added its four
+    // listeners again, each closing over that open's list: after a second open one
+    // ArrowDown moved the highlight twice, and a keyboard pick ran the FIRST open's onSelect
+    // against the first open's list (a vendor created since read as new, and Save made it
+    // again). Now the box keeps one set of listeners, which read the latest open's opts.
+    // `preferValue()`: with no row highlighted, Enter picks the row of that value when the
+    // list shows it (the vendor the box holds, under a name two vendors share), else the first.
+    const bindComboDropdown = (newOpts) => {
+        const input = document.getElementById(newOpts.inputId);
+        const dropdown = document.getElementById(newOpts.dropdownId);
         if (!input || !dropdown) return;
+        if (input.__fccEditfilCombo) { input.__fccEditfilCombo.opts = newOpts; return; }
+        const combo = { opts: newOpts };
+        input.__fccEditfilCombo = combo;
 
         const render = () => {
+            const opts = combo.opts;
             const qs = (input.value || '').toLowerCase();
             const items = opts.getItems() || [];
             const filtered = qs
@@ -2693,12 +2716,13 @@ const _editfilOpenModal = (fil) => {
         input.addEventListener('focus', render);
         input.addEventListener('input', () => {
             render();
-            if (opts.onInput) opts.onInput();
+            if (combo.opts.onInput) combo.opts.onInput();
         });
         input.addEventListener('blur', () => {
             setTimeout(() => { dropdown.style.display = 'none'; }, 150);
         });
         input.addEventListener('keydown', (e) => {
+            const opts = combo.opts;
             const visible = dropdown.style.display !== 'none';
             if (e.key === 'Escape' && visible) {
                 // Swallow Escape when the dropdown is open so it closes the
@@ -2724,7 +2748,10 @@ const _editfilOpenModal = (fil) => {
                 items[idx].scrollIntoView({ block: 'nearest' });
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                const target = items.find(el => el.classList.contains('active')) || items[0];
+                const prefer = typeof opts.preferValue === 'function' ? String(opts.preferValue() || '') : '';
+                const target = items.find(el => el.classList.contains('active'))
+                    || (prefer && items.find(el => el.dataset.value === prefer))
+                    || items[0];
                 if (target && target.dataset.value !== undefined) {
                     input.value = target.dataset.label;
                     if (opts.onSelect) opts.onSelect({ value: target.dataset.value, label: target.dataset.label });
@@ -2767,7 +2794,17 @@ const _editfilOpenModal = (fil) => {
     }).catch(() => {});
 
     // --- Vendor combobox + hidden id + "+ NEW" badge ---
+    // Group 66.1: the box keeps the vendor it holds BY ITS ID while its text is that vendor's
+    // name (it looked the text up by name, first in list order, so a filament on Derek's
+    // Sunlu #35 moved onto Sunlu #4 at any Save); a name is looked up only for typed text,
+    // the filament's own vendor first, else the lowest id; "+ NEW" only once the list was
+    // read (a list FCC couldn't read is no "no such vendor"). The filament's own vendor is a
+    // known record even when the list lacks it. Names compare as the server does
+    // (spoolman_api.vendor_name_key: trimmed, inner spaces made one, any case).
     let vendorCache = [];
+    let vendorsRead = false;
+    let vendorReadSeq = 0;      // the newest list read wins
+    const vendorKey = (s) => String(s == null ? '' : s).split(/\s+/).filter(Boolean).join(' ').toLowerCase();
     const vendorNameEl = document.getElementById('editfil-vendor-name');
     const vendorIdEl = document.getElementById('editfil-vendor-id');
     const vendorNewBadge = document.getElementById('editfil-vendor-new-badge');
@@ -2784,7 +2821,16 @@ const _editfilOpenModal = (fil) => {
             if (vendorEditBtn) vendorEditBtn.style.display = 'none';
             return;
         }
-        const match = vendorCache.find(v => (v.name || '').toLowerCase() === typed.toLowerCase());
+        const own = fil.vendor && fil.vendor.id != null ? fil.vendor : null;
+        const candidates = vendorCache.slice();
+        if (own && !candidates.some(v => String(v.id) === String(own.id))) candidates.push(own);
+        const held = vendorIdEl.value;
+        let match = held ? candidates.find(v => String(v.id) === held && vendorKey(v.name) === vendorKey(typed)) : null;
+        if (!match) {
+            const hits = candidates.filter(v => vendorKey(v.name) === vendorKey(typed));
+            match = (own && hits.find(v => String(v.id) === String(own.id)))
+                || hits.reduce((low, v) => (!low || Number(v.id) < Number(low.id) ? v : low), null);
+        }
         if (match) {
             vendorIdEl.value = String(match.id);
             vendorNewBadge.style.display = 'none';
@@ -2810,11 +2856,15 @@ const _editfilOpenModal = (fil) => {
                 vendorInfoPill.title = [tooltip, ...extraLines].join('\n');
                 vendorInfoPill.style.display = 'inline-block';
             }
+            drawVendorWeight(match);
         } else {
             vendorIdEl.value = '';
-            vendorNewBadge.style.display = 'inline-block';
+            // Unread, FCC can't tell a new name from a known one: no "+ NEW", and the box
+            // is left as it is until the list says (the grounding's C1).
+            vendorNewBadge.style.display = vendorsRead ? 'inline-block' : 'none';
             if (vendorInfoPill) vendorInfoPill.style.display = 'none';
             if (vendorEditBtn) vendorEditBtn.style.display = 'none';
+            if (vendorsRead) drawVendorWeight(null);
         }
     };
     bindComboDropdown({
@@ -2830,22 +2880,43 @@ const _editfilOpenModal = (fil) => {
             refreshVendorBadge();
         },
         onInput: () => refreshVendorBadge(),
+        preferValue: () => vendorIdEl.value,
         newHintText: (typed) => {
             const t = (typed || '').trim();
-            if (!t) return null;
-            if (vendorCache.some(v => (v.name || '').toLowerCase() === t.toLowerCase())) return null;
+            if (!t || !vendorsRead) return null;
+            if (vendorCache.some(v => vendorKey(v.name) === vendorKey(t))) return null;
             return `+ Create vendor "${t}"`;
         },
     });
-    fetch('/api/vendors').then(r => r.json()).then(d => {
-        if (!d || !d.success) return;
-        // Code, not the person (Group 66.8): a box this read redraws (the vendor's
-        // hidden id, which a list holding two vendors of one name moved) is no edit.
+    // The vendor list, read at the open and again after a vendor is saved: the newest read
+    // sent wins; one FCC couldn't read leaves the list (and the vendor held) as they were.
+    // Code, not the person (Group 66.8): a box it redraws is no edit.
+    const readVendors = () => {
+        const seq = ++vendorReadSeq;
+        return fetch('/api/vendors').then(r => r.json()).then(d => {
+            if (seq !== vendorReadSeq || !d || !d.success || !Array.isArray(d.vendors)) return;
+            session.codeSet(() => {
+                vendorCache = d.vendors;
+                vendorsRead = true;
+                refreshVendorBadge();
+            });
+        }).catch(() => {});
+    };
+    readVendors();
+    // A vendor saved (or created) over the window: the list takes its record at once, the
+    // name box its new name when it holds that vendor, and what comes from it is redrawn;
+    // then the list is read again. Through codeSet: a redraw by code is no edit.
+    session.onVendorSaved = (v) => {
+        if (!v || v.id == null) return;
         session.codeSet(() => {
-            vendorCache = d.vendors || [];
+            const i = vendorCache.findIndex(x => String(x.id) === String(v.id));
+            if (i >= 0) vendorCache[i] = v; else vendorCache.push(v);
+            if (fil.vendor && String(fil.vendor.id) === String(v.id)) fil.vendor = Object.assign({}, fil.vendor, v);
+            if (vendorIdEl.value === String(v.id) && v.name) vendorNameEl.value = v.name;
             refreshVendorBadge();
         });
-    }).catch(() => {});
+        readVendors();
+    };
 
     // --- Empty-Spool-Wt: bind <EmptyWeightField> on the Specs tab ---
     // Phase 2 (Group 12): the input + copy-vendor affordance is now owned by
@@ -2854,11 +2925,16 @@ const _editfilOpenModal = (fil) => {
     // semantics) and routes the "⇩ Copy Vendor Weight" click through the
     // component's `copyVendorBtn` handle. Idempotent — re-opening this modal
     // replaces prior listeners cleanly.
+    // Group 66.7: with its "↩ from vendor" badge (Derek's D2 (a)), and kept as emptyField:
+    // Save leaves out a weight the box only inherits, and the vendor's redraw reaches it.
     if (typeof window.bindEmptyWeightField === 'function' && spoolWtEl) {
         const field = window.bindEmptyWeightField({
             input: spoolWtEl,
             copyVendorBtn: document.getElementById('editfil-copy-vendor-wt'),
+            badge: document.getElementById('editfil-spool-weight-inherited-badge'),
+            sourceLabel: document.getElementById('editfil-spool-weight-inherited-source'),
         });
+        emptyField = field;
         if (field) {
             field.setFromCascade({
                 spoolWt: fil.spool_weight,
@@ -3182,6 +3258,9 @@ const _editfilOpenModal = (fil) => {
                 else if (v !== '' && v != null) cleanExtras[k] = `"${String(v)}"`;
             }
             payload = { ...data };
+            // Group 66.7 (the grounding's C15): a new filament inherits its vendor's weight;
+            // the box shows it (a picked vendor draws it), and the create leaves it out.
+            if (emptyField && emptyField.inherited()) delete payload.spool_weight;
             if (Object.keys(cleanExtras).length > 0) payload.extra = cleanExtras;
         } else {
             const same = (a, b) => {
@@ -3241,7 +3320,11 @@ const _editfilOpenModal = (fil) => {
                 if (wasMulti) changed.multi_color_hexes = '';
                 if (oldDir) changed.multi_color_direction = null;
             }
-            if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
+            // Group 66.7: a weight the box only inherits (the vendor's, untouched) is not
+            // the filament's own: it was written at EVERY Save, whatever was edited.
+            if (!(emptyField && emptyField.inherited()) && !same(data.spool_weight, fil.spool_weight)) {
+                changed.spool_weight = data.spool_weight;
+            }
             if (!same(data.density, fil.density)) changed.density = data.density;
             if (!same(data.diameter, fil.diameter)) changed.diameter = data.diameter;
             if (!same(data.weight, fil.weight)) changed.weight = data.weight;
@@ -3310,6 +3393,9 @@ const _editfilOpenModal = (fil) => {
                 slicerPendingNew = null;
             }
 
+            // Group 66.1: a name another vendor has is refused by the server (409, with the
+            // vendor it names): Save uses that vendor, and its toast says so.
+            let usedExisting = null;
             if (pendingNewVendorName) {
                 const vr = await fetch('/api/vendors', {
                     method: 'POST',
@@ -3319,6 +3405,17 @@ const _editfilOpenModal = (fil) => {
                 const vd = await vr.json();
                 if (vd && vd.success && vd.vendor && vd.vendor.id != null) {
                     payload.vendor_id = Number(vd.vendor.id);
+                } else if (vr.status === 409 && vd && vd.existing && vd.existing.id != null) {
+                    usedExisting = vd.existing;
+                    payload.vendor_id = Number(vd.existing.id);
+                    if (!isCreate && fil.vendor && String(fil.vendor.id) === String(vd.existing.id)) {
+                        delete payload.vendor_id;
+                        if (Object.keys(payload).length === 0) {
+                            showToast(`No changes to save: ${vd.existing.name} (#${vd.existing.id}) is this filament's manufacturer already.`, 'info', 4000);
+                            session.closeUnasked();
+                            return;
+                        }
+                    }
                 } else {
                     showErr(`Couldn't create vendor "${pendingNewVendorName}": ${(vd && vd.msg) || 'unknown'}`, 'editfil-tab-basic-btn');
                     return;
@@ -3335,7 +3432,12 @@ const _editfilOpenModal = (fil) => {
             const d = await r.json();
             if (d && d.success) {
                 const newId = (d.filament && d.filament.id) || (isCreate ? '?' : fil.id);
-                showToast(isCreate ? `Filament #${newId} created.` : `Filament #${fil.id} updated.`, 'success');
+                const done = isCreate ? `Filament #${newId} created` : `Filament #${fil.id} updated`;
+                if (usedExisting) {
+                    showToast(`${done}; used the existing manufacturer ${usedExisting.name} (#${usedExisting.id}).`, 'success', 7000);
+                } else {
+                    showToast(`${done}.`, 'success');
+                }
                 // A field the edit cleared that Spoolman still holds (2026-10-21).
                 if (d.warning) showToast(d.warning, 'warning', 7000);
                 if (window.refreshFilamentSpools) window.refreshFilamentSpools();
@@ -4370,26 +4472,27 @@ document.addEventListener('vendor:updated', (e) => {
     const brandEl = document.getElementById('fil-detail-vendor');
     if (brandEl && brandEl.dataset.vendorId === String(vid) && v) {
         brandEl.innerText = v.name || brandEl.innerText;
-    }
-
-    // Edit Filament modal — only act when it's actually open, otherwise we'd
-    // touch stale DOM left over from a previous edit session.
-    const editModal = document.getElementById('editFilamentModal');
-    if (editModal && editModal.classList.contains('show') && v) {
-        const nameInput = document.getElementById('editfil-vendor-name');
-        const idInput = document.getElementById('editfil-vendor-id');
-        if (nameInput && idInput && idInput.value === String(vid)) {
-            // Code, not the person (Group 66.8): a vendor saved over the window is no
-            // edit of this form, so its close asks nothing for it.
-            const write = () => {
-                nameInput.value = v.name || nameInput.value;
-                // Fire input event so bindComboDropdown's onInput handler
-                // re-runs refreshVendorBadge → re-renders the info pill.
-                nameInput.dispatchEvent(new Event('input', { bubbles: true }));
-            };
-            if (_editfilSession) _editfilSession.codeSet(write); else write();
+        // Group 66.1: the filament window reads its filament again, quietly, so what comes
+        // from the vendor (its "↩ vendor" empty weight, the backfill offer) is current.
+        const filModal = document.getElementById('filamentModal');
+        const fid = (document.getElementById('fil-detail-id') || {}).innerText;
+        if (filModal && filModal.classList.contains('show') && fid && typeof openFilamentDetails === 'function') {
+            if (typeof state !== 'undefined') { state.lastFilamentInfoHash = null; state.lastFilamentSpoolsHash = null; }
+            openFilamentDetails(fid, true);
         }
     }
+    _editfilVendorSaved(v);
+});
+
+// Group 66.1: a vendor saved or created reaches an open Edit Filament (its session redraws
+// what comes from the vendor, as code; _editfilOpenModal sets session.onVendorSaved).
+const _editfilVendorSaved = (v) => {
+    const editModal = document.getElementById('editFilamentModal');
+    if (!v || !editModal || !editModal.classList.contains('show')) return;
+    if (_editfilSession && typeof _editfilSession.onVendorSaved === 'function') _editfilSession.onVendorSaved(v);
+};
+document.addEventListener('vendor:created', (e) => {
+    _editfilVendorSaved(e && e.detail ? e.detail.vendor : null);
 });
 
 

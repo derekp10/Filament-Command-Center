@@ -494,6 +494,13 @@
                                 <label class="form-label text-light small mb-1">
                                     Empty Spool Wt (g)
                                     <span id="editfil-vendor-wt-hint" class="small" style="color:#ffc97a;"></span>
+                                    <!-- Group 66.7 (Derek's D2 (a), 2026-11-24): the box shows the
+                                         manufacturer's weight, this filament having none of its own;
+                                         Save keeps it that way (the wizard's spool badge's look). -->
+                                    <span id="editfil-spool-weight-inherited-badge"
+                                        class="badge bg-info-subtle text-info-emphasis ms-1"
+                                        style="display: none; font-size: var(--fcc-fs-label); font-weight: normal;"
+                                        title="The manufacturer's empty weight: this filament has none of its own, and saving keeps it that way. Type a weight to give the filament its own.">↩ from <span id="editfil-spool-weight-inherited-source">vendor</span></span>
                                 </label>
                                 <div class="input-group">
                                     <input type="number" step="0.1" id="editfil-spool-weight" class="form-control bg-black text-white border-secondary" autocomplete="off">

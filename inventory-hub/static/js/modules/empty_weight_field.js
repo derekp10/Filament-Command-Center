@@ -14,6 +14,23 @@
 // prompt surfaces — each one has a different containing form, but the
 // inheritance / badge / copy-vendor behavior is identical.
 //
+// Group 66.1 / 66.7: it also knows whether the box shows a value it only
+// inherits. It remembers what its last draw put in the box (`drawn`: the source
+// and the text) and whether a person changed it since (`touched`: their input, Use
+// Vendor, setValue; and a box whose text no longer is the drawn text, which catches
+// code that writes .value directly):
+//   - inherited(): 'filament' / 'vendor' while the box still shows what it inherits,
+//     untouched; else null. A caller's Save leaves such a value out: it is the
+//     filament's (or the vendor's), not this record's own (66.7: Edit Filament wrote
+//     its vendor's weight as the filament's own at EVERY Save).
+//   - setVendor(v): the vendor this record has now (66.1: a vendor saved or picked
+//     while the window is open). Use Vendor follows it, and an untouched box that
+//     shows what it inherits (or nothing) is drawn again from it; an own value, a
+//     typed one and Use Vendor's stay. It fires no input and no onChange (code, not
+//     the person).
+//   - source(): what the last draw showed ('spool' = the record's own, 'filament',
+//     'vendor', or null), and isTouched().
+//
 // Usage:
 //   const field = window.bindEmptyWeightField({
 //     input: document.getElementById('wiz-spool-empty_weight'),
@@ -47,6 +64,9 @@
         if (prior && typeof prior._teardown === 'function') prior._teardown();
 
         let cachedVendor = null;  // remembered for the Copy-Vendor button
+        let cascade = null;       // the {spoolWt, filamentWt} last given to setFromCascade
+        let drawn = { source: null, text: input.value };   // what the last draw put in the box
+        let touched = false;      // a person's input, Use Vendor or setValue since the last draw
 
         const showBadge = (source) => {
             if (!badge) return;
@@ -60,20 +80,40 @@
 
         const clearBadge = () => { if (badge) badge.style.display = 'none'; };
 
-        const setFromCascade = (cascade = {}) => {
-            cachedVendor = cascade.vendor || null;
+        // Draw the box from the cascade and the vendor it has now.
+        const draw = () => {
             const { value, source } = window.resolveEmptySpoolWeightSource({
-                spoolWt: cascade.spoolWt,
-                filamentWt: cascade.filamentWt,
-                vendor: cascade.vendor,
+                spoolWt: cascade ? cascade.spoolWt : null,
+                filamentWt: cascade ? cascade.filamentWt : null,
+                vendor: cachedVendor,
             });
             input.value = (value !== null && value !== undefined) ? value : '';
-            showBadge(source);
+            drawn = { source: input.value === '' ? null : source, text: input.value };
+            touched = false;
+            showBadge(drawn.source);
+        };
+
+        const setFromCascade = (c = {}) => {
+            cachedVendor = c.vendor || null;
+            cascade = { spoolWt: c.spoolWt, filamentWt: c.filamentWt };
+            draw();
             updateCopyVendorEnabled();
+        };
+
+        const isTouched = () => touched || input.value !== drawn.text;
+
+        const inherited = () => (!isTouched() && (drawn.source === 'filament' || drawn.source === 'vendor'))
+            ? drawn.source : null;
+
+        const setVendor = (v) => {
+            cachedVendor = v || null;
+            updateCopyVendorEnabled();
+            if (cascade && !isTouched() && drawn.source !== 'spool') draw();
         };
 
         const setValue = (v) => {
             input.value = (v === null || v === undefined) ? '' : v;
+            touched = true;
             clearBadge();
         };
 
@@ -94,6 +134,7 @@
         };
 
         const onInput = () => {
+            touched = true;
             clearBadge();
             if (typeof onChange === 'function') onChange(input.value);
         };
@@ -102,6 +143,7 @@
         const onCopyVendor = () => {
             if (!cachedVendor || !cachedVendor.empty_spool_weight) return;
             input.value = cachedVendor.empty_spool_weight;
+            touched = true;
             clearBadge();
             if (typeof onChange === 'function') onChange(input.value);
         };
@@ -115,6 +157,10 @@
         const handle = {
             setFromCascade,
             setValue,
+            setVendor,
+            inherited,
+            isTouched,
+            source: () => drawn.source,
             getValue: () => input.value,
             clearBadge,
             focus: () => input.focus(),
@@ -126,4 +172,10 @@
     }
 
     window.bindEmptyWeightField = bindEmptyWeightField;
+    // The binding on a box (a test seam, and a reader outside the binder's closure).
+    // Read at run time only (the load-order canary).
+    window.emptyWeightFieldOf = (el) => {
+        const box = typeof el === 'string' ? document.getElementById(el) : el;
+        return (box && box[HANDLE_KEY]) || null;
+    };
 })();
