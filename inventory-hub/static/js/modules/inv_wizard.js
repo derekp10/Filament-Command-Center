@@ -5109,6 +5109,8 @@ const _wizardSubmitInner = async () => {
             // Group 64 review (S3): the box shows what this Save wrote, so the next
             // Save in this session sends it only if it changes again.
             if (isWizardEdit && sameForm) wizardSavedUsed(usedBoxSent, usedAddSent, usedReadSent);
+            // Review round 1 (R4-02): the spool's link is saved; the row says so.
+            if (isWizardEdit && sameForm) window.wizardSettleLinkRow();
             if (isWizardEdit && data.location_moved) {
                 // Group 40.7: where the Location move put it, in short arrows.
                 const lr = data.location_result;
@@ -6061,7 +6063,15 @@ const _spoolRowClearBtnHtml = (row) => {
     return `<button type="button" class="btn btn-sm btn-link p-0 px-1 text-secondary wiz-row-clear-btn"
                     style="font-size: 1.1em; line-height: 1; ${display}"
                     title="Clear this row"
-                    onclick="window.wizardScanSpoolRow(${row.idx}, '')">✕</button>`;
+                    onclick="window.wizardClearSpoolRow(${row.idx})">✕</button>`;
+};
+
+// Review round 1 of Group 66 (R4-04, R3-08): ✕ empties the box as well. Its text stayed, so
+// the box's next blur (a Tab through the form) ran the whole scan, or link, again.
+window.wizardClearSpoolRow = (idx) => {
+    const input = document.querySelector(`[data-spool-row-idx="${idx}"] input[type='url']`);
+    if (input) input.value = '';
+    window.wizardScanSpoolRow(idx, '');
 };
 
 const _spoolRowSummaryHtml = () => {
@@ -6332,17 +6342,49 @@ const _wizLinkMismatch = (temp, sid) => {
     const say = `That QR is ${qrWhat}, and #${sid} is ${ourWhat}: scan #${sid}'s own QR.`;
     if (vendorName && _normalizeStr(vendorName) !== _normalizeStr(qrVendor)) return say;
     if (orig.material && temp.material && !_materialMatches(_normalizeStr(orig.material), _normalizeStr(temp.material))) return say;
-    const qrColor = _normalizeStr(temp.color_name);
-    const ourName = _normalizeStr(orig.name);
-    if (qrColor && ourName && !ourName.includes(qrColor) && !qrColor.includes(ourName)) return say;
+    // Colours by their words (review round 1 of Group 66, R4-06): Derek's Prusament filaments
+    // are named "Black (Galaxy Black)", and Prusament's page can say "Prusa Galaxy Black" or
+    // "Goldfish Orange"; neither text held the other, and the spool's own QR was refused.
+    // Every word of one is in the other (Prusa and Prusament left out), else a mismatch.
+    const words = (s) => String(s || '').toLowerCase().split(/[^a-z0-9]+/)
+        .filter((w) => w && w !== 'prusa' && w !== 'prusament');
+    const qrWords = words(temp.color_name);
+    const ourWords = words(orig.name);
+    const within = (a, b) => a.every((w) => b.includes(w));
+    if (qrWords.length && ourWords.length && !within(qrWords, ourWords) && !within(ourWords, qrWords)) return say;
     return '';
+};
+
+// Review round 1 of Group 66 (R4-02): once an Edit Spool Save lands, its link is the
+// spool's: the row says so, and its ✕ (or another scan) no longer puts back what the
+// boxes held before the link (that cleared the saved link at the next Save).
+window.wizardSettleLinkRow = () => {
+    if (wizardState.mode !== 'edit_spool') return;
+    const row = (wizardState.spoolRows || [])[0];
+    if (!row || row.status !== 'linked-new') return;
+    row.linkFills = [];
+    row.linkValue = '';
+    row.status = 'linked';
+    row.errorMsg = 'Linked to this QR';
+    row.linkNote = '';
+    window.wizardRenderSpoolRowBadge(0);
+    window.wizardRenderLinkNote();
+    window.wizardUpdateSubmitGate();
 };
 
 window.wizardLinkPrusament = async (idx, rawUrl) => {
     const row = wizardState.spoolRows[idx];
     if (!row) return;
     const url = String(rawUrl || '').trim();
-    _wizUndoLink(row);
+    // Review round 1 of Group 66: the row's text unchanged since its link (or its check on
+    // its way) is checked again for nothing (R5-01: a Tab through the row re-ran it, and a
+    // refusal then emptied the boxes the link filled; R4-03: two checks of one link raced).
+    if (url && row.url === url && ['linked', 'linked-new', 'pending'].includes(row.status)) return;
+    // Each check has its own token: only the newest may fill or record (R4-03).
+    const token = row.linkToken = (row.linkToken || 0) + 1;
+    // An earlier link's fills are put back only once this one is decided (R5-01): a ✕ (no
+    // text) now; a new link right before its own fills; a refusal leaves them as they were.
+    if (!url) _wizUndoLink(row);
     row.url = url;
     row.override = null;           // an edit never sends a spool override
     const done = (status, msg, note) => {
@@ -6366,11 +6408,13 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
     const sid = wizardState.editSpoolId;
     const session = wizardState.session;
     const stale = () => wizardState.session !== session || String(wizardState.editSpoolId) !== String(sid)
-        || wizardState.mode !== 'edit_spool' || row.url !== url;
+        || wizardState.mode !== 'edit_spool' || row.url !== url || row.linkToken !== token;
 
-    // The spool's own Product Link.
+    // The spool's own Product Link (not this row's own unsaved fill, which a new link
+    // replaces).
     const productBox = document.getElementById('wiz-spool-product_url');
-    const own = productBox ? productBox.value.trim() : '';
+    const shown = productBox ? productBox.value.trim() : '';
+    const own = row.linkValue && shown === row.linkValue ? '' : shown;
     if (own && _wizLinkHolds(own, pid, hash)) return done('linked', 'Already linked to this QR', '');
     if (own) {
         return done('refused', 'Its Product Link holds another link',
@@ -6381,7 +6425,7 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
     // Another spool holding this QR?
     let owners = null;
     try {
-        const r = await fetch(`/api/prusament/linked_spools?url=${encodeURIComponent(url)}`);
+        const r = await fetch(`/api/prusament/linked_spools?url=${encodeURIComponent(canonical)}`);
         const d = await r.json();
         if (stale()) return;
         if (d && d.success && Array.isArray(d.spools)) owners = d.spools.filter((s) => String(s.id) !== String(sid));
@@ -6393,13 +6437,15 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
     if (owners.length) {
         const o = owners[0];
         return done('refused', `Linked to #${o.id}`,
-            `That QR is already linked to ${o.display || '#' + o.id}${o.archived ? ' (archived)' : ''}. Scan #${sid}'s own QR.`);
+            `That QR is already linked to ${o.display || '#' + o.id}${o.archived ? ' (archived)' : ''}. If it is #${sid}'s, clear #${o.id}'s 📄 Product Link first (Edit Spool #${o.id}), then scan it here again.`);
     }
 
     // What Prusament says the spool is.
     let temp = null;
     try {
-        const r = await fetch(`/api/external/search?source=prusament&q=${encodeURIComponent(url)}`);
+        // The canonical link (review round 1, R4-05): Prusament's lookup reads a lower-case
+        // link only, and an upper-cased QR (Caps Lock, a scanner set so) was "couldn't read".
+        const r = await fetch(`/api/external/search?source=prusament&q=${encodeURIComponent(canonical)}`);
         const d = await r.json();
         if (stale()) return;
         temp = d && d.success && Array.isArray(d.results) ? d.results[0] || null : null;
@@ -6410,8 +6456,20 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
     }
     const mismatch = _wizLinkMismatch(temp, sid);
     if (mismatch) return done('refused', 'A different product', mismatch);
+    // Read again (review round 1, R4-07): a link typed into it while the checks were out is
+    // the person's, and the QR links nothing then (it filled the other boxes, and said
+    // "Links at Save").
+    const nowShown = productBox ? productBox.value.trim() : '';
+    const nowOwn = row.linkValue && nowShown === row.linkValue ? '' : nowShown;
+    if (nowOwn && _wizLinkHolds(nowOwn, pid, hash)) return done('linked', 'Already linked to this QR', '');
+    if (nowOwn) {
+        return done('refused', 'Its Product Link holds another link',
+            `#${sid}'s 📄 Product Link holds another link. Clear it first if this QR is #${sid}'s.`);
+    }
 
-    // Link: the QR's own link, and the spool's blank Prusament details, as if typed.
+    // Link: the QR's own link, and the spool's blank Prusament details, as if typed. An
+    // earlier link of this row goes first (its boxes back as they were).
+    _wizUndoLink(row);
     const o = window.extractSpoolFieldsFromTemplate(temp) || {};
     const ex = o.extra || {};
     const unq = (v) => String(v == null ? '' : v).replace(/^"|"$/g, '');
