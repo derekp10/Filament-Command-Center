@@ -323,6 +323,9 @@ window.wizardSetFilEmptyWeightInherited = (value, source) => {
         if (box.value !== '' || (box.validity && box.validity.badInput)) return;
         box.value = before;
         try { box.select(); } catch (_) { /* a box that can't select keeps its caret */ }
+        // The key journal's input phase for this key ends here: nothing after this hears
+        // the event (review round 3 of Group 66, R3-01).
+        if (window.wizardKeyInputStopped) window.wizardKeyInputStopped();
         e.stopImmediatePropagation();
     }, true);
 })();
@@ -1164,12 +1167,12 @@ window.wizardFollowFilament = (record = null) => {
     _wizFollowApply(null);
     fetch(`/api/filaments/${encodeURIComponent(id)}`)
         .then(r => r.json())
-        .then(d => {
+        .then(d => window.wizardAfterLabel(() => {
             // Only while it is still the filament Save will use, in this session.
             if (!wizardState.spoolBoxesFollowFilament || wizardState.mode !== 'existing'
                 || String(wizardState.selectedFilamentId) !== String(id)) return;
             if (d && d.success && d.data && String(d.data.id) === String(id)) _wizFollowApply(d.data);
-        })
+        }))
         .catch(() => {});
 };
 
@@ -2127,7 +2130,53 @@ const WIZ_KEY_JOURNAL_MAX = 400;
 let _wizKeyJournal = [];
 let _wizKeySeq = 0;
 let _wizKeyDown = null;     // { rec, target, img }: a key whose keydown is being journaled
+let _wizKeyInput = null;    // { rec, target, img }: that key's text going into its box
 let _wizKeyUp = null;       // { rec, target, img }: a keyup being journaled
+
+// --- AN ANSWER WAITS WHILE A LABEL ARRIVES (review round 3 of Group 66) ---
+// The journal puts back what a label's keys changed, but an answer landing while the label
+// was in a box still went wrong: it worked things out from the box (Scale Gross holding the
+// label's digit: Total Used from it, and Create made the spool empty, R3-02), its write into
+// the box being scanned was put back with the box (R3-03), and one queued inside a key's
+// record was undone as that key's (R3-01). So the wizard's answers that fill its form (the
+// Prusament lookups, the filament follow, the vendor, location and extra-field lists, the
+// global search's pick) wait while keys are arriving in one of its boxes: a key in the last
+// 300 ms, or a ':' or '/' typed within 2 s with no Enter, Tab or scan since (a scanner can
+// stall inside a label), and 2.5 s at most. A label's scan, an Enter, a Tab, Escape or a
+// click away ends the wait, and the answer fills the form as the label left it.
+const WIZ_KEYS_QUIET_MS = 300;
+const WIZ_LABEL_STALL_MS = 2000;
+const WIZ_ANSWER_WAIT_MAX_MS = 2500;
+const _wizNow = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+let _wizKeysAt = 0;         // when the last key was typed into a wizard box (0: none since the last end)
+let _wizKeysText = '';      // the keys typed since then
+const _wizKeysDone = () => { _wizKeysAt = 0; _wizKeysText = ''; };
+const _wizNoteKey = (key) => {
+    if (key === 'Enter' || key === 'Tab' || key === 'Escape') { _wizKeysDone(); return; }
+    if (typeof key !== 'string' || key.length !== 1) return;
+    const now = _wizNow();
+    if (!_wizKeysAt || now - _wizKeysAt > WIZ_LABEL_STALL_MS) _wizKeysText = '';
+    _wizKeysText += key;
+    _wizKeysAt = now;
+};
+window.wizardLabelArriving = () => {
+    if (!_wizKeysAt) return false;
+    const since = _wizNow() - _wizKeysAt;
+    if (since < WIZ_KEYS_QUIET_MS) return true;
+    return since < WIZ_LABEL_STALL_MS && /[:/]/.test(_wizKeysText);
+};
+// Runs fn once no label is arriving (now, when none is), and answers what it answers.
+window.wizardAfterLabel = (fn) => new Promise((resolve, reject) => {
+    const started = _wizNow();
+    const go = () => {
+        if (window.wizardLabelArriving() && _wizNow() - started < WIZ_ANSWER_WAIT_MAX_MS) {
+            setTimeout(go, 50);
+            return;
+        }
+        try { resolve(typeof fn === 'function' ? fn() : undefined); } catch (err) { reject(err); }
+    };
+    go();
+});
 const _wizScanDiff = (rec, a, b) => {
     a.forEach((was, id) => {
         const now = b.get(id);
@@ -2145,14 +2194,24 @@ const _wizKeyDownEnd = () => {
     _wizKeyDown = null;
     if (o) _wizScanDiff(o.rec, o.img, _wizScanImage(o.target));
 };
+const _wizKeyInputEnd = () => {
+    const o = _wizKeyInput;
+    _wizKeyInput = null;
+    if (o) _wizScanDiff(o.rec, o.img, _wizScanImage(o.target));
+};
+// Group 54 review R2-2's guard stops a rejected key's `input` before the window hears it, so it
+// ends that key's input phase itself (review round 3, R3-01).
+window.wizardKeyInputStopped = () => _wizKeyInputEnd();
 // The capture's snapshot hook: where the label's first key is in the journal (the
 // record that key is about to open).
 window.wizardScanSnapshot = (el = null) => ({ seq: _wizKeySeq, el });
 // Undoes what the keys from the snapshot's on changed, the last key first, each thing
 // only while it holds what that key left it.
 window.wizardScanRestore = (snap) => {
+    _wizKeysDone();             // the label has ended: an answer waiting for it goes on
     if (!snap || typeof snap.seq !== 'number') return;
     _wizKeyDownEnd();
+    _wizKeyInputEnd();
     let rows = false;
     const recs = _wizKeyJournal.filter((r) => r.seq >= snap.seq);
     for (let i = recs.length - 1; i >= 0; i--) {
@@ -2242,22 +2301,55 @@ window.wizardTookScan = (text, el, info) => {
     // which the capture takes, opens no record, and the snapshot the capture asked for at
     // this key names the record this key opens.
     const MODIFIERS = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock', 'AltGraph'];
+    // The window hears an event last, in the bubble phase (a page with no window events,
+    // the node harnesses' stub: the document).
+    const lastNode = typeof window.addEventListener === 'function' ? window : document;
+    let keyRec = null;          // { rec, target }: the key being typed now, until its keyup
     document.addEventListener('keydown', (e) => {
         if (!match(e.target) || MODIFIERS.includes(e.key)) return;
+        _wizNoteKey(e.key);
         _wizKeyDownEnd();
+        _wizKeyInputEnd();
         const rec = { seq: _wizKeySeq++, changes: [] };
         _wizKeyJournal.push(rec);
         if (_wizKeyJournal.length > WIZ_KEY_JOURNAL_MAX) _wizKeyJournal.splice(0, _wizKeyJournal.length - WIZ_KEY_JOURNAL_MAX);
+        keyRec = { rec, target: e.target };
         const open = { rec, target: e.target, img: _wizScanImage(e.target) };
         _wizKeyDown = open;
-        // A key the box took nothing from fires no `input`: what its keydown did ends with
-        // this task, before an answer can land.
+        // Only for a keydown whose dispatch a handler stopped before the window heard it.
         setTimeout(() => { if (_wizKeyDown === open) _wizKeyDownEnd(); }, 0);
     }, true);
-    // The key's own `input`, once every listener has heard it (the window hears it last;
-    // a page with no window events, the node harnesses' stub, the document).
-    const lastNode = typeof window.addEventListener === 'function' ? window : document;
+    // What a key's keydown did ends with its own dispatch, once every listener has heard it
+    // (review round 3, R3-01: it ended at a 0 ms timer for a key the box took nothing from,
+    // and an answer queued meanwhile was journaled as that key's, and undone).
+    lastNode.addEventListener('keydown', (e) => {
+        if (_wizKeyDown && e.target === _wizKeyDown.target) _wizKeyDownEnd();
+    });
+    // The key's text going into its box: a phase of its own, from its beforeinput (heard
+    // first here) to its input (heard last), into the key's record. A real keyboard can
+    // deliver it in a task of its own; anything that lands between the two isn't the key's.
+    lastNode.addEventListener('beforeinput', (e) => {
+        if (!keyRec || e.target !== keyRec.target) return;
+        _wizKeyDownEnd();
+        _wizKeyInputEnd();
+        const open = { rec: keyRec.rec, target: e.target, img: _wizScanImage(e.target) };
+        _wizKeyInput = open;
+        setTimeout(() => { if (_wizKeyInput === open) _wizKeyInputEnd(); }, 0);
+    }, true);
+    // An `input` with no beforeinput before it (a key sent by a script, which fires none)
+    // opens the phase as it starts, before any listener of the page has heard it: the box's
+    // own text has changed by then (the scan capture puts that box back itself), what the
+    // page's listeners do (the changed flag, the post-create lock, the touched sets) is
+    // still the key's.
     lastNode.addEventListener('input', (e) => {
+        if (_wizKeyInput || !keyRec || e.target !== keyRec.target) return;
+        _wizKeyDownEnd();
+        const open = { rec: keyRec.rec, target: e.target, img: _wizScanImage(e.target) };
+        _wizKeyInput = open;
+        setTimeout(() => { if (_wizKeyInput === open) _wizKeyInputEnd(); }, 0);
+    }, true);
+    lastNode.addEventListener('input', (e) => {
+        if (_wizKeyInput && e.target === _wizKeyInput.target) _wizKeyInputEnd();
         if (_wizKeyDown && e.target === _wizKeyDown.target) _wizKeyDownEnd();
     });
     // A keyup's own listeners (the weight grid works its sums out on keyup), journaled
@@ -2265,14 +2357,18 @@ window.wizardTookScan = (text, el, info) => {
     document.addEventListener('keyup', (e) => {
         if (!match(e.target) || MODIFIERS.includes(e.key)) return;
         _wizKeyDownEnd();
+        _wizKeyInputEnd();
         const rec = _wizKeyJournal[_wizKeyJournal.length - 1];
         _wizKeyUp = rec ? { rec, target: e.target, img: _wizScanImage(e.target) } : null;
     }, true);
     lastNode.addEventListener('keyup', () => {
         const o = _wizKeyUp;
         _wizKeyUp = null;
+        keyRec = null;
         if (o) _wizScanDiff(o.rec, o.img, _wizScanImage(o.target));
     });
+    // A click away from the box ends a label's ':' rule (its keys went elsewhere).
+    document.addEventListener('focusout', (e) => { if (match(e.target)) _wizKeysText = ''; }, true);
 })();
 
 // --- DATA FETCHERS ---
@@ -2414,13 +2510,13 @@ const wizardFetchVendors = () => {
     const seq = ++_wizVendorReadSeq;
     return fetch('/api/external/vendors')
         .then(r => r.json())
-        .then(d => {
+        .then(d => window.wizardAfterLabel(() => {
             if (seq !== _wizVendorReadSeq) return false;
             if (!d || !d.success || !Array.isArray(d.vendors)) return false;
             wizardState.vendors = d.vendors;
             _wizBindVendorCombobox();
             return true;
-        });
+        }));
 };
 
 // The Vendor box's list, drawn from wizardState.vendors.
@@ -2580,7 +2676,7 @@ document.addEventListener('vendor:updated', (e) => {
 const wizardFetchLocations = () => {
     return fetch('/api/locations')
         .then(r => r.json())
-        .then(d => {
+        .then(d => window.wizardAfterLabel(() => {
             if (!Array.isArray(d)) return;
             wizardState.allLocationRows = d.filter(loc => loc && typeof loc === 'object');
             // Same filter the select used to apply: hide toolheads (window.isToolheadType:
@@ -2619,7 +2715,7 @@ const wizardFetchLocations = () => {
                 onPick: (value, label, before) => window.wizardLocationPicked(value, before),
             });
             window.wizardWatchLocationPick();
-        });
+        }));
 };
 
 // Group 40.7 review (wizard-stale-pick-via-reopens-picker): a held picker choice
@@ -2735,7 +2831,7 @@ window.wizardClearEmptyChipFields = (extra) => {
 const wizardFetchExtraFields = () => {
     return fetch('/api/external/fields')
         .then(r => r.json())
-        .then(d => {
+        .then(d => window.wizardAfterLabel(() => {
             if (d.success && d.fields) {
                 wizardState.extraFields = d.fields;
 
@@ -2802,7 +2898,7 @@ const wizardFetchExtraFields = () => {
                 if (window.wizardApplyShoreHardnessGate) window.wizardApplyShoreHardnessGate();
                 if (window.wizardRefreshAllSectionSummaries) window.wizardRefreshAllSectionSummaries();
             }
-        });
+        }));
 };
 
 // The filament's Spool Wt box changed (typed, emptied, or filled by code): the spool's
@@ -3749,7 +3845,7 @@ window.wizardOpenGlobalSearch = () => {
                     + 'Pick it again in a moment, or pick its filament.');
                 fetch(`/api/spools/${encodeURIComponent(id)}`)
                     .then(r => r.json())
-                    .then(d => {
+                    .then(d => window.wizardAfterLabel(() => {
                         if (!current()) return;
                         const sp = d && d.success ? d.data : null;
                         if (sp && String(sp.id) === String(id) && sp.filament && sp.filament.id != null) {
@@ -3757,7 +3853,7 @@ window.wizardOpenGlobalSearch = () => {
                         } else {
                             refused();
                         }
-                    })
+                    }))
                     .catch(() => { if (current()) refused(); });
             } else {
                 const unread = () => {
@@ -3767,12 +3863,12 @@ window.wizardOpenGlobalSearch = () => {
                 };
                 fetch(`/api/filaments/${encodeURIComponent(id)}`)
                     .then(r => r.json())
-                    .then(d => {
+                    .then(d => window.wizardAfterLabel(() => {
                         if (!current()) return;
                         const f = d && d.success ? d.data : null;
                         if (f && String(f.id) === String(id)) processFilament(id, f);
                         else unread();
-                    })
+                    }))
                     .catch(() => { if (current()) unread(); });
             }
         },
@@ -6480,9 +6576,16 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
     window.wizardRenderSpoolRowBadge(idx);
     window.wizardUpdateSubmitGate();
 
+    // Review round 3 of Group 66: the answer waits while a label arrives in a wizard box,
+    // and fills nothing once its row moved on (another QR scanned into it, the row cleared
+    // or gone, or the wizard opened again): it overwrote the row's newer scan.
+    const session = wizardState.session;
+    const movedOn = () => wizardState.session !== session || !wizardState.spoolRows.includes(row) || row.url !== url;
     try {
         const r = await fetch(`/api/external/search?source=prusament&q=${encodeURIComponent(url)}`);
         const data = await r.json();
+        await window.wizardAfterLabel();
+        if (movedOn()) return;
         if (!data.success || !data.results || data.results.length === 0) {
             row.status = 'error';
             row.errorMsg = 'Prusament URL not recognized';
@@ -6525,6 +6628,8 @@ window.wizardScanSpoolRow = async (idx, rawUrl) => {
         // would steal focus from a user who's already typing into row N+2.
     } catch (e) {
         console.error('wizardScanSpoolRow error', e);
+        await window.wizardAfterLabel();
+        if (movedOn()) return;
         row.status = 'error';
         row.errorMsg = 'Network error';
         row.override = null;
@@ -6693,6 +6798,8 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
         if (stale()) return;
         if (d && d.success && Array.isArray(d.spools)) owners = d.spools.filter((s) => String(s.id) !== String(sid));
     } catch (_) { if (stale()) return; }
+    await window.wizardAfterLabel();
+    if (stale()) return;
     if (owners === null) {
         return done('refused', "Couldn't check this QR",
             "FCC couldn't check whether another spool has this QR, so nothing changed. Try again in a moment.");
@@ -6713,6 +6820,8 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
         if (stale()) return;
         temp = d && d.success && Array.isArray(d.results) ? d.results[0] || null : null;
     } catch (_) { if (stale()) return; }
+    await window.wizardAfterLabel();
+    if (stale()) return;
     if (!temp) {
         return done('refused', "Couldn't read its Prusament page",
             "FCC couldn't read this spool's Prusament page, so nothing changed. Try again in a moment.");

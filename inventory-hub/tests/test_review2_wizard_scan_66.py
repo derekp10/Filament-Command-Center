@@ -178,7 +178,8 @@ def test_an_answer_that_lands_mid_label_keeps_what_it_wrote(scanning):
     """A Prusament QR in Spool 1 (its lookup held), then a spool label scanned into Spool 2,
     where the eager advance put the keyboard; the lookup answers between the label's first
     key and its Enter. RED: the Enter put back Save's "pending" state (greyed out with the
-    row ok) and blanked Step 2's fill, while the one-way lock stayed set."""
+    row ok) and blanked Step 2's fill, while the one-way lock stayed set. Since review round
+    3 the answer waits for the label to finish, then fills the form as the label left it."""
     _open_manual(scanning)
     _tab_in(scanning, "#wiz-spool-qty")
     scanning.keyboard.type("2", delay=120)
@@ -201,9 +202,10 @@ def test_an_answer_that_lands_mid_label_keeps_what_it_wrote(scanning):
     assert scanning.evaluate("() => document.activeElement.closest('[data-spool-row-idx]').dataset.spoolRowIdx") == "1"
     scanning.keyboard.type("ID:", delay=8)
     scanning.evaluate("() => window.__held()")
-    scanning.wait_for_function("() => wizardState.spoolRows[0].status === 'ok'")
     scanning.wait_for_timeout(100)
     _type_label(scanning, "57")
+    scanning.wait_for_function("() => wizardState.spoolRows[0].status === 'ok'")
+    scanning.wait_for_timeout(100)
     got = scanning.evaluate("""() => ({ save: document.getElementById('btn-wiz-submit').disabled,
                                          rows: wizardState.spoolRows.map((r) => r.status),
                                          material: document.getElementById('wiz-fil-material').value,
