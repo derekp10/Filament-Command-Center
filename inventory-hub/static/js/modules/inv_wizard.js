@@ -1508,6 +1508,17 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
         return rows.find(el => String(el.dataset.value) === String(hidden.value)
             && (el.dataset.label || '').toLowerCase() === text) || null;
     };
+    // Review round 3 of Group 66 (weights-vendor R3-02): part of a name two items share, then
+    // Enter or Tab. Typing blanks the held value (only a whole name is looked up), so the
+    // first row of that name won, the lowest id, and Edit Spool's Save moved the filament
+    // onto it. The field's own item from before the typing (`before`, taken at the focus)
+    // wins when it is listed under the first row's name; any other search keeps the first.
+    const tieRow = (rows) => {
+        if (!before || before.value === '' || !rows.length) return null;
+        const first = (rows[0].dataset.label || '').toLowerCase();
+        return rows.find(el => String(el.dataset.value) === String(before.value)
+            && (el.dataset.label || '').toLowerCase() === first) || null;
+    };
     // Group 66.4: the wizard's scan capture reaches the closure through the box. Its
     // snapshot keeps `typed` (a label's keys set it, and a Tab through the field then
     // confirmed the list's first item), and a place's label scanned into Location picks
@@ -1608,7 +1619,7 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
                 dropdown.style.display = 'none';
                 return;
             }
-            const pick = active || heldRow(visible) || visible[0];
+            const pick = active || heldRow(visible) || tieRow(visible) || visible[0];
             if (pick) {
                 freshSearch.value = pick.dataset.label;
                 dropdown.style.display = 'none';
@@ -1638,7 +1649,8 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
             // typed since focus, not "the field has text": a pre-filled label the
             // list doesn't show (a toolhead) is not a query.
             const active = visible.find(el => el.classList.contains('active'));
-            const pick = active || (typed && freshSearch.value.trim() ? (heldRow(visible) || visible[0]) : null);
+            const pick = active || (typed && freshSearch.value.trim()
+                ? (heldRow(visible) || tieRow(visible) || visible[0]) : null);
             if (pick && hidden.value !== pick.dataset.value) {
                 freshSearch.value = pick.dataset.label;
                 hidden.value = pick.dataset.value;

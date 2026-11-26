@@ -2733,8 +2733,11 @@ const _editfilOpenModal = (fil) => {
             render();
             if (combo.opts.onInput) combo.opts.onInput();
         });
+        // Closed 150 ms after the box loses the keyboard (a press on a row lands first), unless
+        // the box has it back by then (review round 3 of Group 66: Tab away and straight back
+        // closed the list under the person's typing, and Enter picked nothing).
         input.addEventListener('blur', () => {
-            setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+            setTimeout(() => { if (document.activeElement !== input) dropdown.style.display = 'none'; }, 150);
         });
         input.addEventListener('keydown', (e) => {
             const opts = combo.opts;
@@ -2831,6 +2834,12 @@ const _editfilOpenModal = (fil) => {
     let vendorReadFailed = false;
     // Q1-05: the vendor the box held when it took the focus (typing blanks the held id).
     let vendorHeldAtFocus = '';
+    // Review round 3 of Group 66 (weights-vendor R3-03): each record a vendor save put in the
+    // list, with the newest read sent before that save. A list from a read sent by then holds
+    // the vendor as it was before the save (or not at all, for one made with ➕), so the saved
+    // record is laid over it: a late older list, taken once a newer read failed (Q1-03),
+    // never puts the old weight back.
+    const vendorSavedOver = new Map();   // id -> { record, seq }
     const vendorKey = (s) => String(s == null ? '' : s).split(/\s+/).filter(Boolean).join(' ').toLowerCase();
     const vendorNameEl = document.getElementById('editfil-vendor-name');
     const vendorIdEl = document.getElementById('editfil-vendor-id');
@@ -2956,7 +2965,13 @@ const _editfilOpenModal = (fil) => {
             if (seq < vendorTakenSeq) return;       // a newer read's list was taken
             vendorTakenSeq = seq;
             session.codeSet(() => {
-                vendorCache = d.vendors;
+                vendorCache = d.vendors.map((x) => {
+                    const s = x && x.id != null ? vendorSavedOver.get(String(x.id)) : null;
+                    return s && seq <= s.seq ? s.record : x;
+                });
+                vendorSavedOver.forEach((s, id) => {
+                    if (seq <= s.seq && !vendorCache.some((x) => x && String(x.id) === id)) vendorCache.push(s.record);
+                });
                 vendorsRead = true;
                 vendorReadFailed = false;
                 refreshVendorBadge();
@@ -2972,6 +2987,7 @@ const _editfilOpenModal = (fil) => {
     // then the list is read again. Through codeSet: a redraw by code is no edit.
     session.onVendorSaved = (v) => {
         if (!v || v.id == null) return;
+        vendorSavedOver.set(String(v.id), { record: v, seq: vendorReadSeq });
         session.codeSet(() => {
             const i = vendorCache.findIndex(x => String(x.id) === String(v.id));
             if (i >= 0) vendorCache[i] = v; else vendorCache.push(v);
