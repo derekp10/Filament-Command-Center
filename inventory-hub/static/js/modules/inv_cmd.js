@@ -3407,7 +3407,9 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         }
         // At the end of the text, as routeConfirmScan reads its QRs: a stray
         // key in front refused the question's own Cancel (round 5).
-        if (/CMD:CANCEL$/.test(upper)) { openQuestion.cancel(); _questionCancelledAt = Date.now(); return; }
+        // A cancel() answering false closed nothing (Group 66.9's merge question while its
+        // merge is on its way): no question was answered, so no second read is guarded.
+        if (/CMD:CANCEL$/.test(upper)) { if (openQuestion.cancel() !== false) _questionCancelledAt = Date.now(); return; }
         // A question whose answers are labels (Group 40.5's "Record it as coming
         // from…": a feed slot's label picks it) routes them itself; 'refused'
         // (a held slot, round 9) is no read of the label.

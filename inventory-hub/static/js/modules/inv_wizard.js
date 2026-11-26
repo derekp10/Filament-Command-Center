@@ -5298,6 +5298,10 @@ const _wizardSubmitInner = async () => {
         if (isWizardEdit && wizardSpoolEmptyWeightIsInherited()) delete sp_payload.spool_weight;
 
         let f_payload = null;
+        // The manufacturer the Vendor box showed at this Save (Group 66.9 review): Edit
+        // Spool leaves an unchanged one out of f_payload, and the label diff still compares
+        // what the box showed, so an unchanged one reads as no change.
+        let vendorShown = null;
         let target_fid = null;
 
         if (wizardState.mode === 'existing') {
@@ -5433,7 +5437,17 @@ const _wizardSubmitInner = async () => {
             // vendor_id selected or nothing (deliberate Generic). The legacy
             // extras.external_vendor_name path was retired in Group 6.2.
             if (getVal('wiz-fil-vendor-sel')) {
-                f_payload.vendor_id = parseInt(getVal('wiz-fil-vendor-sel'));
+                const vid = parseInt(getVal('wiz-fil-vendor-sel'));
+                vendorShown = vid;
+                // Group 66.9 review (listeners S3): Edit Spool sends its filament's
+                // manufacturer only when the person changed it, as Edit Filament does. Sent at
+                // every Save, a box still holding one the filament had left (a merge that
+                // stopped half-way, or one made in another tab) moved it back; and in the
+                // moment before a merge's delete, onto the one being deleted, which Spoolman
+                // then cleared. Left out, the filament keeps the one Spoolman has.
+                if (!(isWizardEdit && filOrigSent && String(filOrigSent.vendor_id) === String(vid))) {
+                    f_payload.vendor_id = vid;
+                }
             }
 
             if (wizardState.mode === 'external' && wizardState.externalMetaData) {
@@ -5649,8 +5663,10 @@ const _wizardSubmitInner = async () => {
                 const orig = filOrigSent;
                 // 25.3 — shared diff (includes original_color now); see
                 // window.wizardBuildFilamentLabelDiff.
+                const shownPayload = (vendorShown != null && f_payload.vendor_id == null)
+                    ? Object.assign({}, f_payload, { vendor_id: vendorShown }) : f_payload;
                 const { changedNative, changedExtras } =
-                    window.wizardBuildFilamentLabelDiff(orig, f_payload);
+                    window.wizardBuildFilamentLabelDiff(orig, shownPayload);
                 window._maybePromptLabelReprint(
                     target_fid,
                     f_payload.name || `Filament #${target_fid}`,

@@ -67,6 +67,7 @@ MERGED = {"success": True, "source_vendor_id": 35, "target_vendor_id": 4, "vendo
           "label_change": False, "labels_flagged": None,
           "msg": "Merged Sunlu #35 into Sunlu #4: 4 filaments moved, Sunlu #35 deleted."}
 PARTIAL = {"success": False, "source_kept": True, "moved_filament_ids": [160, 161, 163], "still_on_source": [162],
+           "vendor": SUNLU4_AFTER, "labels_flagged": None,
            "filament_errors": [{"filament_id": 162, "error": "Spoolman refused it: database is locked"}],
            "msg": ("Moved 3 of 4 filaments onto Sunlu #4. Sunlu #35 still holds #162, so it was kept. "
                    "#162: Spoolman refused it: database is locked. Press Merge again to finish.")}
@@ -314,11 +315,11 @@ def test_cancel_and_escape_close_it_and_merge_nothing(vm):
 
 def test_the_yes_waits_out_a_double_click_but_a_keyboard_click_goes_at_once(vm):
     _answer_merge(vm)
-    vm.evaluate("() => { delete window.fccQuestionArmMs; }")
+    vm.evaluate("() => { window.fccQuestionArmMs = 60000; }")      # armed far longer than the test
     _open_window(vm, 35)
     vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
     _plan_painted(vm)
-    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()       # a pointer, under 700 ms
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()       # a pointer, while armed
     vm.wait_for_timeout(40)
     assert _merge_posts(vm) == []
     vm.evaluate("""() => document.querySelector('#fcc-vendor-merge-confirm [data-vmq="yes"]')
@@ -395,14 +396,34 @@ def test_a_refused_or_partial_merge_stays_on_the_question_and_can_be_pressed_aga
     _plan_painted(vm)
     q = _q(vm)
     assert q["flash"] == PARTIAL["msg"] and q["focus"] == "cancel"
-    assert vm.evaluate("window.__ev.map((e) => e[0])") == ["inventory:sync-pulse"]
+    assert vm.evaluate("window.__ev.map((e) => e[0])") == ["vendor:updated", "inventory:sync-pulse"]
     assert _question_up(vm)
-    # A pointer's press right after the refusal is a double click's second press.
-    vm.evaluate("() => { window.fccQuestionArmMs = 0; }")
+    notice = vm.locator("#fcc-vendor-merge [data-vm-notice]")
+    assert notice.inner_text() == PARTIAL["msg"] and notice.get_attribute("data-tone") == "warn"
+
+
+def test_after_a_refusal_the_yes_is_armed_again_and_a_keyboard_click_presses_it(vm):
+    """The plan asked again after a refusal arms the yes again: a double click's second
+    press posts nothing, a keyboard's click goes, and a press again carries the merge on."""
+    _answer_merge(vm, merge={"__status": 502, "__body": PARTIAL})
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    vm.evaluate("() => { window.fccQuestionArmMs = 60000; }")
+    vm.evaluate("""() => document.querySelector('#fcc-vendor-merge-confirm [data-vmq="yes"]')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }))""")
+    vm.wait_for_timeout(120)
+    _plan_painted(vm)
     n = len(_merge_posts(vm))
-    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    assert n == 1
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()          # armed: nothing
     vm.wait_for_timeout(40)
     assert len(_merge_posts(vm)) == n
+    vm.evaluate("""() => document.querySelector('#fcc-vendor-merge-confirm [data-vmq="yes"]')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }))""")
+    vm.wait_for_timeout(60)
+    assert len(_merge_posts(vm)) == n + 1
+    assert all((p["body"] or {}).get("merge") is True for p in _merge_posts(vm))
 
 
 def test_no_answer_says_it_may_not_have_finished_and_logs_it(vm):
@@ -515,4 +536,231 @@ def test_the_wizard_takes_the_kept_one_and_follows_its_baselines(wiz):
     assert wiz.evaluate("() => wizardState.editFilamentOriginal.vendor_id") == "4"
     assert not wiz.evaluate("() => (wizardState.vendors || []).some((v) => String(v.id) === '2')")
     body = _save(wiz, EDIT)
-    assert body["filament_data"]["vendor_id"] == 4
+    # Unchanged since the merge re-pointed the baseline: left out (Group 66.9 review: Edit
+    # Spool sends a manufacturer only when it changed), so the filament keeps #4.
+    assert body["filament_data"].get("vendor_id") is None
+
+
+# --- review round 1 (2026-11-26): the page findings, pinned ---------------------------------
+
+SWAPPED = {"success": True, "dry_run": True, "default_keep": 4, "plan": dict(
+    PLAN["plan"], source=ROWS[4], target=ROWS[35], carry={"empty_spool_weight": 167.0},
+    carry_words=["empty spool weight 167 g"], filaments=[{"id": 100, "name": "Black", "material": "PLA"}])}
+
+
+def test_a_double_click_on_swap_swaps_once(vm):
+    """P-S1: the plan repaints in a few ms, ⇄ enabled where it was, and a double click's
+    second press swapped back."""
+    _answer_merge(vm)
+    vm.evaluate("(p) => { window.__answers['POST /api/vendors/4/merge_into/35'] = (req) => p; }", SWAPPED)
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="swap"]').dblclick()
+    vm.wait_for_timeout(150)
+    _plan_painted(vm)
+    assert _q(vm)["title"] == "🔗 Merge Sunlu #4 into Sunlu #35?"
+    dry = [p for p in vm.evaluate("window.__posts") if "/merge_into/" in p["url"] and (p["body"] or {}).get("dry_run")]
+    assert [p["url"].split("/api/vendors/")[1] for p in dry] == ["35/merge_into/4", "4/merge_into/35"]
+
+
+def test_a_merge_whose_answer_was_lost_but_finished_is_told_as_one(vm):
+    """P-S9: the source gone and the kept one there after a lost answer means the merge
+    finished: the windows hear it, never "nothing was merged"."""
+    _answer_merge(vm, merge="__reject__")
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    vm.evaluate("""(a) => { window.__answers['/api/vendors'] = a.v; window.__answers['/api/vendors/4/merge_options'] = a.o; }""",
+                {"v": {"success": True, "vendors": [SUNLU4_AFTER, OVERTURE, ACME]},
+                 "o": dict(options(4, groups=[]), twins=[], vendors=[ROWS[50], ROWS[1], ROWS[4]])})
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(200)
+    ev = vm.evaluate("window.__ev")
+    assert [e[0] for e in ev][:1] == ["vendor:merged"] and ev[0][1]["from"] == "35" and ev[0][1]["into"] == "4"
+    assert not _question_up(vm)
+    assert vm.locator("#fcc-vendor-merge [data-vm-notice]").inner_text() == \
+        "Sunlu #35 is gone from Spoolman: the merge into Sunlu #4 finished."
+    assert vm.locator("#vendoredit-id").input_value() == "4"
+
+
+def test_a_delete_fcc_couldnt_confirm_that_landed_is_told_as_a_merge(vm):
+    may = {"success": False, "may_have_deleted": True, "moved_filament_ids": [160, 161, 162, 163],
+           "vendor": SUNLU4_AFTER, "msg": "All of Sunlu #35's filaments are on Sunlu #4 now, but FCC couldn't tell…"}
+    _answer_merge(vm, merge={"__status": 502, "__body": may})
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    vm.evaluate("(v) => { window.__answers['/api/vendors'] = v; }",
+                {"success": True, "vendors": [SUNLU4_AFTER, OVERTURE, ACME]})
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(200)
+    ev = vm.evaluate("window.__ev")
+    assert ev[0][0] == "vendor:merged" and ev[0][1]["moved"] == [160, 161, 162, 163]
+
+
+def test_a_failed_reread_after_a_merge_keeps_no_stale_list(vm):
+    """P-S3: the next key in the box drew the list from before the merge again."""
+    _answer_merge(vm)
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    vm.evaluate("() => { window.__answers['/api/vendors/4/merge_options'] = { __status: 502, __body: { success: false, msg: 'blip' } }; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_function("() => !!document.querySelector('#fcc-vendor-merge [data-vm-fail]')")
+    assert vm.evaluate("() => document.activeElement.matches('[data-vm-box]')")
+    vm.keyboard.type("s")
+    vm.wait_for_timeout(40)
+    assert vm.locator("#fcc-vendor-merge [data-vm-fail]").count() == 1
+    assert "Sunlu #35" not in vm.locator("#fcc-vendor-merge [data-vm-body]").inner_text()
+
+
+def test_the_keyboard_goes_back_to_the_row_the_question_came_from_lit(vm):
+    """P-S4: a mouse pick of a row lower down, then Escape: that row has the keyboard and the ring."""
+    _answer_merge(vm)
+    vm.evaluate("(p) => { window.__answers['POST /api/vendors/1/merge_into/35'] = (req) => p; }",
+                dict(PLAN, default_keep=35, plan=dict(PLAN["plan"], source=ROWS[1], target=ROWS[35])))
+    _open_window(vm, 35)
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="1"]').click()
+    _plan_painted(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(60)
+    active = vm.evaluate("""() => { const a = document.activeElement;
+        return a && a.dataset ? { src: a.dataset.vmSrc, lit: a.classList.contains('kb-active') } : null; }""")
+    assert active == {"src": "1", "lit": True}
+    assert [r["src"] for r in _rows(vm) if r["active"]] == ["1"]
+
+
+def test_a_scan_while_the_merge_is_on_its_way_is_refused_in_its_own_words(vm):
+    """P-S8: the hold names the merge on its way, and a cancel that closes nothing says so."""
+    _answer_merge(vm, merge="__hold__")
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(40)
+    out = vm.evaluate("""() => { const q = (window._fccOpenMoveQuestions || []).find((x) => x.title === 'Merge manufacturers');
+        return { routed: q.route('ID:57'), cancelled: q.cancel() }; }""")
+    assert out == {"routed": "refused", "cancelled": False}
+    assert _q(vm)["flash"] == "The merge is on its way: wait for its answer."
+    assert _question_up(vm)
+    vm.evaluate("(m) => window.__held['/api/vendors/35/merge_into/4'](m)", MERGED)
+    vm.wait_for_timeout(120)
+    assert not _question_up(vm)
+
+
+def test_a_merge_answer_after_the_window_closed_still_tells_every_window(vm):
+    """The merge's answer lands after its host closed the question and the window: the
+    events still go out, and a toast says it (there is no window to say it on)."""
+    _answer_merge(vm, merge="__hold__")
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(40)
+    vm.evaluate("() => bootstrap.Modal.getInstance(document.getElementById('vendorEditModal')).hide()")
+    vm.wait_for_timeout(80)
+    vm.evaluate("(m) => window.__held['/api/vendors/35/merge_into/4'](m)", MERGED)
+    vm.wait_for_timeout(120)
+    assert [e[0] for e in vm.evaluate("window.__ev")][:1] == ["vendor:merged"]
+    assert MERGED["msg"] in vm.locator("#toast-container").inner_text()
+
+
+def test_label_trouble_is_said_on_the_window(vm):
+    """P-S5: it was only a toast, under the window."""
+    _answer_merge(vm, merge=dict(MERGED, labels_flagged={"spools": [], "filaments": [], "errors": [{"spool_id": 205}]}))
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(150)
+    notice = vm.locator("#fcc-vendor-merge [data-vm-notice]")
+    assert "couldn't confirm that every label whose Brand changed is marked for a reprint" in notice.inner_text()
+    assert notice.get_attribute("data-tone") == "warn"
+
+
+def test_one_filament_reads_in_the_singular(vm):
+    """P-S6."""
+    one = dict(PLAN, plan=dict(PLAN["plan"], filaments=[PLAN["plan"]["filaments"][0]], carry={}, carry_words=[],
+                               label_change=True,
+                               weight_note={"moved_without_own": [160], "from_g": None, "to_g": 167.0,
+                                            "kept_without_own": [101]}))
+    _answer_merge(vm, plan=one)
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    lines = _q(vm)["lines"]
+    assert "🗑️ Delete Sunlu #35: its 1 filament moves to Sunlu #4 (#160 PETG Orange), its spools with it." in lines
+    assert any(l.startswith("🏷️ Its labels print “Sunlu”") for l in lines)
+    assert any(l.startswith("⚖️ It has no empty spool weight of its own: FCC reads 167 g for it") for l in lines)
+    assert "⚖️ Sunlu #4's 1 filament with no empty spool weight of its own reads 167 g from now on." in lines
+
+
+def test_the_editor_is_filled_from_the_kept_record_even_when_a_read_fails(vm):
+    """P-S2: the editor was emptied and read again after a merge; a failed read left it
+    blank under the kept id, and a Save wiped the kept one's fields."""
+    _answer_merge(vm)
+    _open_window(vm, 35)
+    vm.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    _plan_painted(vm)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = { __status: 502, __body: { success: false, msg: 'blip' } }; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(150)
+    boxes = vm.evaluate("""() => ['vendoredit-id', 'vendoredit-name', 'vendoredit-external-id', 'vendoredit-empty-weight']
+        .map((id) => document.getElementById(id).value)""")
+    assert boxes == ["4", "Sunlu", "Sunlu", "167"]
+    assert not vm.evaluate("() => document.getElementById('vendoredit-save').disabled")
+
+
+def test_with_no_record_the_editor_keeps_what_it_shows_and_saves_nothing(ef):
+    ef.evaluate("() => window.openVendorEditModal(35)")
+    ef.wait_for_function("() => document.getElementById('vendorEditModal').classList.contains('show')")
+    ef.wait_for_timeout(60)
+    _merged_event(ef, vendor=None)
+    assert ef.locator("#vendoredit-id").input_value() == "35"
+    assert ef.evaluate("() => document.getElementById('vendoredit-save').disabled")
+    assert "was merged into #4" in ef.locator("#vendoredit-error").inner_text()
+    ef.evaluate("() => window.openVendorEditModal(4)")
+    ef.wait_for_timeout(80)
+    assert not ef.evaluate("() => document.getElementById('vendoredit-save').disabled")
+
+
+def test_edit_filaments_save_never_sends_its_label_status_back(ef):
+    """Listeners S2: its copy of the label status, read at the open, undid a mark made since."""
+    open_form(ef, filament(extra={"needs_label_print": False, "sample_printed": True}))
+    ef.fill("#editfil-product-url", "https://example.com/new")
+    ef.locator("#editfil-save").click()
+    ef.wait_for_timeout(150)
+    sent = posts_to(ef, "/api/update_filament")
+    assert len(sent) == 1
+    extra = sent[0]["body"]["data"]["extra"]
+    assert "product_url" in extra
+    assert "needs_label_print" not in extra and "sample_printed" not in extra, extra
+
+
+def test_a_row_click_that_is_try_agains_second_press_opens_nothing(vm):
+    """_secondPress: ↻ Try again's answer paints the rows under the pointer."""
+    vm.evaluate("() => { window.__answers['/api/vendors/35/merge_options'] = { __status: 502, __body: { success: false, msg: 'blip' } }; }")
+    _open_editor(vm, 35)
+    vm.locator("#vendoredit-merge").click()
+    vm.wait_for_function("() => !!document.querySelector('#fcc-vendor-merge [data-vm-retry]')")
+    vm.evaluate("(o) => { window.__answers['/api/vendors/35/merge_options'] = o; }", options(35))
+    box = vm.locator("#fcc-vendor-merge [data-vm-retry]").bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    vm.mouse.click(x, y)
+    vm.wait_for_function("() => !!document.querySelector('#fcc-vendor-merge [data-vm-body][data-vm-state=\"ready\"]')")
+    vm.evaluate("""([x, y]) => document.querySelector('#fcc-vendor-merge button.fcc-vm-row')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: x, clientY: y }))""", [x, y])
+    vm.wait_for_timeout(60)
+    assert not _question_up(vm)
+
+
+def test_the_list_draws_each_pair_once(vm):
+    """S7 / P2: a pair two groups hold is drawn once, with the first group's kind."""
+    dup = dict(options(35), groups=[{"kind": "same_name", "ids": [4, 35], "keep": 4, "mine": True},
+                                    {"kind": "look_alike", "ids": [4, 35], "keep": 4, "mine": True}])
+    vm.evaluate("(o) => { window.__answers['/api/vendors/35/merge_options'] = o; }", dup)
+    _open_window(vm, 35)
+    pairs = [r for r in _rows(vm) if r["src"] == "35" and r["dst"] == "4"]
+    assert len(pairs) == 1 and "same name" in pairs[0]["text"]
+    assert "Possible duplicates (1)" in vm.locator("#fcc-vendor-merge [data-vm-body]").inner_text()

@@ -84,7 +84,9 @@ def test_a_brand_typed_in_edit_spool_keeps_both_boxes_the_brands(wiz, typed, vid
     assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == (weight, True)
     assert "fil:spool_weight" not in _touched(wiz)
     body = _save(wiz, EDIT)
-    assert body["filament_data"]["vendor_id"] == vid
+    # The filament is on #2: an unchanged manufacturer is left out (Group 66.9 review: Edit
+    # Spool sends one only when it changed); a brand picked is sent.
+    assert body["filament_data"].get("vendor_id") == (None if vid == 2 else vid)
     assert _got(body["filament_data"], "spool_weight") == "<missing>"
     assert _got(body["spool_data"], "spool_weight") == "<missing>"
 

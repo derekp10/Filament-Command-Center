@@ -144,7 +144,7 @@ def test_a_label_in_the_vendor_box_keeps_the_manufacturer_it_held(scanning):
     _open_edit_with(scanning, {"success": True, "vendors": [_brand(1), _brand(2)]})
     _scan_into(scanning, "#wiz-fil-vendor-search", "ID:57")
     assert (_value(scanning, "#wiz-fil-vendor-search"), _value(scanning, "#wiz-fil-vendor-sel")) == ("Some Brand", "2")
-    assert _save(scanning, EDIT)["filament_data"]["vendor_id"] == 2
+    assert _save(scanning, EDIT)["filament_data"].get("vendor_id") is None  # unchanged: left out (Group 66.9 review: Edit Spool sends a manufacturer only when it changed), so the filament keeps #2
 
 
 def test_a_label_in_scale_gross_works_out_no_used_weight(scanning):

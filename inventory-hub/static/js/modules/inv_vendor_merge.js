@@ -278,13 +278,19 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         const byId = {};
         (d.vendors || []).forEach((v) => { byId[String(v.id)] = v; });
         const pairs = [];
+        // Each pair once (review round 1, S7): a pair two groups hold is drawn with the
+        // first group's kind, and the server lists same-name groups first.
+        const seen = new Set();
         (d.groups || []).forEach((g) => {
             const keep = byId[String(g.keep)];
             if (!keep) return;
             (g.ids || []).forEach((id) => {
                 if (String(id) === String(g.keep)) return;
                 const other = byId[String(id)];
-                if (other && (_matches(keep, text) || _matches(other, text))) pairs.push(_pairHtml(h, g.kind, keep, other));
+                const key = `${id}:${g.keep}`;
+                if (!other || seen.has(key)) return;
+                seen.add(key);
+                if (_matches(keep, text) || _matches(other, text)) pairs.push(_pairHtml(h, g.kind, keep, other));
             });
         });
         const others = (d.vendors || []).filter((v) => _matches(v, text));
@@ -304,9 +310,13 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         if (was !== null) _focusBox(h);
     }
 
+    // A read that failed: its words and Try again. The list read before it is dropped
+    // (review round 1, P-S3: the next key in the box drew it again, a manufacturer the
+    // merge had just deleted included, and the failure line went).
     function _fail(h, why) {
         const body = _bodyEl(h);
         const hadKeys = body.contains(document.activeElement);
+        h._data = null;
         body.innerHTML = `<div class="fcc-vm-fail" role="alert" data-vm-fail>
                 <div>⚠️ Couldn't read the manufacturers: ${esc(why)}</div>
                 <button type="button" class="fcc-vm-retry" data-vm-retry>↻ Try again</button>
@@ -451,22 +461,28 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         if (q.onClosed) { document.removeEventListener('fcc:overlay-closed', q.onClosed); q.onClosed = null; }
         if (q.handle) { const hd = q.handle; try { hd.cleanup(); } catch (_) { /* noop */ } }
         if (_question === q) _question = null;
-        const back = q.from;
-        if (!(opts && opts.keepFocus) && back && back.isConnected && _alive(q.win)) {
-            try { back.focus({ preventScroll: true }); } catch (_) { /* noop */ }
-        } else if (!(opts && opts.keepFocus) && _alive(q.win)) {
-            _focusBox(q.win);
-        }
+        if ((opts && opts.keepFocus) || !_alive(q.win)) return;
+        // Back to the row the question came from, lit (review round 1, P-S4: the keyboard
+        // went back to an unlit row while another stayed lit, and Enter opened that one's;
+        // and a list read again under the question had replaced the row): found again by
+        // its pair in the list as it is now, else the box.
+        const rows = _rows(q.win);
+        const at = q.rowKey ? rows.findIndex((r) => `${r.dataset.vmSrc}:${r.dataset.vmDst}` === q.rowKey) : -1;
+        if (at >= 0) _highlight(q.win, at, true);
+        else _focusBox(q.win);
     }
 
     // `e`: the click that answered, when one did. Only a pointer's press shields the next
     // press (the wizard's question's rule): an Escape or a scan's cancel took no press, and
-    // shielding then ate the person's next click at the spot of their last one.
+    // shielding then ate the person's next click at the spot of their last one. Answers
+    // false when it closed nothing (a merge on its way), so processScan doesn't take a
+    // bare CMD:CANCEL for one that answered a question (review round 1, P-S8).
     function _qCancel(q, e) {
-        if (!_qAlive(q)) return;
-        if (q.inFlight) { _qFlash(q, 'The merge is on its way: wait for its answer.'); return; }
+        if (!_qAlive(q)) return false;
+        if (q.inFlight) { _qFlash(q, 'The merge is on its way: wait for its answer.'); return false; }
         if (e && e.detail > 0) shield();
         _closeQuestion(q);
+        return true;
     }
 
     function _qSetButtons(q, on) {
@@ -481,28 +497,35 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         lines.push({ text: `✓ Keep ${label(dst)}: ${nFilaments(dst.filaments)}, `
             + (dst.empty_spool_weight ? `${grams(dst.empty_spool_weight)} empty.` : 'no empty spool weight.') });
         const fils = plan.filaments || [];
+        const one = fils.length === 1;
         if (fils.length) {
             const named = fils.slice(0, 3).map((f) => `#${f.id} ${[f.material, f.name].filter(Boolean).join(' ')}`.trim());
             const more = fils.length - named.length;
-            lines.push({ text: `🗑️ Delete ${label(src)}: its ${nFilaments(fils.length)} move to ${label(dst)} (${named.join(', ')}`
-                + (more > 0 ? ` and ${more} more` : '') + '), their spools with them.' });
+            lines.push({ text: `🗑️ Delete ${label(src)}: its ${nFilaments(fils.length)} ${one ? 'moves' : 'move'} to ${label(dst)} (${named.join(', ')}`
+                + (more > 0 ? ` and ${more} more` : '') + `), ${one ? 'its spools with it' : 'their spools with them'}.` });
         } else {
             lines.push({ text: `🗑️ Delete ${label(src)}: it has no filaments.` });
         }
         (plan.carry_words || []).forEach((w) => lines.push({ text: `↪ ${label(dst)} takes ${label(src)}'s ${w} (its own is blank).` }));
         (plan.kept_own_words || []).forEach((w) => lines.push({ text: w }));
         if (plan.label_change && fils.length) {
-            lines.push({ tone: 'warn', text: `🏷️ Their labels print “${String(dst.name || '').trim()}” as the Brand from now on: their spools' labels, and any swatch already printed, go on the 🏷️ Backlog for a reprint.` });
+            lines.push({ tone: 'warn', text: `🏷️ ${one ? 'Its labels print' : 'Their labels print'} “${String(dst.name || '').trim()}” as the Brand from now on: ${one ? 'its' : 'their'} spools' labels, and any swatch already printed, go on the 🏷️ Backlog for a reprint.` });
         }
+        // Singular where one filament is meant (review round 1, P-S6).
         const w = plan.weight_note;
         const g = (x) => (x ? grams(x) : 'none');
         if (w && Array.isArray(w.moved_without_own) && w.moved_without_own.length) {
             const n = w.moved_without_own.length;
-            lines.push({ tone: 'warn', text: `⚖️ ${n === fils.length ? (n === 1 ? 'It has' : 'They have') : `${n} of them have`} no empty spool weight of their own: FCC reads ${g(w.to_g)} for them from now on (${g(w.from_g)} before), and a Gross weighing takes it off.` });
+            const who = n === fils.length ? (n === 1 ? 'It has' : 'They have') : (n === 1 ? '1 of them has' : `${n} of them have`);
+            const own = n === 1 ? 'its own' : 'their own';
+            const them = n === 1 ? 'it' : 'them';
+            lines.push({ tone: 'warn', text: `⚖️ ${who} no empty spool weight of ${own}: FCC reads ${g(w.to_g)} for ${them} from now on (${g(w.from_g)} before), and a Gross weighing takes it off.` });
         }
         if (w && Array.isArray(w.kept_without_own) && w.kept_without_own.length) {
             const n = w.kept_without_own.length;
-            lines.push({ tone: 'warn', text: `⚖️ ${nFilaments(n)} of ${label(dst)}'s with no empty spool weight of their own read ${g(w.to_g)} from now on.` });
+            lines.push({ tone: 'warn', text: n === 1
+                ? `⚖️ ${label(dst)}'s 1 filament with no empty spool weight of its own reads ${g(w.to_g)} from now on.`
+                : `⚖️ ${label(dst)}'s ${n} filaments with no empty spool weight of their own read ${g(w.to_g)} from now on.` });
         }
         return lines;
     }
@@ -599,73 +622,112 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         }));
         if (vendor) document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: into, vendor } }));
         document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-        const msg = String(data.msg || `Merged ${from} into ${into}.`);
-        const flagged = data.labels_flagged;
-        const labelTrouble = flagged && Array.isArray(flagged.errors) && flagged.errors.length;
+        const msg = String(data.msg || `Merged ${from} into ${into}.`) + _labelTroubleWords(data);
+        const trouble = !!_labelTroubleWords(data);
         const win = q.win;
         if (_qAlive(q)) { shield(); _closeQuestion(q, { keepFocus: true }); }
         // The editor shows the kept one now (inv_details.js's vendor:merged listener), and
         // the one merged is gone: the window follows.
         if (win && String(win._vid) === from) win._vid = into;
         if (_alive(win)) {
-            _notice(win, msg);
+            // The window's line stands for the toast, which sits under it (review round 1,
+            // P-S5): label trouble said there too, in the warning tone.
+            _notice(win, msg, trouble ? 'warn' : '');
+            _focusBox(win);       // a read that fails leaves the keyboard here (P-S3)
             _read(win, () => {
                 const rows = _rows(win);
                 if (rows.length) _highlight(win, 0, true); else _focusBox(win);
             });
         } else if (window.showToast) {
-            window.showToast(msg, 'success', 4000);
+            window.showToast(msg, trouble ? 'warning' : 'success', trouble ? 7000 : 4000);
         }
-        if (labelTrouble && window.showToast) {
-            window.showToast("Some labels whose Brand changed couldn't be marked for a reprint: the Activity Log says which.", 'warning', 7000);
+    }
+
+    // Labels whose Brand changed that the merge couldn't confirm it marked, in words.
+    function _labelTroubleWords(data) {
+        const f = data && data.labels_flagged;
+        return f && Array.isArray(f.errors) && f.errors.length
+            ? " FCC couldn't confirm that every label whose Brand changed is marked for a reprint: the Activity Log says which."
+            : '';
+    }
+
+    // A merge whose answer was lost, or whose delete FCC couldn't tell had landed
+    // (may_have_deleted): the manufacturers read again. The one merged gone and the one kept
+    // there means the merge finished, and it is told as one that answered (review round 1,
+    // P-S9: the re-plan said "nothing was merged", and no window heard the merge). Resolves
+    // true when it found that.
+    function _qCheckLanded(q, data) {
+        return window.fetchT('/api/vendors', { cache: 'no-store' }, READ_TIMEOUT_MS)
+            .then((r) => r.json())
+            .then((d) => {
+                if (!d || d.success !== true || !Array.isArray(d.vendors)) return false;
+                const gone = !d.vendors.some((v) => v && String(v.id) === String(q.src));
+                const kept = d.vendors.find((v) => v && String(v.id) === String(q.dst));
+                if (!gone || !kept) return false;
+                const src = q.plan ? q.plan.source : { id: q.src };
+                _merged(q, {
+                    vendor: kept,
+                    moved_filament_ids: (data && data.moved_filament_ids) || [],
+                    labels_flagged: data && data.labels_flagged,
+                    msg: `${label(src)} is gone from Spoolman: the merge into ${label(kept)} finished.`,
+                });
+                return true;
+            }, () => false);
+    }
+
+    // A refusal, a partial merge or a merge FCC can't account for: said on the question's
+    // line and on the window's (the toast sits under both), the windows told what changed,
+    // and the question asked again from what is left. Its yes is armed again (_qPaint), so
+    // a double click's second press posts nothing.
+    function _qNotMerged(q, msg, data) {
+        const win = q.win;
+        const words = msg + _labelTroubleWords(data);
+        // A carry that landed changed the kept one; filaments may have moved.
+        if (data && data.vendor) {
+            document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: String(q.dst), vendor: data.vendor } }));
         }
+        document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+        if (_alive(win)) { _notice(win, words, 'warn'); _read(win); }
+        else if (window.showToast) window.showToast(words, 'error', 7000);
+        if (!_qAlive(q)) return;
+        _qFlash(q, words);
+        _qPlan(q);        // what is left, in fresh words; the line keeps the refusal
+        try { _qBtn(q, 'cancel').focus({ preventScroll: true }); } catch (_) { /* noop */ }
     }
 
     function _qYes(q, e) {
         if (!_qAlive(q) || q.inFlight || !q.plan) return;
-        // A pointer's press right after a refusal is a double click's second press.
-        if (e && e.detail > 0 && Date.now() - q.refusedAt < DOUBLE_PRESS_MS) return;
         q.inFlight = true;
         _qSetButtons(q, false);
         const n = (q.plan.filaments || []).length;
         _qFlash(q, n ? `Merging…: moving ${nFilaments(n)}.` : 'Merging…');
         const url = `/api/vendors/${encodeURIComponent(q.src)}/merge_into/${encodeURIComponent(q.dst)}`;
-        const win = q.win;
+        // The merge asks for itself (review round 1, S5).
         window.fetchT(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ merge: true }),
         }, MERGE_TIMEOUT_MS)
             .then((res) => res.json().then((data) => ({ res, data }), () => ({ res, data: null })))
             .then(({ res, data }) => {
-                q.inFlight = false;
-                if (data && data.success === true) { _merged(q, data); return; }
+                if (data && data.success === true) { q.inFlight = false; _merged(q, data); return; }
                 const msg = String((data && data.msg) || `FCC answered with an error (HTTP ${res.status}), so the merge may not have finished.`);
-                if (window.showToast) window.showToast(msg, 'error', 7000);
-                // A carry that landed changed the kept one; filaments may have moved.
-                if (data && data.vendor) {
-                    document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: String(q.dst), vendor: data.vendor } }));
+                if (data && data.may_have_deleted) {
+                    _qCheckLanded(q, data).then((landed) => { q.inFlight = false; if (!landed) _qNotMerged(q, msg, data); });
+                    return;
                 }
-                document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-                if (_alive(win)) _read(win);
-                if (!_qAlive(q)) return;
-                _qFlash(q, msg);
-                q.refusedAt = Date.now();
-                _qPlan(q);        // what is left, in fresh words; the line keeps the refusal
-                try { _qBtn(q, 'cancel').focus({ preventScroll: true }); } catch (_) { /* noop */ }
-            }, () => {
                 q.inFlight = false;
-                const msg = "FCC didn't answer, so the merge may not have finished. Close this and open 🔗 Merge… again to see where it stands.";
-                if (window.showToast) window.showToast(msg, 'error', 7000);
+                _qNotMerged(q, msg, data);
+            }, () => {
                 if (window.logClientEvent) {
                     window.logClientEvent(`⚠️ Manufacturer merge #${esc(q.src)} → #${esc(q.dst)}: FCC didn't answer, so it may not have finished.`, 'WARNING');
                 }
-                if (_alive(win)) _read(win);
-                if (!_qAlive(q)) return;
-                _qFlash(q, msg);
-                q.refusedAt = Date.now();
-                _qPlan(q);
-                try { _qBtn(q, 'cancel').focus({ preventScroll: true }); } catch (_) { /* noop */ }
+                _qCheckLanded(q, null).then((landed) => {
+                    q.inFlight = false;
+                    if (!landed) {
+                        _qNotMerged(q, "FCC didn't answer, so the merge may not have finished. The question shows what is left: Merge carries on from there.", null);
+                    }
+                });
             });
     }
 
@@ -674,7 +736,9 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         if (_question) _closeQuestion(_question, { keepFocus: true });
         const q = {
             win: h, src: String(src), dst: String(dst), from: fromRow || null,
-            seq: 0, plan: null, inFlight: false, refusedAt: 0,
+            // The row it came from, by its pair, to find again in a list read since.
+            rowKey: fromRow && fromRow.dataset ? `${fromRow.dataset.vmSrc}:${fromRow.dataset.vmDst}` : null,
+            seq: 0, plan: null, inFlight: false,
             userSwapped: false, triedSwap: false, closed: false, release: null, onClosed: null, handle: null,
         };
         _question = q;
@@ -692,8 +756,15 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             if (!btn || btn.disabled) return;
             const which = btn.dataset.vmq;
             if (which === 'cancel') _qCancel(q, e);
-            else if (which === 'swap') _qSwap(q);
-            else if (which === 'retry') _qPlan(q);
+            else if (which === 'swap') {
+                // A double click's second press swaps nothing back (review round 1, P-S1: the
+                // plan repaints in ~50 ms, ⇄ enabled where it was, and the second press undid
+                // the person's choice). The click count, and the shield for a second press
+                // the browser doesn't count.
+                if (e.detail > 1) return;
+                if (e.detail > 0) shield();
+                _qSwap(q);
+            } else if (which === 'retry') _qPlan(q);
             // 'yes' is its armed onclick (_qPaint).
         });
         q.onClosed = (e) => {
@@ -713,6 +784,13 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
                 hint: 'Answer the merge question on screen first: Cancel, or Merge',
                 cancel: () => _qCancel(q),
                 flash: (m) => _qFlash(q, m),
+                // While the merge is on its way, a scan is refused in those words, not with
+                // the hint that names Cancel and Merge (both disabled then; P-S8).
+                route: (text) => {
+                    if (!q.inFlight) return false;
+                    _qFlash(q, `The merge is on its way: wait for its answer. (Ignored: ${text})`);
+                    return 'refused';
+                },
             });
         }
         _qPlan(q);
@@ -759,6 +837,8 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             const row = e.target.closest('button.fcc-vm-row');
             if (!row) return;
             if (_secondPress(h, e)) { _focusBox(h); return; }
+            // The ring follows a pointer's pick too (P-S4).
+            _highlight(h, _rows(h).indexOf(row), false);
             shield();
             _ask(h, row.dataset.vmSrc, row.dataset.vmDst, row);
         });

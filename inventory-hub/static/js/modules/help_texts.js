@@ -190,7 +190,8 @@
             'The question says which one is kept: by default the one with more filaments, then the one with an empty weight, then the older. ⇄ keeps the other one instead.',
             "Where the one kept has a field blank (its empty weight, External ID, notes or website), it takes the merged one's; a field it has keeps its own.",
             'When the two names are written differently, the moved filaments’ labels go on the 🏷️ Backlog for a reprint, since the Brand they print changed.',
-            "Nothing changes until you press Merge into … in the question, and a merge can't be undone. Cancel or Esc keeps both. While the question is up, other scans wait until you answer it.",
+            "Nothing changes until you press Merge into … in the question, and a merge can't be undone. Cancel or Esc keeps both.",
+            'While the question is up, any other scan is ignored, and the question says so: scan it again once you have answered. A label scanned into the box goes on as a scan, and the box keeps what was typed.',
         ],
         scopes: ['Merge Manufacturers'],
     });

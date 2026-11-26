@@ -98,6 +98,11 @@ class _VendorSpoolman(SpoolmanHTTPFake):
         self.list_reads = 0
         self.reads_fail_after_delete = False
         self._vendor_reads_fail = False
+        # Every request in order, as (VERB, path[?query]); and get_hooks[path] = fn(n), run
+        # on the n-th GET of that path: an answer or an exception to send instead, or None.
+        self.ops = []
+        self.get_hooks = {}
+        self._get_counts = {}
 
     def nested(self, vid):
         """A vendor as Spoolman nests it in a filament: unset keys left out."""
@@ -114,6 +119,15 @@ class _VendorSpoolman(SpoolmanHTTPFake):
         self.get_urls.append(str(url))
         parts = urlsplit(str(url))
         path = parts.path.rstrip("/")
+        self.ops.append(("GET", path + (f"?{parts.query}" if parts.query else "")))
+        n = self._get_counts[path] = self._get_counts.get(path, 0) + 1
+        hook = self.get_hooks.get(path)
+        if hook is not None:
+            answer = hook(n)
+            if isinstance(answer, BaseException):
+                raise answer
+            if answer is not None:
+                return answer
         if self._vendor_reads_fail and re.fullmatch(r"/api/v1/vendor/\d+", path):
             raise requests.exceptions.ConnectionError("Connection refused (test)")
         canned = self._canned(("GET", path))
@@ -137,6 +151,7 @@ class _VendorSpoolman(SpoolmanHTTPFake):
 
     def patch(self, url, json=None, timeout=None, **kw):  # noqa: A002 (requests' kwarg)
         path = urlsplit(str(url)).path.rstrip("/")
+        self.ops.append(("PATCH", path))
         m = re.fullmatch(r"/api/v1/(spool|filament|vendor)/(\d+)", path)
         canned = self._canned(("PATCH", path))
         if canned is not None:
@@ -165,6 +180,7 @@ class _VendorSpoolman(SpoolmanHTTPFake):
     def delete(self, url, timeout=None, **kw):
         path = urlsplit(str(url)).path.rstrip("/")
         self.deletes.append(path)
+        self.ops.append(("DELETE", path))
         if self.reads_fail_after_delete and path.startswith("/api/v1/vendor/"):
             self._vendor_reads_fail = True
         canned = self._canned(("DELETE", path))
@@ -253,7 +269,11 @@ def _call(client, fake, method, path, body=None, hub=None):
     return r, logged
 
 
-def _merge(client, fake, src, dst, body=None, hub=None):
+MERGE = {"merge": True}
+
+
+def _merge(client, fake, src, dst, body=MERGE, hub=None):
+    """The merge (review round 1, S5: it asks for itself); `body` a dry run or another shape."""
     return _call(client, fake, "POST", f"/api/vendors/{src}/merge_into/{dst}", body, hub)
 
 
@@ -334,8 +354,7 @@ class TestRefusedBeforeAnyWrite:
         fake = _stocked()
         r, _ = _merge(client, fake, src, dst)
         assert r.status_code == 404
-        assert r.get_json()["msg"] == (f"Manufacturer #{missing} isn't in Spoolman (merged or deleted already?), "
-                                       f"so nothing was merged.")
+        assert r.get_json()["msg"] == f"Manufacturer #{missing} isn't in Spoolman any more: it was merged or deleted already."
         assert fake.list_urls() == [] and fake.patches == [] and fake.deletes == []
 
     @pytest.mark.parametrize("answer", [
@@ -609,7 +628,7 @@ class TestDryRun:
         assert plan["weight_note"] == {"moved_without_own": [300], "from_g": None, "to_g": 167.0,
                                        "kept_without_own": []}
 
-    def test_a_carried_weight_reaches_the_kept_ones_filaments_with_none(self, client):
+    def test_a_carried_weight_the_moved_filaments_already_read_changes_nothing(self, client):
         fake = _stocked()
         r, _ = _merge(client, fake, 4, 35, body={"dry_run": True})
         plan = r.get_json()["plan"]
@@ -642,7 +661,7 @@ class TestLabels:
         body = r.get_json()
         assert r.status_code == 200, body
         assert body["labels_flagged"]["errors"] == [{"spool_id": 301, "error": "Spoolman refused it: database is locked"}]
-        assert any("couldn't mark every label whose Brand changed" in m for m in _lines(logged, "WARNING"))
+        assert any("couldn't confirm that every label whose Brand changed is marked" in m for m in _lines(logged, "WARNING"))
         assert 1 not in fake.records["vendor"]
 
 
@@ -685,7 +704,10 @@ class TestMergeOptions:
         fake.add("vendor", 60, name="Jessie", registered="2026-05-01T00:00:00Z")
         r, _ = _options(client, fake, 60)
         groups = r.get_json()["groups"]
-        assert groups[0] == {"kind": "look_alike", "ids": [38, 39, 60], "keep": 38, "mine": True}
+        # Only the pair across the two names: #39 is #38's twin under one name, its own
+        # same_name group's pair (review round 1, S7: it was listed twice, once "similar").
+        assert groups[0] == {"kind": "look_alike", "ids": [38, 60], "keep": 38, "mine": True}
+        assert ("same_name", [38, 39]) in [(g["kind"], g["ids"]) for g in groups]
         assert r.get_json()["twins"] == []
 
     def test_a_vendor_list_fcc_couldnt_read_is_never_an_empty_list(self, client):
@@ -767,3 +789,207 @@ class TestHelpers:
     def test_names_that_look_alike(self, a, b, alike):
         ka, kb = spoolman_api.vendor_dup_key(a), spoolman_api.vendor_dup_key(b)
         assert spoolman_api.vendor_names_look_alike(ka, kb) is alike
+
+
+# --- review round 1 (2026-11-26): each finding that touches the server, pinned ------------
+
+def _post_form(client, fake, path, form):
+    """A POST whose body is a form, not JSON (curl -d), with Spoolman on `fake`."""
+    with patch.object(spoolman_api.config_loader, "get_api_urls", return_value=(SM, "http://fb.test")), \
+         patch.object(spoolman_api.requests, "get", side_effect=fake.get), \
+         patch.object(spoolman_api.requests, "patch", side_effect=fake.patch), \
+         patch.object(spoolman_api.requests, "delete", side_effect=fake.delete), \
+         patch.object(state, "add_log_entry"):
+        return client.post(path, data=form)
+
+
+class TestTheMergeAsksForItself:
+    """S5: any request but {"merge": true} (or a dry run) writes nothing. A dry run sent
+    as a form reads as no JSON, and it merged."""
+
+    @pytest.mark.parametrize("body", [None, {}, {"dry_run": "true"}, {"dry_run": 1}, {"merge": "yes"}, [1]],
+                             ids=["no-body", "empty", "dry-run-text", "dry-run-1", "merge-text", "a-list"])
+    def test_any_other_request_writes_nothing(self, client, body):
+        fake = _stocked()
+        r, _ = _call(client, fake, "POST", "/api/vendors/34/merge_into/9", body)
+        assert r.status_code == 400
+        assert "so nothing was merged" in r.get_json()["msg"]
+        assert fake.get_urls == [] and fake.patches == [] and fake.deletes == []
+
+    def test_a_dry_run_sent_as_a_form_merges_nothing(self, client):
+        fake = _stocked()
+        r = _post_form(client, fake, "/api/vendors/34/merge_into/9", {"dry_run": "true"})
+        assert r.status_code == 400
+        assert fake.deletes == [] and 34 in fake.records["vendor"]
+
+    def test_a_dry_run_that_also_says_merge_is_a_dry_run(self, client):
+        fake = _stocked()
+        r, _ = _merge(client, fake, 34, 9, body={"dry_run": True, "merge": True})
+        assert r.status_code == 200 and r.get_json()["dry_run"] is True
+        assert fake.patches == [] and fake.deletes == []
+
+
+class TestLastLookBeforeEachMove:
+    """S6: each filament is read right before its write."""
+
+    def test_a_filament_filed_elsewhere_meanwhile_is_left_where_it_is(self, client):
+        fake = _stocked()
+
+        def refile(n):
+            if n == 1:      # its last look: someone filed it under Overture #1 just before
+                fake.records["filament"][162]["vendor"] = fake.nested(1)
+        fake.get_hooks["/api/v1/filament/162"] = refile
+        r, _ = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 200, body
+        assert body["moved_filament_ids"] == [160, 161, 163]
+        assert body["left_meanwhile"] == [162] and fake.vendor_of(162) == 1
+        assert 162 not in fake.filament_moves()
+        assert "#162 left Sunlu #35 meanwhile, so FCC didn't move it." in body["msg"]
+
+    def test_one_fcc_cant_read_just_before_its_move_is_not_written(self, client):
+        fake = _stocked()
+        fake.get_hooks["/api/v1/filament/162"] = (
+            lambda n: _Resp(503, {"message": "database is locked"}) if n == 1 else None)
+        r, _ = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["still_on_source"] == [162]
+        assert 162 not in fake.filament_moves() and fake.deletes == []
+
+
+class TestReadBacks:
+    """S3 / S4: a write that reported a failure is read back, and a read that fails is
+    said as one, never as a fact."""
+
+    def test_a_move_fcc_cant_read_back_is_said_as_unknown_and_its_labels_marked(self, client):
+        fake = _stocked()
+        fake.land_then_raise[("PATCH", "/api/v1/filament/300")] = requests.exceptions.ReadTimeout("read timed out")
+        fake.get_hooks["/api/v1/filament/300"] = (
+            lambda n: requests.exceptions.ConnectionError("down (test)") if n == 2 else None)
+        r, logged = _merge(client, fake, 1, 4)
+        body = r.get_json()
+        assert r.status_code == 200, body
+        assert body["unknown"] == [300] and body["left_meanwhile"] == [] and body["moved_filament_ids"] == []
+        assert body["msg"].startswith("Merged Overture #1 into Sunlu #4: 0 filaments moved, Overture #1 deleted.")
+        assert ("FCC couldn't tell where #300 went: its move's answer was lost, and it is no longer on "
+                "Overture #1.") in body["msg"]
+        assert "meanwhile" not in body["msg"]
+        assert body["labels_flagged"]["spools"] == [301]
+        assert any("couldn't tell where #300 went" in m for m in _lines(logged, "WARNING"))
+
+    def test_a_carry_whose_answer_was_lost_but_landed_goes_on(self, client):
+        fake = _stocked()
+        fake.land_then_raise[("PATCH", "/api/v1/vendor/4")] = requests.exceptions.ReadTimeout("read timed out")
+        hub = []
+        r, logged = _merge(client, fake, 35, 4, hub=hub)
+        body = r.get_json()
+        assert r.status_code == 200, body
+        assert body["carried"] == ["external_id"] and body["vendor"]["external_id"] == "Sunlu"
+        assert any("took Sunlu #35's External ID" in m for m in _lines(logged, "INFO"))
+        assert not _lines(logged, "ERROR")
+        assert any("copying onto vendor 4 reported a failure" in line for _lv, line in hub)
+
+    def test_a_carry_fcc_cant_read_back_says_so_and_moves_nothing(self, client):
+        fake = _stocked()
+        fake.land_then_raise[("PATCH", "/api/v1/vendor/4")] = requests.exceptions.ReadTimeout("read timed out")
+        fake.get_hooks["/api/v1/vendor/4"] = (
+            lambda n: requests.exceptions.ConnectionError("down (test)") if n >= 2 else None)
+        r, logged = _merge(client, fake, 35, 4)
+        msg = r.get_json()["msg"]
+        assert r.status_code == 502
+        assert msg.startswith("FCC couldn't tell whether Sunlu #35's External ID “Sunlu” was copied onto Sunlu #4: ")
+        assert msg.endswith("Nothing was moved; try again in a moment.")
+        assert fake.filament_moves() == [] and fake.deletes == []
+        assert not _lines(logged, "ERROR") and _lines(logged, "WARNING")
+
+    def test_a_refused_carry_answers_the_kept_ones_record(self, client):
+        fake = _stocked()
+        fake.canned[("PATCH", "/api/v1/vendor/4")] = _Resp(500, {"message": "database is locked"})
+        r, _ = _merge(client, fake, 35, 4)
+        assert r.status_code == 502 and r.get_json()["vendor"]["id"] == 4
+
+
+class TestLabelsAfterTheDelete:
+    """S1 / S2: the labels are marked after the delete, and on every return that stops
+    before it."""
+
+    def test_the_labels_are_marked_after_the_delete(self, client):
+        fake = _stocked()
+        r, _ = _merge(client, fake, 1, 4)
+        assert r.status_code == 200, r.get_json()
+        assert fake.ops.index(("DELETE", "/api/v1/vendor/1")) < fake.ops.index(("PATCH", "/api/v1/spool/301"))
+
+    def test_a_relist_fcc_couldnt_read_still_marks_the_moved_ones_labels(self, client):
+        fake = _stocked()
+        fake.canned[("LIST", 2)] = _Resp(503, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 1, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["source_kept"] is True
+        assert body["labels_flagged"]["spools"] == [301] and body["labels_flagged"]["filaments"] == [300]
+        assert any("couldn't check that Overture #1 holds none now, so it was kept" in m
+                   for m in _lines(logged, "WARNING"))
+
+    def test_a_relist_fcc_couldnt_read_names_the_moves_it_couldnt_decide(self, client):
+        fake = _stocked()
+        fake.canned[("PATCH", "/api/v1/filament/162")] = _Resp(500, {"message": "database is locked"})
+        fake.canned[("LIST", 2)] = _Resp(503, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 35, 4)
+        assert r.status_code == 502
+        assert "FCC couldn't tell whether #162 moved" in " ".join(_lines(logged, "WARNING"))
+
+    def test_a_spool_list_fcc_couldnt_read_for_the_labels_is_a_warning(self, client):
+        fake = _stocked()
+        fake.get_hooks["/api/v1/spool"] = lambda n: _Resp(503, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 1, 4)
+        body = r.get_json()
+        assert r.status_code == 200, body
+        flagged = body["labels_flagged"]
+        assert flagged["spools"] == [] and flagged["filaments"] == [300]
+        assert flagged["errors"] and "couldn't read the spool list" in flagged["errors"][0]["error"]
+        assert any("couldn't confirm that every label" in m for m in _lines(logged, "WARNING"))
+
+
+class TestLabelStatus:
+    """T1: which moved filaments' swatches are marked."""
+
+    def test_a_moved_filament_with_no_label_status_stays_unmarked(self, client):
+        fake = _stocked()
+        fake.records["filament"][300]["extra"] = {}
+        r, _ = _merge(client, fake, 1, 4)
+        flagged = r.get_json()["labels_flagged"]
+        assert flagged["filaments"] == [] and flagged["spools"] == [301]
+
+    def test_a_moved_filament_with_only_a_sample_printed_is_marked(self, client):
+        fake = _stocked()
+        fake.records["filament"][300]["extra"] = {"sample_printed": "true"}
+        r, _ = _merge(client, fake, 1, 4)
+        assert r.get_json()["labels_flagged"]["filaments"] == [300]
+
+
+class TestKeepOrder:
+    """T1: the tie-breaks of the manufacturer kept by default."""
+
+    def test_equal_counts_keep_the_one_with_an_empty_weight(self, client):
+        fake = _stocked()
+        fake.add("vendor", 70, name="Acme", registered="2026-01-01T00:00:00Z")      # older, no weight
+        fake.add("vendor", 71, name="Acme", empty_spool_weight=150.0, registered="2026-06-01T00:00:00Z")
+        fake.add("filament", 700, name="A", material="PLA", vendor=fake.nested(70))
+        fake.add("filament", 710, name="B", material="PLA", vendor=fake.nested(71))
+        r, _ = _merge(client, fake, 71, 70, body={"dry_run": True})
+        assert r.get_json()["default_keep"] == 71
+
+    def test_equal_counts_and_no_weights_keep_the_older(self, client):
+        fake = _stocked()
+        fake.add("vendor", 70, name="Acme", registered="2026-06-01T00:00:00Z")
+        fake.add("vendor", 71, name="Acme", registered="2026-01-01T00:00:00Z")
+        r, _ = _merge(client, fake, 70, 71, body={"dry_run": True})
+        assert r.get_json()["default_keep"] == 71
+
+    def test_a_carried_weight_is_named_for_the_kept_ones_filaments_with_none(self, client):
+        fake = _stocked()
+        fake.add("filament", 164, name="PETG Blue", material="PETG", vendor=fake.nested(35))
+        r, _ = _merge(client, fake, 4, 35, body={"dry_run": True})
+        plan = r.get_json()["plan"]
+        assert plan["carry"] == {"empty_spool_weight": 167.0}
+        assert plan["weight_note"]["kept_without_own"] == [164]
+        assert plan["weight_note"]["moved_without_own"] == []     # #100-#104 read 167 g before and after

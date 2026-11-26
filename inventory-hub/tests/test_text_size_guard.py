@@ -1033,5 +1033,12 @@ def test_the_manufacturer_merge_text_is_readable(page: Page, base_url: str, asse
     page.wait_for_function("() => document.querySelector('#fcc-vendor-merge-confirm [data-vmq-flash]').textContent"
                            ".includes('still holds')")
     assert_text_size(page.locator("#fcc-vendor-merge-confirm"))
+    # The question's plan that failed (review round 1, T4).
+    page.route("**/api/vendors/35/merge_into/4", lambda route, request: route.fulfill(
+        status=502, content_type="application/json",
+        body='{"success": false, "msg": "Couldn\'t read manufacturer #35 from Spoolman. Try again in a moment."}'))
+    page.click('#fcc-vendor-merge-confirm [data-vmq="swap"]')
+    page.wait_for_selector('#fcc-vendor-merge-confirm [data-vmq="retry"]')
+    assert_text_size(page.locator("#fcc-vendor-merge-confirm"))
     page.keyboard.press("Escape")
     page.keyboard.press("Escape")

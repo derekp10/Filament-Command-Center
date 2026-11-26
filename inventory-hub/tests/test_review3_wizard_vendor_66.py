@@ -35,7 +35,7 @@ def test_part_of_a_shared_name_keeps_the_manufacturer_the_box_held(wiz, key):
     wiz.keyboard.type("Some", delay=30)
     wiz.keyboard.press(key)
     assert _value(wiz, HIDDEN) == "2"
-    assert _save(wiz, EDIT)["filament_data"]["vendor_id"] == 2
+    assert _save(wiz, EDIT)["filament_data"].get("vendor_id") is None  # unchanged: left out (Group 66.9 review: Edit Spool sends a manufacturer only when it changed), so the filament keeps #2
 
 
 def test_part_of_another_name_takes_its_first_row(wiz):

@@ -2476,7 +2476,7 @@ def test_the_manufacturer_merge_is_readable(page: Page, base_url: str, assert_co
     scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(q, min_ratio=100))
     # Each line's start: the guard keeps only the start of a long line's text.
     for words in ("Keep Sunlu #4", "Delete Sunlu #35", "External ID", "isn't kept", "Their labels print",
-                  "of them have no empty", "A merge can't be undone."):
+                  "1 of them has no empty", "A merge can't be undone."):
         assert words in scored, (words, scored)
     q.locator('[data-vmq="yes"]').click()
     expect(q.locator("[data-vmq-flash]")).to_contain_text("still holds #162")
@@ -2497,4 +2497,22 @@ def test_the_manufacturer_merge_is_readable(page: Page, base_url: str, assert_co
     win.locator("[data-vm-retry]").hover()
     page.wait_for_timeout(200)
     assert_contrast(win)
+    page.keyboard.press("Escape")
+    # The question's plan that failed, its Try again hovered (review round 1, T4).
+    page.unroute("**/api/vendors/35/merge_options")
+    page.route("**/api/vendors/35/merge_into/4", lambda route, request: route.fulfill(
+        status=502, content_type="application/json",
+        body='{"success": false, "msg": "Couldn\'t read manufacturer #35 from Spoolman, so nothing was merged. Try again in a moment."}'))
+    page.wait_for_timeout(800)
+    page.locator("#vendoredit-merge").click()
+    expect(win.locator("[data-vm-body][data-vm-state='ready']")).to_have_count(1)
+    page.wait_for_timeout(800)
+    win.locator("button.fcc-vm-row").first.click()
+    expect(q.locator('[data-vmq="retry"]')).to_be_visible()
+    q.locator('[data-vmq="retry"]').hover()
+    page.wait_for_timeout(200)
+    assert_contrast(q)
+    assert "Couldn't check the merge" in " ".join(
+        o.get("text", "") for o in conftest.contrast_offenders(q, min_ratio=100))
+    page.keyboard.press("Escape")
     page.keyboard.press("Escape")

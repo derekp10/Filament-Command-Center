@@ -3469,6 +3469,13 @@ const _editfilOpenModal = (fil) => {
 
             if (Object.keys(dirtyExtras).length > 0) {
                 const mergedExtra = { ...(fil.extra || {}) };
+                // Group 66.9 review (listeners S2): the label status and the swatch's are
+                // written by their own doors (the 🏷️ Backlog, Mark Printed, a label scan, a
+                // merge's reprint marks), and this window has no box for either: its copy,
+                // read at the open, is never sent back (update_filament keeps a key left
+                // out). Sent, it undid a mark made while the window was open.
+                delete mergedExtra.needs_label_print;
+                delete mergedExtra.sample_printed;
                 for (const [k, v] of Object.entries(dirtyExtras)) {
                     if (k === 'filament_attributes') {
                         mergedExtra[k] = JSON.stringify(v);
@@ -4435,6 +4442,9 @@ document.addEventListener('DOMContentLoaded', () => {
 window.openVendorCreateModal = (prefill) => {
     const errEl = document.getElementById('vendoredit-error');
     if (errEl) { errEl.classList.add('d-none'); errEl.innerText = ''; }
+    // Group 66.9: a merge that left the editor unable to show the kept one turned Save off.
+    const saveOn = document.getElementById('vendoredit-save');
+    if (saveOn && !_vendorSaveInFlight) saveOn.disabled = false;
     document.getElementById('vendoredit-id').value = '';
     const p = prefill || {};
     document.getElementById('vendoredit-name').value = p.name || '';
@@ -4460,6 +4470,32 @@ window.openVendorCreateModal = (prefill) => {
     }, 100);
 };
 
+// The editor's boxes filled from a manufacturer's record, raw as Spoolman sends it
+// (Group 66.9: the open's read, and the kept one's record a merge answered).
+const _vendorEditFill = (v) => {
+    document.getElementById('vendoredit-id').value = String(v.id);
+    document.getElementById('vendoredit-name').value = v.name || '';
+    document.getElementById('vendoredit-comment').value = v.comment || '';
+    document.getElementById('vendoredit-external-id').value = v.external_id || '';
+    // empty_spool_weight is a number on the wire; render the raw value
+    // so the user sees the same string they'll be editing. Empty/null
+    // → empty input (the user can clear it back to null on save).
+    const wt = v.empty_spool_weight;
+    document.getElementById('vendoredit-empty-weight').value =
+        (wt == null || wt === '') ? '' : String(wt);
+    const ex = v.extra || {};
+    // Website is stored as `extra.website`. Spoolman serves text-type
+    // extras as JSON-encoded strings (`'"https://..."'`); strip the
+    // wrapping quotes for the UI input. unquoteExtra is module-scoped.
+    const site = (typeof unquoteExtra === 'function') ? unquoteExtra(ex.website) : (ex.website || '');
+    document.getElementById('vendoredit-website').value = site || '';
+    // Read-only "member since" footer — Spoolman exposes `registered`
+    // as an ISO timestamp; show only the date portion. Skipped if the
+    // payload is missing it (Spoolman versions before 0.20).
+    const regEl = document.getElementById('vendoredit-registered');
+    if (regEl) regEl.innerText = v.registered ? `Registered ${String(v.registered).slice(0, 10)}` : '';
+};
+
 window.openVendorEditModal = (vendorId) => {
     const vid = vendorId == null ? '' : String(vendorId).trim();
     if (!vid) {
@@ -4470,6 +4506,9 @@ window.openVendorEditModal = (vendorId) => {
     if (titleEl) titleEl.innerText = '✏️ Edit Manufacturer';
     const errEl = document.getElementById('vendoredit-error');
     if (errEl) { errEl.classList.add('d-none'); errEl.innerText = ''; }
+    // Group 66.9: a merge that left the editor unable to show the kept one turned Save off.
+    const saveOn = document.getElementById('vendoredit-save');
+    if (saveOn && !_vendorSaveInFlight) saveOn.disabled = false;
     document.getElementById('vendoredit-id').value = vid;
     document.getElementById('vendoredit-name').value = '';
     document.getElementById('vendoredit-website').value = '';
@@ -4486,29 +4525,9 @@ window.openVendorEditModal = (vendorId) => {
             if (!d || !d.success) throw new Error(d && d.msg ? d.msg : 'Vendor lookup failed');
             const v = (d.vendors || []).find(x => String(x.id) === vid);
             if (!v) throw new Error(`Vendor #${vid} not found.`);
-            // Another open asked meanwhile (a merge re-shows the kept one): this one draws nothing.
+            // Another open asked meanwhile: this one draws nothing.
             if (document.getElementById('vendoredit-id').value !== vid) return;
-            document.getElementById('vendoredit-name').value = v.name || '';
-            document.getElementById('vendoredit-comment').value = v.comment || '';
-            document.getElementById('vendoredit-external-id').value = v.external_id || '';
-            // empty_spool_weight is a number on the wire; render the raw value
-            // so the user sees the same string they'll be editing. Empty/null
-            // → empty input (the user can clear it back to null on save).
-            const wt = v.empty_spool_weight;
-            document.getElementById('vendoredit-empty-weight').value =
-                (wt == null || wt === '') ? '' : String(wt);
-            const ex = v.extra || {};
-            // Website is stored as `extra.website`. Spoolman serves text-type
-            // extras as JSON-encoded strings (`'"https://..."'`); strip the
-            // wrapping quotes for the UI input. unquoteExtra is module-scoped.
-            const site = (typeof unquoteExtra === 'function') ? unquoteExtra(ex.website) : (ex.website || '');
-            document.getElementById('vendoredit-website').value = site || '';
-            // Read-only "member since" footer — Spoolman exposes `registered`
-            // as an ISO timestamp; show only the date portion. Skipped if the
-            // payload is missing it (Spoolman versions before 0.20).
-            if (regEl && v.registered) {
-                regEl.innerText = `Registered ${String(v.registered).slice(0, 10)}`;
-            }
+            _vendorEditFill(v);
             // Group 66.9: 🔗 Merge… for an existing manufacturer, and the note under its
             // name when another one has the same name.
             _vendorMergeUi(vid);
@@ -4616,7 +4635,27 @@ document.addEventListener('vendor:merged', (e) => {
     const vModal = document.getElementById('vendorEditModal');
     const shown = (document.getElementById('vendoredit-id') || {}).value || '';
     if (vModal && vModal.classList.contains('show') && (shown === gone || shown === kept)) {
-        window.openVendorEditModal(kept);
+        // Filled from the kept one's record the merge answered, never emptied and read
+        // again (review round 1, P-S2: a read that failed left every box empty under the
+        // kept id, and a Save then wiped the kept one's fields). With no record the editor
+        // keeps what it shows, says why, and saves nothing until it is opened again.
+        const errEl = document.getElementById('vendoredit-error');
+        if (v && String(v.id) === kept) {
+            if (errEl) { errEl.classList.add('d-none'); errEl.innerText = ''; }
+            const title = document.getElementById('vendorEditModalLabel');
+            if (title) title.innerText = '✏️ Edit Manufacturer';
+            _vendorEditFill(v);
+            _vendorMergeUi(kept);
+        } else {
+            const save = document.getElementById('vendoredit-save');
+            if (save) save.disabled = true;
+            _vendorMergeUi(null);
+            if (errEl) {
+                errEl.classList.remove('d-none');
+                errEl.innerText = `Manufacturer #${gone} was merged into #${kept}, and FCC couldn't read #${kept} `
+                    + 'to show it here: close this window and open it again to edit it.';
+            }
+        }
     }
 });
 

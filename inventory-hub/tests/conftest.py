@@ -1963,7 +1963,20 @@ def _cleanup_orphan_test_records(request):
             name = (f.get("name") or "")
             if name.startswith(TEST_RECORD_PREFIX):
                 _delete_record(url, "filament", f.get("id"))
-    except requests.RequestException:
+        # Group 66.9 review (T3): a merge test's throwaway manufacturers ("__fcc_test_g66_9 …")
+        # a killed run left behind, after the filaments, and only one that holds no filament
+        # (Spoolman deletes a manufacturer that still has filaments and clears their
+        # manufacturer). The shared "__fcc_test_vendor__" never matches the narrower prefix.
+        for v in requests.get(f"{url}/api/v1/vendor", timeout=5).json() or []:
+            vname = (v.get("name") or "") if isinstance(v, dict) else ""
+            if not vname.startswith(f"{TEST_RECORD_PREFIX}g"):
+                continue
+            on_it = requests.get(f"{url}/api/v1/filament?vendor.id={v.get('id')}", timeout=5)
+            listed = on_it.json() if on_it.ok else None
+            if isinstance(listed, list) and not any(
+                    (x.get("vendor") or {}).get("id") == v.get("id") for x in listed if isinstance(x, dict)):
+                _delete_record(url, "vendor", v.get("id"))
+    except (requests.RequestException, ValueError):
         pass
 
 

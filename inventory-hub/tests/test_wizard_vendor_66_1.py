@@ -94,7 +94,7 @@ def test_edit_spool_keeps_the_filaments_own_manufacturer_under_a_shared_name(wiz
     _open_edit_with(wiz, {"success": True, "vendors": [_brand(1), _brand(2)]})
     assert (_value(wiz, SEARCH), _held(wiz)) == ("Some Brand", "2")
     body = _save(wiz, EDIT)
-    assert body["filament_data"]["vendor_id"] == 2, body["filament_data"].get("vendor_id")
+    assert body["filament_data"].get("vendor_id") is None, body["filament_data"].get("vendor_id")  # unchanged: left out (Group 66.9 review: Edit Spool sends a manufacturer only when it changed), so the filament keeps #2
 
 
 def test_edit_spool_keeps_its_manufacturer_when_the_list_couldnt_be_read(wiz):
@@ -104,7 +104,7 @@ def test_edit_spool_keeps_its_manufacturer_when_the_list_couldnt_be_read(wiz):
     _open_edit_with(wiz, {"success": False, "msg": "Couldn't read the manufacturer list from Spoolman."})
     assert (_value(wiz, SEARCH), _held(wiz)) == ("Some Brand", "2")
     body = _save(wiz, EDIT)
-    assert body["filament_data"]["vendor_id"] == 2, body["filament_data"].get("vendor_id")
+    assert body["filament_data"].get("vendor_id") is None, body["filament_data"].get("vendor_id")  # unchanged: left out (Group 66.9 review: Edit Spool sends a manufacturer only when it changed), so the filament keeps #2
 
 
 @pytest.mark.parametrize("key", ["Enter", "Tab"])
