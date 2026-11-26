@@ -121,8 +121,11 @@ def test_full_create_vendor_then_assign_to_new_filament(
         assert (fil.get("vendor") or {}).get("name") == vendor_name
 
     finally:
-        # Best-effort cleanup. Spoolman refuses to delete a vendor while
-        # filaments reference it, so the filament goes first.
+        # Best-effort cleanup, the filament first: Spoolman DOES delete a vendor
+        # that filaments still reference, and clears their vendor (0.27.1's API
+        # text, and a dev probe on 2026-11-26; Group 66.9's merge depends on
+        # this), so deleting the vendor first would leave the filament behind
+        # with no vendor rather than fail.
         if created_filament_id is not None:
             try:
                 requests.delete(

@@ -402,6 +402,49 @@ def vendor_named(name, vendors, but_not=None):
     return min(hits, key=lambda v: v.get('id') if isinstance(v.get('id'), int) else float('inf'))
 
 
+def vendor_dup_key(name):
+    """A vendor's name as Group 66.9's possible-duplicates list compares it: lower
+    case, with every space and punctuation mark dropped, so "Sun-lu", "SUNLU" and
+    "sun lu" are one name. Looser than vendor_name_key (66.1's one name per vendor),
+    which keeps a name's punctuation."""
+    return re.sub(r'[\W_]+', '', str(name or '').lower())
+
+
+def _edit_distance(a, b):
+    """Levenshtein distance of two strings (a plain loop: names are short)."""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+# The shortest name the look-alike rule reads as "contained", and as "a letter or
+# two apart" (Group 66.9). Below them it paired different makers.
+LOOK_ALIKE_MIN_CONTAINED = 4
+LOOK_ALIKE_MIN_SPELLING = 5
+
+
+def vendor_names_look_alike(key_a, key_b):
+    """Two different vendor_dup_key keys that look alike (Group 66.9; Derek,
+    2026-11-24: "one contains the other, or a letter or two apart"): the shorter is
+    inside the longer and has at least 4 characters ("jessie" / "jessiepremium",
+    "bambu" / "bambulab"), or the two are at most 2 letters apart and the shorter has
+    at least 5 ("overture" / "overtrue"). Read without those floors, the words paired
+    11 different makers among SpoolmanDB's 87 brands (3DO / LDO, CC3D / CR3D, "Matter3D
+    Inc" / R3D); with them, none, and no two of Derek's names (checked on dev,
+    2026-11-26)."""
+    a, b = str(key_a or ''), str(key_b or '')
+    if not a or not b or a == b:
+        return False
+    short, long_ = sorted((a, b), key=len)
+    if len(short) >= LOOK_ALIKE_MIN_CONTAINED and short in long_:
+        return True
+    return len(short) >= LOOK_ALIKE_MIN_SPELLING and _edit_distance(a, b) <= 2
+
+
 class SpoolListRead:
     """The spool list for ONE request, read at most once, on first use, and
     shared by the readers in that request (Group 52.1a: the dashboard
@@ -2350,6 +2393,80 @@ def update_vendor_or_raise(vid, data):
     if result is None:
         raise SpoolmanRejection(LAST_SPOOLMAN_ERROR)
     return result
+
+
+def get_vendor_answer(vid):
+    """`get_vendor`, saying what happened (Group 66.9): get_filament_answer's
+    contract for a vendor (manufacturer), so the two read alike.
+      (record, True)  Spoolman answered with JSON. A 404's body is a dict with no
+                      id: "answered, no such vendor".
+      (None, True)    a 5xx, whatever its body, or a body that isn't JSON.
+      (None, False)   it didn't answer (no connection, a timeout).
+    The record is the vendor only when it is a dict whose `id` is `vid` (an int,
+    not a bool): the caller checks. The record is RAW, as read_vendor_list and
+    get_vendor hand it back, so a text extra stays in its wire form for a write
+    that copies it (sanitize_outbound_data keeps a value already in that form).
+    get_vendor answers None for a 404 and for a blip alike.
+
+    Every answer that isn't vendor `vid`'s record leaves ONE hub.log WARNING line
+    saying what came back, as get_filament_answer's do; a caller logs nothing more
+    about the read."""
+    sm_url, _ = config_loader.get_api_urls()
+    url = f"{sm_url}/api/v1/vendor/{vid}"
+    try:
+        resp = requests.get(url, timeout=3)
+    except Exception as e:
+        _log_no_vendor(vid, f"no answer from {url} (" + " ".join(f"{type(e).__name__}: {e}".split()) + ")")
+        return None, False
+    status = getattr(resp, 'status_code', None)
+    if isinstance(status, int) and status >= 500:
+        _log_no_vendor(vid, f"HTTP {status}: {_log_body(resp)}")
+        return None, True
+    try:
+        rec = resp.json()
+    except Exception:
+        _log_no_vendor(vid, f"HTTP {status}, not JSON: {_log_body(resp)}")
+        return None, True
+    if not is_vendor_record(rec, vid):
+        _log_no_vendor(vid, f"HTTP {status}: {_log_body(resp)}")
+    return rec, True
+
+
+def is_vendor_record(rec, vid):
+    """`rec` is vendor `vid`'s own record: a dict whose `id` is `vid`, an int and
+    not a bool (True == 1 in Python)."""
+    rid = rec.get('id') if isinstance(rec, dict) else None
+    return isinstance(rid, int) and not isinstance(rid, bool) and rid == vid
+
+
+def _log_no_vendor(vid, what):
+    """get_vendor_answer's one hub.log line for a read that gave no vendor."""
+    state.logger.warning(f"Read of vendor {vid} from Spoolman gave no vendor: {what}")
+
+
+def delete_vendor(vid):
+    """Hard-delete a vendor (manufacturer) from Spoolman: Group 66.9's merge.
+    Returns True on success, False on failure, with LAST_SPOOLMAN_ERROR set to
+    the rejection (cleared on success), as delete_filament does.
+
+    ⚠️ Nothing refuses it: Spoolman (0.27.1: its API text, its model, and a dev
+    probe on 2026-11-26) deletes a vendor that still has filaments and CLEARS
+    their vendor, answering 200, where a filament that still has spools is
+    refused. A caller deletes only after a strict read shows the vendor holds no
+    filament."""
+    global LAST_SPOOLMAN_ERROR
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        r = requests.delete(f"{sm_url}/api/v1/vendor/{vid}", timeout=10)
+        if r.ok:
+            LAST_SPOOLMAN_ERROR = None
+            return True
+        state.logger.error(f"Failed to delete vendor {vid}: {r.status_code} - {r.text}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {r.text[:400]}"
+    except Exception as e:
+        state.logger.error(f"API Error deleting vendor {vid}: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
+    return False
 
 def ensure_extra_field(entity_type, key, name, field_type="text", choices=None, multi=False):
     """Idempotent register-if-missing for a Spoolman extra field schema.

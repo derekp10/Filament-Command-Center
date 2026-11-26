@@ -260,6 +260,8 @@ from routes_locations import (  # noqa: E402,F401
     api_delete_spool, api_delete_filament, api_merge_filament,
     api_undo, api_get_contents_route, api_spool_details, api_filament_details,
     api_loose_spools,
+    # Group 66.9: Merge manufacturer (its possible-duplicates read and the merge).
+    api_vendor_merge_options, api_merge_vendor,
 )
 
 # (scan pipeline + update_filament + manage_contents moved to routes_scan.py — L316 step 6)

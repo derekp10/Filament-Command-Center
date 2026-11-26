@@ -192,7 +192,7 @@ RAISING_UPDATES = frozenset({
 })
 CREATES_AND_DELETES = frozenset({
     "create_spool", "create_filament", "create_vendor",
-    "delete_spool", "delete_filament",
+    "delete_spool", "delete_filament", "delete_vendor",
 })
 FIELD_SCHEMA_WRITERS = frozenset({
     "ensure_extra_field", "update_extra_field_choices",
@@ -276,7 +276,7 @@ HOW_IT_FAILS = {
     **{name: f"returns None when Spoolman refused it or didn't answer: {_READ_LAST_ERROR}"
        for name in ("create_spool", "create_filament", "create_vendor")},
     **{name: f"returns False when Spoolman refused it or didn't answer: {_READ_LAST_ERROR}"
-       for name in ("delete_spool", "delete_filament")},
+       for name in ("delete_spool", "delete_filament", "delete_vendor")},
     "update_extra_field_choices": (
         "returns {\"success\": False, \"msg\": ...} on a refused field-list read, a key that "
         "isn't there or has no choices, or a refused POST, and logs none of them: check "
@@ -469,6 +469,13 @@ WRITE_SITES = {
     ("routes_locations.py", "api_delete_spool", "delete_spool"): (1, None),
     ("routes_locations.py", "api_merge_filament", "delete_filament"): (1, "api_merge_filament"),
     ("routes_locations.py", "api_merge_filament", "update_spool_or_raise"): (1, "api_merge_filament"),
+    # Group 66.9: Merge manufacturer (the carry, each filament moved, the delete), and the
+    # labels a merge of two different names marks for a reprint.
+    ("routes_locations.py", "api_merge_vendor", "update_vendor_or_raise"): (1, "api_merge_vendor"),
+    ("routes_locations.py", "api_merge_vendor", "update_filament_or_raise"): (1, "api_merge_vendor"),
+    ("routes_locations.py", "api_merge_vendor", "delete_vendor"): (1, "api_merge_vendor"),
+    ("routes_locations.py", "_flag_merged_labels", "update_spool"): (1, "_flag_merged_labels"),
+    ("routes_locations.py", "_flag_merged_labels", "update_filament"): (1, "_flag_merged_labels"),
 
     # --- routes_print_queue.py: label flags ---
     ("routes_print_queue.py", "api_flag_spool_labels", "update_spool"):
@@ -499,6 +506,7 @@ WRITE_SITES = {
     ("spoolman_api.py", "create_vendor", "HTTP POST vendor"): (1, None),
     ("spoolman_api.py", "delete_filament", "HTTP DELETE filament"): (1, None),
     ("spoolman_api.py", "delete_spool", "HTTP DELETE spool"): (1, None),
+    ("spoolman_api.py", "delete_vendor", "HTTP DELETE vendor"): (1, None),
     ("spoolman_api.py", "ensure_extra_field", "HTTP POST field"): (2, None),
     ("spoolman_api.py", "ensure_filament_attributes_cleaned", "HTTP DELETE field"): (1, None),
     ("spoolman_api.py", "ensure_filament_attributes_cleaned", "HTTP POST field"): (1, None),

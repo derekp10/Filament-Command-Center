@@ -112,6 +112,9 @@ EXPECTED_ROUTES = [
     ("/api/vendors", "GET", "api_vendors"),
     ("/api/vendors", "POST", "api_create_vendor"),
     ("/api/vendors/<int:vid>", "PATCH", "api_update_vendor"),
+    # Group 66.9: Merge manufacturer.
+    ("/api/vendors/<int:vid>/merge_options", "GET", "api_vendor_merge_options"),
+    ("/api/vendors/<int:src_vid>/merge_into/<int:dst_vid>", "POST", "api_merge_vendor"),
     ("/static/<path:filename>", "GET", "static"),
 ]
 
