@@ -2298,6 +2298,17 @@ def test_edit_filaments_tare_from_its_brand_is_readable(page: Page, base_url: st
     assert_contrast(column)
     assert any(o.get("id") == "editfil-spool-weight-inherited-badge"
                for o in conftest.contrast_offenders(column, min_ratio=100)), "the badge was never scored"
+    # Derek's walk pick (b), 2026-11-25: the amber "(vendor: N g)" note is hidden while the
+    # badge shows, and back once a figure is typed (nothing is saved): scored there, proved.
+    note = page.locator("#editfil-vendor-wt-hint")
+    expect(note).to_be_hidden()
+    page.locator("#editfil-spool-weight").fill("190")
+    expect(note).to_be_visible()
+    expect(note).to_have_text("(vendor: 167g)")
+    expect(badge).to_be_hidden()
+    assert_contrast(column)
+    assert any(o.get("id") == "editfil-vendor-wt-hint"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the note was never scored"
 
 
 def test_edit_filaments_unread_manufacturer_note_is_readable(page: Page, base_url: str, assert_contrast):

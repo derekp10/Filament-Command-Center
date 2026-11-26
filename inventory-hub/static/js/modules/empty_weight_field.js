@@ -30,6 +30,9 @@
 //     the person).
 //   - source(): what the last draw showed ('spool' = the record's own, 'filament',
 //     'vendor', or null), and isTouched().
+//   - hint (an option, beside badge): a note that says what the badge says (Edit
+//     Filament's "(vendor: N g)"), drawn exactly while the badge isn't (Group 66's picture
+//     walk, Derek's (b), 2026-11-25). Its words are the caller's.
 //
 // Usage:
 //   const field = window.bindEmptyWeightField({
@@ -50,12 +53,13 @@
 
     function bindEmptyWeightField(options = {}) {
         let { input, badge = null, sourceLabel = null, copyVendorBtn = null,
-              onChange = null } = options;
+              hint = null, onChange = null } = options;
 
         if (typeof input === 'string') input = document.getElementById(input);
         if (typeof badge === 'string') badge = document.getElementById(badge);
         if (typeof sourceLabel === 'string') sourceLabel = document.getElementById(sourceLabel);
         if (typeof copyVendorBtn === 'string') copyVendorBtn = document.getElementById(copyVendorBtn);
+        if (typeof hint === 'string') hint = document.getElementById(hint);
 
         if (!input) return null;
 
@@ -73,17 +77,31 @@
         // through it, and that Save wrote the old vendor's weight as the filament's own).
         let dead = false;
 
+        // A note that says what the badge says (Edit Filament's "(vendor: N g)"; Group 66's
+        // picture walk, Derek, 2026-11-25, (b)): drawn exactly while the badge isn't. A box
+        // showing the brand's figure reads "↩ from vendor" alone, and the note is back once
+        // a person types, empties the box or presses Use Vendor (the figure is then the
+        // record's own, and the brand's beside it says something the box doesn't).
+        const showHint = (on) => { if (hint) hint.style.display = on ? '' : 'none'; };
+
         const showBadge = (source) => {
             if (!badge) return;
             if (source === 'filament' || source === 'vendor') {
                 if (sourceLabel) sourceLabel.textContent = source;
                 badge.style.display = '';
+                showHint(false);
             } else {
                 badge.style.display = 'none';
+                showHint(true);
             }
         };
 
-        const clearBadge = () => { if (badge) badge.style.display = 'none'; };
+        // Torn down, it changes nothing: the badge and the note are the new binding's.
+        const clearBadge = () => {
+            if (dead) return;
+            if (badge) badge.style.display = 'none';
+            showHint(true);
+        };
 
         // Draw the box from the cascade and the vendor it has now.
         const draw = () => {

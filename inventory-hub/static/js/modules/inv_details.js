@@ -2479,6 +2479,9 @@ const _editfilOpenModal = (fil) => {
     // box that only shows what it inherits). Drawn at the open, and again whenever the
     // vendor the box holds changes or is saved: it was drawn once, from the filament as it
     // opened, so a weight saved in the vendor editor (or a vendor picked) never reached it.
+    // The hint is drawn only while the box doesn't show that weight as its inheritance: the
+    // binding below hides it while its "↩ from vendor" badge shows (Derek's walk pick (b),
+    // 2026-11-25: the two said the same thing side by side).
     const vendorWtHint = document.getElementById('editfil-vendor-wt-hint');
     const spoolWtEl = document.getElementById('editfil-spool-weight');
     let emptyField = null;   // the binding below
@@ -2994,6 +2997,7 @@ const _editfilOpenModal = (fil) => {
             copyVendorBtn: document.getElementById('editfil-copy-vendor-wt'),
             badge: document.getElementById('editfil-spool-weight-inherited-badge'),
             sourceLabel: document.getElementById('editfil-spool-weight-inherited-source'),
+            hint: vendorWtHint,
         });
         emptyField = field;
         if (field) {
