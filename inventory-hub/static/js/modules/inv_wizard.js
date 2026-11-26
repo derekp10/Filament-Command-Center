@@ -330,6 +330,122 @@ window.wizardSetFilEmptyWeightInherited = (value, source) => {
     }, true);
 })();
 
+// --- A LABEL SCANNED ON ONE OF THE WIZARD'S DROPDOWNS (review round 3 of Group 66, R3-02) ---
+// A dropdown's keys go to the scan accumulator (scripts.html reads them; the field capture
+// takes boxes only), and the browser's type-ahead moved the dropdown by the label's first
+// letters: on Existing Filament's list "ID:57" picked the first filament starting with I, its
+// change made that the filament Save uses, and Create made the new spool under it. The
+// location editor's dropdowns have had the rule since Group 61 (_installLocEditorEnterToSave,
+// inv_loc_mgr.js): the keys typed on the dropdown that has the keyboard are judged at the
+// Enter; a burst, a ':' or '/', or a search that starts none of its options is a scan; the
+// dropdown goes back to what it held before the scan's first key (a person's jump just
+// before it stays), its change runs again for that pick, and a toast says so; the scan goes
+// on without that jump glued in front. Here the changed flag, the post-create lock (Save and
+// its status line) and the touched sets go back too: a scan is no edit. Older than Group 66.
+(function () {
+    const wizEl = document.getElementById('wizardModal');
+    if (!wizEl) return;
+    const BURST_MS = 150, TYPEAHEAD_MS = 1000, RESET_MS = 2000;
+    const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
+        'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
+    const isWizSelect = (el) => !!el && el.tagName === 'SELECT' && !!el.closest
+        && !!el.closest('#wizardModal') && !el.closest('.swal2-container');
+    const payload = (txt) => !!(txt && window.looksLikeScanPayload && window.looksLikeScanPayload(txt));
+    // Do these keys jump to one of the dropdown's options (the start of its text, or one
+    // letter again and again), as the browser's type-ahead reads them?
+    const jumps = (sel, typed) => {
+        const t = String(typed || '').trim().toLowerCase();
+        if (!t) return false;
+        const texts = Array.from(sel.options || []).map((o) => String(o.textContent || '').trim().toLowerCase());
+        if (texts.some((x) => x.startsWith(t))) return true;
+        return /^(.)\1+$/.test(t) && texts.some((x) => x.startsWith(t[0]));
+    };
+    let run = null;   // { el, keys: [{ k, t, was }] }: the keys typed on the dropdown with the keyboard
+    const keysOn = (el, now) => (run && run.el === el && run.keys.length
+        && now - run.keys[run.keys.length - 1].t <= RESET_MS) ? run.keys : [];
+    const textOf = (keys) => keys.map((x) => x.k).join('');
+    const burstAt = (keys, now) => {
+        let i = keys.length - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t < BURST_MS) i--;
+        return keys.length - i >= 3 && now - keys[i].t < BURST_MS;
+    };
+    // The search the type-ahead holds after keys[end - 1]: the keys since its 1 s reset.
+    const searchOf = (keys, end) => {
+        let i = end - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t <= TYPEAHEAD_MS) i--;
+        return textOf(keys.slice(Math.max(0, i), end));
+    };
+    // Where the scan starts: after a pause (longer than its own keys, twice over, and than
+    // a burst) that ends a person's jump to an option, else at the first key.
+    const scanFrom = (sel, keys) => {
+        for (let k = keys.length - 1; k > 0; k--) {
+            let pace = 0;
+            for (let j = k + 1; j < keys.length; j++) pace = Math.max(pace, keys[j].t - keys[j - 1].t);
+            if (keys[k].t - keys[k - 1].t <= Math.max(BURST_MS, 2 * pace)) continue;
+            const theirs = searchOf(keys, k);
+            if (!payload(theirs) && jumps(sel, theirs)) return k;
+        }
+        return 0;
+    };
+    // What a key found, to put back if it turns out to be a scan's.
+    const formNow = (sel) => {
+        const msg = document.getElementById('wiz-status-msg');
+        const btn = document.getElementById('btn-wiz-submit');
+        return { value: sel.value, dirty: wizardState.isDirty, locked: wizardState.lockedAfterSuccess,
+            touchedExtras: new Set(wizardState.touchedExtras || []),
+            touchedNative: new Set(wizardState.touchedNative || []),
+            status: msg ? msg.innerHTML : null, saveOff: btn ? btn.disabled : null };
+    };
+    wizEl.addEventListener('keydown', (e) => {
+        if (e.isComposing || !isWizSelect(e.target)) return;
+        const sel = e.target;
+        const now = Date.now();
+        if (e.ctrlKey || e.altKey || e.metaKey || (e.key !== 'Enter' && (e.repeat || PERSON_KEYS.includes(e.key)))) {
+            run = null;
+            return;
+        }
+        if (e.key.length === 1) {
+            const keys = keysOn(sel, now);
+            if (!keys.length) run = { el: sel, keys: [] };
+            run.keys.push({ k: e.key, t: now, was: formNow(sel) });
+            return;
+        }
+        if (e.key !== 'Enter') return;
+        const keys = keysOn(sel, now);
+        run = null;
+        if (!keys.length) return;
+        const scan = burstAt(keys, now) || payload(textOf(keys)) || !jumps(sel, searchOf(keys, keys.length));
+        if (!scan) return;
+        const from = scanFrom(sel, keys);
+        const was = keys[from].was;
+        if (sel.value !== was.value) {
+            sel.value = was.value;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));   // its pick's handler again
+            const opt = sel.options[sel.selectedIndex];
+            if (window.showToast) window.showToast(
+                `The list is back to "${opt ? opt.textContent.trim() : was.value}": the scan's letters had changed it`, 'info', 4000);
+        }
+        wizardState.isDirty = was.dirty;
+        wizardState.touchedExtras = was.touchedExtras;
+        wizardState.touchedNative = was.touchedNative;
+        if (was.locked && !wizardState.lockedAfterSuccess) {
+            wizardState.lockedAfterSuccess = true;
+            const btn = document.getElementById('btn-wiz-submit');
+            if (btn && was.saveOff !== null) btn.disabled = was.saveOff;
+            const msg = document.getElementById('wiz-status-msg');
+            if (msg && was.status !== null) msg.innerHTML = was.status;
+        }
+        // The scan the accumulator sends at this Enter is this dropdown's own keys from the
+        // scan's first: a person's jump just before it is no part of it.
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        const own = textOf(keys.slice(from));
+        if (st && typeof st.scanBuffer === 'string' && st.scanBuffer !== own && st.scanBuffer.endsWith(own)) {
+            st.scanBuffer = own;
+            st.scanStartTime = keys[from].t;
+        }
+    });   // the modal's bubble phase: before the accumulator, on the document, hears the Enter
+})();
+
 // --- "UNSAVED CHANGES" (Group 66.2): one question for every way the wizard's edits
 // would be lost: its close, and anything that would start it over (a new Prusament
 // spool's QR, the legacy picker's Add new spool, an Edit / Clone / New Spool opened over
