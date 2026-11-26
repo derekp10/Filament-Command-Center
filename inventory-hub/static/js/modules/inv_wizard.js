@@ -6250,10 +6250,15 @@ const _spoolRowBadgeHtml = (row) => {
         }
         return `<span class="badge bg-success">✓ ${parts.join(' · ') || 'Scanned'}</span>`;
     }
+    // A badge that takes a click clears the row as its ✕ does (Group 66's picture walk,
+    // 2026-11-25): wizardClearSpoolRow empties the box, then runs the row's check with no
+    // link. The click ran only the check, which left the link's text in the box with no
+    // badge, and the next Tab through it checked the same text again (round 1's R4-04, the
+    // ✕'s own, on the badge).
     if (row.status === 'error') {
         return `<span class="badge bg-danger" role="button" style="cursor: pointer;"
                        title="Click to clear this row and retry"
-                       onclick="window.wizardScanSpoolRow(${row.idx}, '')">✗ ${_wizEscape(row.errorMsg || 'Scan failed')} ✕</span>`;
+                       onclick="window.wizardClearSpoolRow(${row.idx})">✗ ${_wizEscape(row.errorMsg || 'Scan failed')} ✕</span>`;
     }
     // Group 66.3 (B), Edit Spool's link: its words are text (a spool's name can be in them).
     if (row.status === 'linked-new' || row.status === 'linked') {
@@ -6262,7 +6267,7 @@ const _spoolRowBadgeHtml = (row) => {
     if (row.status === 'refused') {
         return `<span class="badge bg-warning text-dark" role="button" style="cursor: pointer;"
                        title="Click to clear this row"
-                       onclick="window.wizardScanSpoolRow(${row.idx}, '')">✗ ${_wizEscape(row.errorMsg || 'Not linked')} ✕</span>`;
+                       onclick="window.wizardClearSpoolRow(${row.idx})">✗ ${_wizEscape(row.errorMsg || 'Not linked')} ✕</span>`;
     }
     return '';
 };
