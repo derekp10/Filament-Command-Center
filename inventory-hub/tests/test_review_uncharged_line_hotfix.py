@@ -147,9 +147,11 @@ def test_a_set_part_placed_names_only_what_its_boxes_left(logs):
     # any spool — weigh the spools to true up.")
     with Indx() as p, _measured(USAGE, {}):
         _changed_at_end(p)
+        # The person saw the set's question and went ahead (Group 64.2 (2): `set_ack`).
         body = _confirm({"charges": [{"row": 243, "sid": 243, "grams": 75.32},
                                      {"row": 231, "sid": 231, "grams": 21.9},
-                                     {"position": 4, "sid": 42, "grams": 30.0}]})
+                                     {"position": 4, "sid": 42, "grams": 30.0}],
+                         "set_ack": {"4": 30.0}})
         assert p.sm.used(42) == pytest.approx(730.0)
     assert body["status"] == "confirmed" and body["shortfall_g"] == pytest.approx(54.28), body
     assert _uncharged(logs) == (
@@ -237,7 +239,8 @@ def test_a_no_spool_cards_set_part_placed_is_named(logs):
         p.load_229()
         _tick("FINISHED")
         assert _rec()["kind"] == "no_spool"
-        body = _confirm({"charges": [{"position": 4, "sid": 42, "grams": 20.0}]})
+        body = _confirm({"charges": [{"position": 4, "sid": 42, "grams": 20.0}],
+                         "set_ack": {"4": 20.0}})      # Group 64.2 (2)
     assert body["status"] == "confirmed" and body["shortfall_g"] == pytest.approx(30.0), body
     assert _uncharged(logs) == (
         f"{LEAD}30.00g of '{FILE}' wasn't charged to any spool: 30 g on T4 · RCOI-5, "
@@ -303,7 +306,8 @@ def test_a_retry_after_a_failed_write_still_names_the_head(logs):
         p.sm.patch_lost.add(243)
         first = _confirm({"charges": [{"row": 243, "sid": 243, "grams": 75.32},
                                       {"row": 231, "sid": 231, "grams": 21.9},
-                                      {"position": 4, "sid": 42, "grams": 30.0}]})
+                                      {"position": 4, "sid": 42, "grams": 30.0}],
+                          "set_ack": {"4": 30.0}})      # Group 64.2 (2)
         assert first["status"] == "confirmed" and first["errors"], first
         assert not [m for m, _ in logs if "wasn't charged to any spool" in m]
         p.sm.patch_lost.clear()
@@ -433,7 +437,8 @@ def test_a_no_spool_line_picked_with_fewer_grams_names_the_spool_picked_first(lo
 
 def test_a_retry_row_typed_down_is_never_called_a_clamp(logs):
     """#243's write was lost, and its retry is applied with 50 of its 75.32 g: no
-    spool clamped anything, so nothing is "said above"."""
+    spool clamped anything, so nothing is "said above". Group 64.2 (5): the 25.32 g
+    are named with #243's row and its head (they read "went to no spool")."""
     # On e777bcd: AssertionError: "...; and 25.32 g the picked spools couldn't take (said above) — ..."
     # (no spool had too little: the retry's row was typed down)
     with Indx() as p, _measured(USAGE, {}):
@@ -448,12 +453,14 @@ def test_a_retry_row_typed_down_is_never_called_a_clamp(logs):
     assert _shortfall_entry() == pytest.approx(109.6)
     assert _uncharged(logs) == (
         f"{LEAD}109.60g of '{FILE}' wasn't charged to any spool: 84.28 g on T4 · RCOI-5, which had #42 "
-        f"and #229; and 25.32 g more that went to no spool — weigh them to true up.")
+        f"and #229; and 25.32 g more on T6 · RCOI-7 left off #243's row — weigh them to true up.")
 
 
 def test_a_retry_row_typed_up_never_leads_with_more_than_the_ledger(logs):
     """#243's retry is applied with 100 of its 75.32 g: the ledger's shortfall is
-    59.6 g, and the line leads with it, saying why it is less than T4's 84.28 g."""
+    59.6 g, and the line leads with it, saying why it is less than T4's 84.28 g.
+    Group 64.2 (5): the 24.68 g are named with #243's row (they read "typed for
+    other spools")."""
     # On e777bcd: AssertionError: "...84.28g of ... wasn't charged to any spool: 84.28 g on T4 · RCOI-5,
     # which had #42 and #229 — weigh them to true up." (more than the ledger's 59.6 g)
     with Indx() as p, _measured(USAGE, {}):
@@ -466,8 +473,46 @@ def test_a_retry_row_typed_up_never_leads_with_more_than_the_ledger(logs):
     assert _shortfall_entry() == pytest.approx(59.6)
     assert _uncharged(logs) == (
         f"{LEAD}59.60g of '{FILE}' wasn't charged to any spool: 84.28 g on T4 · RCOI-5, which had #42 "
-        f"and #229; but 24.68 g more than the card asked were typed for other spools — weigh them to "
-        f"true up.")
+        f"and #229; but 24.68 g more than the card showed were typed for #243's row on T6 · RCOI-7 — "
+        f"weigh them to true up.")
+
+
+def test_todays_page_retry_rows_typed_down_and_left_out_are_named(logs):
+    """Group 64.2 (5), through today's page's `charges`: both writes lost, then the
+    retry charges #231's row 11.9 of its 21.9 g and leaves #243's row out. The
+    ledger counts all of it, and the line names each row, never "no spool"."""
+    # On 1d1ddc2: AssertionError: "...; and 85.32 g more that went to no spool — ..."
+    with Indx() as p, _measured(USAGE, {}):
+        _changed_at_end(p)
+        p.sm.patch_lost.update({243, 231})
+        first = _confirm({"updates": {"243": 75.32, "231": 21.9}})
+        assert first["status"] == "error" and len(first["errors"]) == 2, first
+        p.sm.patch_lost.clear()
+        # T4's set left unplaced: the page's second press, after its question (64.2 (2)).
+        second = _confirm({"charges": [{"row": 231, "sid": 231, "grams": 11.9}], "set_ack": {"4": 0.0}})
+    assert second["status"] == "confirmed" and second["shortfall_g"] == pytest.approx(169.6), second
+    assert _shortfall_entry() == pytest.approx(169.6)
+    assert _uncharged(logs) == (
+        f"{LEAD}169.60g of '{FILE}' wasn't charged to any spool: 84.28 g on T4 · RCOI-5, which had #42 "
+        f"and #229; and 75.32 g more on T6 · RCOI-7 left off #243's row; and 10 g more on T7 · RCOI-8 "
+        f"left off #231's row — weigh them to true up.")
+
+
+def test_a_row_typed_down_then_typed_down_again_across_two_retries_adds_up(logs):
+    """Each Apply's left-off grams are kept on the record, so a second retry that
+    commits names the first one's too: #243's row 70 of 75.32 g (write lost again),
+    then 60 of 70."""
+    with Indx() as p, _measured(USAGE, {}):
+        _changed_at_end(p)
+        p.sm.patch_lost.add(243)
+        _confirm({"updates": {"243": 75.32, "231": 21.9}})
+        _confirm({"charges": [{"row": 243, "sid": 243, "grams": 70.0}], "set_ack": {"4": 0.0}})
+        p.sm.patch_lost.clear()
+        third = _confirm({"charges": [{"row": 243, "sid": 243, "grams": 60.0}], "set_ack": {"4": 0.0}})
+    assert third["status"] == "confirmed" and third["shortfall_g"] == pytest.approx(99.6), third
+    assert _uncharged(logs) == (
+        f"{LEAD}99.60g of '{FILE}' wasn't charged to any spool: 84.28 g on T4 · RCOI-5, which had #42 "
+        f"and #229; and 15.32 g more on T6 · RCOI-7 left off #243's row — weigh them to true up.")
 
 
 def test_a_clamp_before_a_failed_write_is_still_said_above_at_the_retry(logs):

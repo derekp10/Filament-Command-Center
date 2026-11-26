@@ -63,6 +63,39 @@
         return `<div class="${cls}" style="flex-basis:100%;color:${color};font-size:var(--fcc-fs-small);line-height:1.4;">${icon || ''}${esc(text)}</div>`;
     }
 
+    // Group 64, Decision 1 (Derek, 2026-11-20): a spool that changed weight after its
+    // print ended. FCC fills in 0 g when it weighed the spool after the end (the scale
+    // counted the print already), else the print's grams; "both should be heavily
+    // noted in the UI so its very clear" that charging may count the print twice.
+    // The server writes the words (`words`: which spool, when, on which screen).
+    function weighedHtml(w) {
+        if (!w || !w.words) return '';
+        // Group 64 fix review 2 (CX4): a spool weighed while off its head between two
+        // swaps (FX5's mark, `back`) has only its stretch after going back on filled
+        // in, the part the scale didn't count: never "0 g", and charging it is right.
+        const head = w.back
+            ? '⚠️ Weighed while off its head: only its stretch after going back on is filled in'
+            : w.unseen
+            // Group 65 fix review 2 (RE1): FCC can't place it against the print.
+            ? '⚠️ Weighed while FCC couldn’t see the print: check before you Apply'
+            // Group 65 fix review 3 (RX4): weighed after FCC last saw the print, every gram
+            // on its row printed before that.
+            : w.seen
+            ? '⚠️ Weighed after FCC last saw this print: 0 g filled in'
+            : w.known_order
+            ? '⚠️ Weighed after this print ended: 0 g filled in'
+            : '⚠️ Changed weight after this print ended: check before you Apply';
+        const tail = w.back
+            ? "The grams filled in are the stretch the scale didn't count: type 0 only if it was weighed again after this print."
+            : w.known_order
+            ? 'Charging these grams would count the print twice: type them only if that weighing came before the print.'
+            : 'Charging the grams filled in may count this print twice.';
+        return `<div class="fcc-cr-weighed" role="note"
+                     style="flex-basis:100%;margin:4px 0;padding:7px 10px;border:2px solid #ff7a59;border-radius:5px;
+                            background:#2a1410;color:#ffd6c9;font-size:var(--fcc-fs-small);line-height:1.45;">
+                    <b style="color:#ffb39e;">${esc(head)}</b><br>${esc(w.words)}. ${esc(tail)}</div>`;
+    }
+
     // ----- Scope B (hotfix 2026-11-11): a head's spools as a set -------------
     // A head whose spool changed during the print shows every spool it had, under
     // one header. Split at the swaps FCC recorded, each is a row pre-filled with
@@ -136,6 +169,24 @@
         });
         return Math.max(0, ...Object.values(n));
     }
+    // Group 65's picture walk (Derek, 2026-11-24: the rows said HEAD-1 and the
+    // banner "toolhead position(s) 0"): the heads a spool_changed card's banner
+    // names, each as its rows name it (its toolhead), else T<n>, the slicer's tool
+    // as the card's lines say it when they have no name for it: " on <b>XL-1</b>",
+    // " on <b>XL-1</b> and <b>XL-3</b>"; '' with none.
+    function changedHeadsWords(rec) {
+        const names = [];
+        (rec.changed_positions || []).forEach((pos) => {
+            const same = (x) => x && String(x.position) === String(pos) && x.toolhead;
+            const row = (rec.spools || []).find(same);
+            const head = (Array.isArray(rec.heads_at_end) ? rec.heads_at_end : []).find(same);
+            const name = (row && row.toolhead) || (head && head.toolhead) || `T${pos}`;
+            if (names.indexOf(name) < 0) names.push(name);
+        });
+        if (!names.length) return '';
+        const b = names.map((n) => `<b>${esc(n)}</b>`);
+        return ` on ${b.length > 1 ? `${b.slice(0, -1).join(', ')} and ${b[b.length - 1]}` : b[0]}`;
+    }
     // Review fix: whether a card's held line is a set of spools (scope B), whose
     // Apply needs each spool's grams rather than one pick.
     function isSetLine(rec, pos) {
@@ -193,7 +244,7 @@
                     <span style="color:#9aa;font-size:var(--fcc-fs-small);">(${esc(when)}${esc(left)})</span>
                 </div>
                 <div class="input-group input-group-sm" style="width:132px;flex:none;">
-                    <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                    <input type="number" class="fcc-cr-pgrams fcc-weight-box form-control bg-dark text-white border-secondary"
                            data-line="${esc(line)}" value="" step="0.01" min="0" autocomplete="off"
                            aria-label="Grams from spool #${esc(e.sid)}" style="font-size:1.05rem;" />
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
@@ -256,7 +307,57 @@
                 n.appendChild(document.createTextNode(String(p)));
             }
         });
+        // Group 64 fix review 4 (UP2): a card kept as it was drawn, because FCC couldn't
+        // read the review list again after its Apply, says so whatever else it says.
+        if (card.dataset && card.dataset.stale === '1') {
+            n.appendChild(document.createTextNode((n.textContent ? ' ' : '') + STALE_CARD_WORDS));
+        }
         n.style.display = n.textContent ? '' : 'none';
+    }
+    const STALE_CARD_WORDS = "FCC couldn't read the review list just now, so this card may be out of date: "
+        + 'Apply reads it again first, or close 🛑 Review and open it again.';
+    // Group 64.2 (the look): a head's name in words the server sent (a refusal) is
+    // bold, as on the card's own lines ("so that it reads as a toolhead", Derek,
+    // 2026-11-12): the card's head names (`data-head-names`: every toolhead it names
+    // and its T<n>) found standing whole in the words, longest first, become
+    // sayOnCard's {head} pieces; "XL-1" in "XL-10" stays as it is.
+    function cardHeadNames(rec) {
+        const out = new Set();
+        const add = (v) => { if (v != null && String(v).trim()) out.add(String(v).trim()); };
+        (rec.heads_at_end || []).forEach((h) => { if (h) { add(h.toolhead); if (h.position != null) add(`T${h.position}`); } });
+        (rec.spools || []).forEach((r) => { if (r) { add(r.toolhead); if (r.position != null) add(`T${r.position}`); } });
+        Object.keys(rec.unresolved_usage || rec.usage_map || {}).forEach((k) => add(`T${k}`));
+        Object.values(rec.shortfall_causes || {}).forEach((c) => { if (c) add(c.toolhead); });
+        return Array.from(out);
+    }
+    function headPieces(card, msg) {
+        const text = String(msg == null ? '' : msg);
+        let names = [];
+        try { names = JSON.parse((card && card.dataset && card.dataset.headNames) || '[]'); } catch (_) { names = []; }
+        names = (Array.isArray(names) ? names : []).map(String).filter((n) => n).sort((a, b) => b.length - a.length);
+        if (!text || !names.length) return text;
+        // A name stands whole: no letter, digit or hyphen just before it, and no
+        // letter or digit just after it, nor a hyphen and one ("HEAD" in "HEAD-70").
+        const word = /[A-Za-z0-9]/;
+        const goesOn = (j) => word.test(text[j] || '') || (text[j] === '-' && word.test(text[j + 1] || ''));
+        const out = [];
+        let i = 0;
+        let plain = '';
+        while (i < text.length) {
+            const hit = names.find((n) => text.startsWith(n, i)
+                && !(i > 0 && (word.test(text[i - 1]) || text[i - 1] === '-'))
+                && !goesOn(i + n.length));
+            if (hit) {
+                if (plain) { out.push(plain); plain = ''; }
+                out.push({ head: hit });
+                i += hit.length;
+            } else {
+                plain += text[i];
+                i += 1;
+            }
+        }
+        if (plain) out.push(plain);
+        return out.length === 1 && typeof out[0] === 'string' ? out[0] : out;
     }
     // Round 2 (R1, Derek's picture check, 2026-11-12): while the set check waits
     // for its second press, the card's button says what that press does, in
@@ -346,33 +447,55 @@
         });
         return out;
     }
+    // Whether the ledger counts a card's ask as a total (the server's rule in
+    // _lines_left_unplaced): a no_spool card's whole usage, or a review an earlier
+    // Apply fixed (`requested_total`: a retry after a failed write, a card kept with
+    // grams left). Group 64.2 (6).
+    function askFixed(rec, kind) {
+        return kind === 'no_spool' || (rec && rec.requested_total != null);
+    }
     // Round 2's review: a held line that isn't a set and that a press charges
     // nothing to (no spool picked, or no grams) is left uncharged too, at its
     // record's grams, whatever its box shows: the server keeps them on the review
     // (a no_spool card counts its whole line), and the Activity Log names them.
-    // [{line, where, grams}], for the set check's Yes to count.
+    // Group 64.2 (6): where the ask is fixed (askFixed, the card's
+    // data-ask-fixed), a picked line typed under FCC's figure leaves the grams it
+    // was typed short of, as the ledger counts them, and one typed over makes up
+    // for another line's (`grams` below 0); on any other card a picked line is
+    // charged what its pick says. [{line, where, grams, picked}], for the set
+    // check's Yes to count.
     function plainLinesLeft(card) {
+        const fixed = card.dataset.askFixed === '1';
         const out = [];
         card.querySelectorAll('.fcc-cr-unline, .fcc-cr-pickline').forEach((ln) => {
             if (ln.classList.contains('fcc-cr-setline')) return;
             const box = ln.querySelector('.fcc-cr-pgrams');
             const held = Number(box && box.getAttribute('value'));
             if (!(held > 0)) return;
-            if (pickedSid(card, ln.dataset.line) && parseFloat(box.value) > 0) return;
             const pos = ln.dataset.pos != null ? ln.dataset.pos : ln.dataset.line;
-            out.push({ line: ln.dataset.line, where: ln.dataset.where || `T${pos}`, grams: held });
+            const where = ln.dataset.where || `T${pos}`;
+            const typed = parseFloat(box.value);
+            if (pickedSid(card, ln.dataset.line) && typed > 0) {
+                if (!fixed) return;
+                const d = Math.round((held - typed) * 100) / 100;
+                if (Math.abs(d) > 0.005) out.push({ line: ln.dataset.line, where, grams: d, picked: true });
+                return;
+            }
+            out.push({ line: ln.dataset.line, where, grams: held, picked: false });
         });
         return out;
     }
-    // "a", "a or b", "a, b or c", as sayOnCard's pieces: each head's name bold.
-    function orHeads(wheres) {
+    // "a", "a or b", "a, b or c" (or with "and"), as sayOnCard's pieces: each
+    // head's name bold.
+    function listHeads(wheres, conj) {
         const out = [];
         wheres.forEach((w, i) => {
-            if (i) out.push(i === wheres.length - 1 ? ' or ' : ', ');
+            if (i) out.push(i === wheres.length - 1 ? conj : ', ');
             out.push({ head: w });
         });
         return out;
     }
+    function orHeads(wheres) { return listHeads(wheres, ' or '); }
     // Whether an Apply may go ahead over the card's sets: at once when each is
     // placed exactly; else the first press says why in each set and on the card,
     // and a second press with the same grams goes ahead (Derek: more resistance on
@@ -383,7 +506,7 @@
         const problems = setProblems(card);
         const plain = problems.length ? plainLinesLeft(card) : [];
         const sig = problems.map((p) => `${p.box.dataset.pos}=${p.placed}`)
-            .concat(plain.map((l) => `${l.line}=left`)).join(';');
+            .concat(plain.map((l) => `${l.line}=${l.picked ? l.grams : 'left'}`)).join(';');
         // A double click's second press is no second press (Derek's rule for a
         // yes that is hard to undo): the second click of a double click, or any
         // press under 700 ms after the one that asked, does nothing, and what
@@ -408,23 +531,37 @@
             if (a) { a.textContent = `⚠️ ${p.words}`; a.style.display = ''; }
         });
         const setShort = problems.filter((p) => p.short > 0).reduce((a, p) => a + p.short, 0);
-        const over = problems.filter((p) => p.short < 0).reduce((a, p) => a - p.short, 0);
-        const plainG = plain.reduce((a, l) => a + l.grams, 0);
-        const short = setShort + plainG;
+        const setOver = problems.filter((p) => p.short < 0).reduce((a, p) => a - p.short, 0);
+        const unpicked = plain.filter((l) => !l.picked);
+        const pickedShort = plain.filter((l) => l.picked && l.grams > 0);
+        const pickedOver = plain.filter((l) => l.picked && l.grams < 0);
+        const plainG = unpicked.reduce((a, l) => a + l.grams, 0);
+        const shortG = pickedShort.reduce((a, l) => a + l.grams, 0);
+        const overG = pickedOver.reduce((a, l) => a - l.grams, 0);
+        const short = Math.round((setShort + plainG + shortG) * 100) / 100;
+        const over = Math.round((setOver + overG) * 100) / 100;
         // Held sets are among a card's last lines, just above its buttons, so one
         // set's words are said in the set alone: the card's notice said them again
         // a line or two below. Two or more sets get one line by the buttons, and so
         // do the plain held lines the press leaves (round 2's review), so every
         // gram the Yes names is said on the card.
-        const does = !over ? 'leave them uncharged' : !setShort ? 'charge the spools as typed' : 'go ahead as typed';
+        const does = !setOver ? 'leave them uncharged' : !setShort ? 'charge the spools as typed' : 'go ahead as typed';
         // Each line is a list of sayOnCard's pieces, the heads it names bold.
         const lines = [];
         if (problems.length > 1) {
             lines.push([`${problems.length} heads' grams don't add up, as each says above. Press ⚠️ Yes below to ${does}.`]);
         }
-        if (plain.length) {
-            lines.push(['⚠️ Yes below charges nothing to ', ...orHeads(plain.map((l) => l.where)),
-                `, leaving ${plain.length === 1 ? 'its' : 'their'} ${fmtG(plainG)} g uncharged.`]);
+        if (unpicked.length) {
+            lines.push(['⚠️ Yes below charges nothing to ', ...orHeads(unpicked.map((l) => l.where)),
+                `, leaving ${unpicked.length === 1 ? 'its' : 'their'} ${fmtG(plainG)} g uncharged.`]);
+        }
+        if (pickedShort.length) {
+            lines.push([`⚠️ Yes below charges ${fmtG(shortG)} g less than FCC worked out on `,
+                ...listHeads(pickedShort.map((l) => l.where), ' and '), ', leaving them uncharged.']);
+        }
+        if (pickedOver.length) {
+            lines.push([`⚠️ Yes below charges ${fmtG(overG)} g more than FCC worked out on `,
+                ...listHeads(pickedOver.map((l) => l.where), ' and '), '.']);
         }
         const notice = lines.reduce((all, l) => (all.length ? all.concat(' ', l) : l), []);
         if (notice.length) _askSaid.set(card, notice);
@@ -438,13 +575,19 @@
         return false;
     }
 
+    // Group 64 fix review 3 (TP6): whether the last read of the list failed, which a
+    // card's redraw must not take for "the card is gone" (Group 52: a read that failed
+    // says so, never "empty").
+    let pendingReadFailed = false;
     async function fetchPending() {
         try {
             const r = await fetch('/api/cancel_deduct/pending');
-            if (!r.ok) return [];
+            if (!r.ok) { pendingReadFailed = true; return []; }
             const d = await r.json();
+            pendingReadFailed = !Array.isArray(d.pending);
             return Array.isArray(d.pending) ? d.pending : [];
         } catch (e) {
+            pendingReadFailed = true;
             return [];
         }
     }
@@ -598,21 +741,29 @@
         const first = own != null
             ? `<option value="${esc(own)}" selected>${esc(ownLabel)}</option>`
             : `<option value="" selected>— pick the spool it used —</option>`;
-        const groups = { end: [], start: [], during: [] };
+        const groups = { end: [], start: [], during: [], picked: [] };
         const listed = new Set(own != null ? [String(own)] : []);
         (atEnd || []).forEach((h) => {
-            const when = h.when === 'start' || h.when === 'during' ? h.when : 'end';
+            const when = ['start', 'during', 'picked'].includes(h.when) ? h.when : 'end';
             const ids = h.sid != null ? [h.sid] : (Array.isArray(h.sids) ? h.sids : []);
             ids.forEach((sid) => {
                 if (sid != null) listed.add(String(sid));
                 if (sid == null || String(sid) === String(own)) return;
                 // 43.2: a spool that ran out is still offered (it is charged what it
-                // has left, 0 g for an empty one, and stays archived), but says so.
-                groups[when].push(`<option value="${esc(sid)}">#${esc(sid)} — on ${esc(h.toolhead)} ${esc(w[when] || w.end)}${h.archived ? ' (ran out, archived)' : ''}</option>`);
+                // has left, 0 g for an empty one, and stays archived), but says so;
+                // Group 64.2 (8): among a head's several spools, only the one that ran
+                // out (`archived_sids`).
+                const ranOut = Array.isArray(h.archived_sids)
+                    ? h.archived_sids.some((x) => String(x) === String(sid)) : !!h.archived;
+                // Group 64.2 (7): a spool picked on an earlier Apply of the card is
+                // offered as such, never as the spool on the head.
+                const where = when === 'picked' ? `picked for ${esc(h.toolhead)} on this card`
+                    : `on ${esc(h.toolhead)} ${esc(w[when] || w.end)}`;
+                groups[when].push(`<option value="${esc(sid)}">#${esc(sid)} — ${where}${ranOut ? ' (ran out, archived)' : ''}</option>`);
             });
         });
         const group = (when, cls) => groups[when].length
-            ? `<optgroup label="${esc(capFirst(w[when] || w.end))}" class="${cls}">${groups[when].join('')}</optgroup>`
+            ? `<optgroup label="${esc(capFirst(when === 'picked' ? 'picked on this card' : (w[when] || w.end)))}" class="${cls}">${groups[when].join('')}</optgroup>`
             : '';
         // The #id box is text, not number: arrow keys on a number box step it
         // (an empty one to 1), and charging spool #1 by accident is a real write.
@@ -622,7 +773,7 @@
                     data-line="${esc(line)}" data-own="${own == null ? '' : esc(own)}"
                     style="max-width:330px;font-size:0.92rem;">
                 ${first}
-                ${group('end', 'fcc-cr-ended')}${group('start', 'fcc-cr-started')}${group('during', 'fcc-cr-during')}
+                ${group('end', 'fcc-cr-ended')}${group('start', 'fcc-cr-started')}${group('during', 'fcc-cr-during')}${group('picked', 'fcc-cr-picked')}
                 ${bufferGroupHtml(listed)}
                 <option value="other">Another spool by #ID…</option>
             </select>
@@ -705,10 +856,21 @@
                      style="margin-left:6px;font-size:var(--fcc-fs-label);font-weight:bold;color:#ffae42;
                             border:1px solid #ffae42;border-radius:4px;padding:0 4px;white-space:nowrap;">⚠️ unconfirmed write</span>`
             : '';
+        // Decision 1: a spool weighed (or changed) after the print ended.
+        // Group 64 fix review 2 (CP4): a 43.6 retry row is a charge the person chose (its
+        // write failed): drawn from its own grams, never as a hold, even on a record
+        // that still carries the hold's mark.
+        const weighed = s.weighed && s.weighed.words && s.attempt_used_before == null ? s.weighed : null;
+        const boxValue = weighed && s.prefill != null ? s.prefill : s.grams;
+        // Group 64 full review (WD6): a weighed row's box holds what FCC filled in (0 g
+        // when the scale counted the print), so its preview is drawn from that, never
+        // from the charge's `remaining_after`, which showed the spool losing the print.
+        const after = !known ? null
+            : (weighed ? Math.max(0, Number(s.remaining_before) - (Number(boxValue) || 0)) : s.remaining_after);
         return `
-            <div class="fcc-cr-row" data-sid="${s.sid}"
+            <div class="fcc-cr-row" data-sid="${s.sid}"${weighed ? ' data-weighed="1"' : ''}
                  style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;
-                        padding:6px 0;border-bottom:1px solid #2b2c30;${ambBorder}">
+                        padding:6px 0;border-bottom:1px solid #2b2c30;${ambBorder}${weighed ? 'border-left:3px solid #ff7a59;padding-left:6px;' : ''}">
                 <div style="min-width:0;flex:1;">
                     ${swatch}
                     <span style="color:#eee;">${esc(s.display)}</span>${seg}${ambBadge}${unconfirmed}${isRunout ? `<span title="Ran out mid-print (sensor tripped) — charged its own segment up to the swap, plus the sensor-to-nozzle remnant when a per-printer path value is configured."
@@ -719,21 +881,22 @@
                     </span>
                 </div>
                 <div class="input-group input-group-sm" style="width:132px;flex:none;">
-                    <input type="number" class="fcc-cr-grams form-control bg-dark text-white border-secondary"
+                    <input type="number" class="fcc-cr-grams fcc-weight-box form-control bg-dark text-white border-secondary"
                            data-sid="${s.sid}" data-remaining="${known ? s.remaining_before : ''}"
                            data-own-remaining="${known ? s.remaining_before : ''}"
-                           value="${fmtG(s.grams)}" step="0.01" min="0" ${known ? `max="${fmt(s.remaining_before)}"` : ''}
+                           value="${fmtG(boxValue)}" step="0.01" min="0" ${known ? `max="${fmt(s.remaining_before)}"` : ''}
                            autocomplete="off" style="font-size:1.05rem;" />
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
                 </div>
                 <div class="fcc-cr-preview" data-sid="${s.sid}"
                      style="width:104px;flex:none;text-align:right;color:#9fe0b0;font-size:0.95rem;">
-                    → ${known ? `${fmt(s.remaining_after)}g` : '?'}
+                    → ${known ? `${fmt(after)}g` : '?'}
                 </div>
                 <div class="fcc-cr-redirect" style="flex-basis:100%;display:flex;align-items:center;gap:6px;
                             padding-left:24px;color:#9aa;font-size:0.88rem;">
                     charge to: ${pickSelectHtml(s.sid, s.sid, `this spool (#${s.sid})`, rec && rec.heads_at_end, headsWords(rec))}
                 </div>
+                ${weighedHtml(weighed)}
                 ${noteHtml('fcc-cr-row-note', '#7ec8ff', ((rec && rec.row_notes) || {})[String(s.sid)], 'ℹ️ ')}
             </div>`;
     }
@@ -759,7 +922,7 @@
                      style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #2b2c30;">
                     <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> used</span>
                     <div class="input-group input-group-sm" style="width:120px;flex:none;">
-                        <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                        <input type="number" class="fcc-cr-pgrams fcc-weight-box form-control bg-dark text-white border-secondary"
                                data-line="${esc(pos)}" value="${fmtG(usage[pos])}" step="0.01" min="0"
                                autocomplete="off" style="font-size:1.05rem;" />
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
@@ -811,7 +974,7 @@
                      style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #2b2c30;">
                     <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> used</span>
                     <div class="input-group input-group-sm" style="width:120px;flex:none;">
-                        <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                        <input type="number" class="fcc-cr-pgrams fcc-weight-box form-control bg-dark text-white border-secondary"
                                data-line="${esc(line)}" value="${fmtG(un[pos])}" step="0.01" min="0"
                                autocomplete="off" style="font-size:1.05rem;" />
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
@@ -846,6 +1009,15 @@
             return `${who} hit 0 g on ${head}${c.archived ? ' (archived)' : ''}`;
         }
         if (c.why === 'no_spool') return `no spool was loaded on ${head}`;
+        if (c.why === 'two_spools' && Array.isArray(c.mmu_shared) && c.mmu_shared.length) {
+            // Group 64.6: MMU slots sharing one Position, each holding a spool.
+            const slots = c.mmu_shared.length > 1
+                ? `${c.mmu_shared.slice(0, -1).join(', ')} and ${c.mmu_shared[c.mmu_shared.length - 1]}`
+                : c.mmu_shared.join('');
+            return `MMU slots ${slots} share one Position and each held a spool `
+                + `(${spoolListWords(c.sids)}), so FCC charged none of them: give each MMU slot its own `
+                + `Position in Settings (slot 1 = Position 0, slot 2 = Position 1, …) so FCC can tell which printed`;
+        }
         if (c.why === 'two_spools') {
             // Round 2 (R3): counted, as FCC's record can put more than two on a head.
             const n = (c.sids || []).length;
@@ -868,15 +1040,24 @@
             const own = (c.sid != null && !c.archived) ? c.sid : null;
             const ownLabel = own != null ? `#${own} — on ${head || 'T' + pos} ${words.end}` : '';
             const line = `pos:${pos}`;
+            // Decision 1: a spool weighed (or changed) after the print ended: its
+            // grams filled in with what the server worked out (0 g, or the print's).
+            const weighed = c.why === 'weighed';
+            const fill = rec.shortfall_prefill || {};
+            const boxValue = weighed && fill[pos] != null ? fill[pos] : un[pos];
+            const why = weighed
+                // Group 65 fix review 3 (RX2): a weighing while FCC couldn't see the print.
+                ? weighedHtml({ words: c.words, known_order: !!c.known_order, unseen: !!c.unseen, seen: !!c.seen })
+                : `<div class="fcc-cr-why" style="color:#e6c074;font-size:0.9rem;margin-bottom:4px;">${esc(shortfallReason(c, pos))}</div>`;
             return `
-                <div class="fcc-cr-unline fcc-cr-shortline" data-pos="${esc(pos)}" data-line="${esc(line)}"
+                <div class="fcc-cr-unline fcc-cr-shortline" data-pos="${esc(pos)}" data-line="${esc(line)}"${weighed ? ' data-weighed="1"' : ''}
                      style="padding:6px 0;border-bottom:1px solid #2b2c30;">
-                    <div class="fcc-cr-why" style="color:#e6c074;font-size:0.9rem;margin-bottom:4px;">${esc(shortfallReason(c, pos))}</div>
+                    ${why}
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> uncharged</span>
                         <div class="input-group input-group-sm" style="width:120px;flex:none;">
-                            <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
-                                   data-line="${esc(line)}" value="${fmtG(un[pos])}" step="0.01" min="0"
+                            <input type="number" class="fcc-cr-pgrams fcc-weight-box form-control bg-dark text-white border-secondary"
+                                   data-line="${esc(line)}" value="${fmtG(boxValue)}" step="0.01" min="0"
                                    autocomplete="off" style="font-size:1.05rem;" />
                             <span class="input-group-text bg-dark text-light border-secondary">g</span>
                         </div>
@@ -887,27 +1068,171 @@
         }).join('') + CARD_NOTICE;
     }
 
-    function shortfallCardHtml(rec) {
+    // Group 64 full review (WD1): what an uncharged-grams card says at its head. A
+    // line FCC held on purpose (Decision 1: its spool weighed, or changed weight,
+    // after the print ended) is no grams that "went to no spool": a card of only such
+    // lines says why they are held, and a card with other lines too counts them apart.
+    function shortfallHead(rec) {
+        const un = rec.unresolved_usage || {};
+        const causes = rec.shortfall_causes || {};
+        const lines = Object.keys(un).filter((p) => (causes[p] || {}).why === 'weighed');
+        // Group 64 fix review 2 (CP2 / CX3): a pick an Apply held stays on the card as a
+        // row marked weighed (never a failed write's retry row): held grams on a known
+        // spool, as a weighed line's are.
+        const allRows = rec.spools || [];
+        const rows = allRows.filter((s) => s && s.weighed && s.weighed.words && s.attempt_used_before == null);
+        // Group 64 fix review 3 (TP4): a failed write's retry row is a spool already
+        // picked, its write to be tried again: no grams that went to no spool.
+        const retry = allRows.filter((s) => s && s.attempt_used_before != null);
+        const heldG = lines.reduce((a, p) => a + (Number(un[p]) || 0), 0)
+            + rows.reduce((a, s) => a + (Number(s.grams) || 0), 0);
+        const retryG = retry.reduce((a, s) => a + (Number(s.grams) || 0), 0);
+        const total = Number(rec.total_grams) || 0;
+        // TP3: one spool named once (a held row and a held line of the same spool).
+        const once = (xs) => xs.filter((x, i) => xs.findIndex((y) => String(y) === String(x)) === i);
+        const sids = once(lines.map((p) => causes[p].sid).concat(rows.map((s) => s.sid)).filter((s) => s != null));
+        const held = lines.concat(rows.map((s) => `row:${s.sid}`));
+        // Group 65 (fix review 3's known gap): the kinds of the held lines and rows, for the
+        // title's and the banner's words: weighed after the print ('known'), a change FCC
+        // can't place ('unsure'), weighed after FCC last saw the print with every gram on its
+        // line printed before that ('seen'), or weighed while FCC couldn't see it ('unseen').
+        const kindOf = (w) => (w.unseen ? 'unseen' : (w.seen ? 'seen' : (w.known_order ? 'known' : 'unsure')));
+        const kinds = once(lines.map((p) => kindOf(causes[p])).concat(rows.map((s) => kindOf(s.weighed))));
+        return {
+            held, heldG, otherG: Math.max(0, total - heldG - retryG), sids, kinds,
+            retry, retryG, retryWho: spoolListWords(once(retry.map((s) => s.sid))),
+            retryMany: once(retry.map((s) => s.sid)).length > 1,
+            who: spoolListWords(sids), many: sids.length > 1,
+            known: lines.every((p) => !!causes[p].known_order) && rows.every((s) => !!s.weighed.known_order),
+            onlyHeld: held.length > 0 && lines.length === Object.keys(un).length && rows.length === allRows.length,
+        };
+    }
+    // What the card says its held spools did, after their names (`ended`: the banner's
+    // "after this print ended"). Group 64's two kinds keep their words; a spool FCC weighed
+    // while it couldn't see the print (Group 65, RX2 / RX4) is never said as weighed after
+    // the print ended.
+    function heldDid(h, ended) {
+        const was = h.many ? 'were weighed' : 'was weighed';
+        const k = h.kinds || [];
+        if (k.length === 1 && k[0] === 'seen') return `${was} after FCC last saw this print`;
+        if (k.length === 1 && k[0] === 'unseen') return `${was} while FCC couldn’t see this print`;
+        if (k.includes('seen') || k.includes('unseen')) return 'changed weight during or after this print';
+        return `${h.known ? was : 'changed weight'} ${ended ? 'after this print ended' : 'after this print'}`;
+    }
+    // The banner of a card of held lines only, one of them weighed while FCC couldn't see
+    // the print: when each weighing was, and what FCC knows of its order.
+    function unseenBanner(h) {
+        const who = esc(h.who);
+        const it = h.many ? 'them' : 'it';
+        const was = h.many ? 'were' : 'was';
+        const k = h.kinds || [];
+        if (k.length === 1 && k[0] === 'seen') {
+            return `FCC held these grams instead of charging them: ${who} ${was} weighed on FCC after FCC last
+                    saw this print, and the grams on ${h.many ? 'their lines' : 'its line'} were all printed
+                    before that, so the scale already counted them. <b>Apply</b> with the 0 g filled in to leave
+                    ${it} uncharged, or type the grams if that weighing came before them. Or <b>Discard</b>.`;
+        }
+        if (k.length === 1 && k[0] === 'unseen') {
+            return `FCC held these grams instead of charging them: ${who} ${was} weighed on FCC while FCC
+                    couldn’t see this print, so FCC can’t tell whether the scale counted all of
+                    ${h.many ? 'their' : 'its'} grams. Check each line, then <b>Apply</b>: the grams filled in
+                    if the weighing came before them, or 0 g if the scale already counted them. Or
+                    <b>Discard</b>.`;
+        }
+        if (h.known) {
+            return `FCC held these grams instead of charging them: ${who} ${was} weighed on FCC after the grams
+                    on ${h.many ? 'their lines' : 'its lines'} were printed, as each line says, so the scale
+                    already counted them. <b>Apply</b> with the 0 g filled in to leave ${it} uncharged, or type
+                    the grams if a weighing came before them. Or <b>Discard</b>.`;
+        }
+        return `FCC held these grams instead of charging them: ${who} changed weight during or after this print,
+                and FCC can’t tell for every line whether the scale counted its grams. Check each line, then
+                <b>Apply</b>: the grams filled in where the change came before them, or 0 g where the scale
+                already counted them. Or <b>Discard</b>.`;
+    }
+    function shortfallTitle(rec, h) {
         const total = fmtG(rec.total_grams);
+        if (h.onlyHeld) {
+            return `${fmtG(h.heldG)}g held: ${h.who} ${heldDid(h, false)}`;
+        }
+        if (!h.held.length && !h.retry.length) return `${total}g went to no spool`;
+        const parts = [];
+        if (h.otherG > 0.05) parts.push(`${fmtG(h.otherG)}g went to no spool`);
+        if (h.held.length) parts.push(`${fmtG(h.heldG)}g held`);
+        if (h.retry.length) parts.push(`${fmtG(h.retryG)}g to retry on ${h.retryWho}`);
+        return parts.join('; ');
+    }
+    function shortfallBanner(rec, h) {
+        const it = h.many ? 'them' : 'it';
+        if (h.onlyHeld && (h.kinds || []).some((k) => k === 'seen' || k === 'unseen')) return unseenBanner(h);
+        if (h.onlyHeld && h.known) {
+            return `FCC held these grams instead of charging them: ${esc(h.who)} ${h.many ? 'were' : 'was'} weighed
+                    on FCC after this print ended, so the scale already counted ${it}. <b>Apply</b> with the
+                    0 g filled in to leave ${it} uncharged, or type the grams if that weighing came before the
+                    print. Or <b>Discard</b>.`;
+        }
+        if (h.onlyHeld) {
+            return `FCC held these grams instead of charging them: ${esc(h.who)} changed weight after this
+                    print ended, and FCC can't tell whether the scale counted this print. Check each line, then
+                    <b>Apply</b>: the grams filled in if the change came before the print, or 0 g if the scale
+                    already counted it. Or <b>Discard</b>.`;
+        }
+        const parts = [];
+        if (h.otherG > 0.05 || (!h.held.length && !h.retry.length)) {
+            const g = (h.held.length || h.retry.length) ? fmtG(h.otherG) : fmtG(rec.total_grams);
+            parts.push(`FCC charged what it could for this print, but <b>${g}g</b> went to no spool. If the
+                    printer carried on from another spool (a <b>joined spool</b>), or you know where the
+                    filament came from, <b>pick that spool</b> and <b>Apply</b>. A spool whose record is at
+                    0 g takes nothing, and whatever a spool can't take stays on this card. If a record was
+                    off (the spool still has filament), weigh that spool. Or <b>Discard</b> if you've already
+                    weighed them.`);
+        }
+        if (h.retry.length) {
+            // TP4: the spool is picked; its write is what failed. Fix review 4 (UP6): a
+            // write FCC couldn't confirm (refused, or no answer), worded per count.
+            parts.push(h.retryMany
+                ? `The <b>${fmtG(h.retryG)}g</b> picked for ${esc(h.retryWho)} couldn't be confirmed as
+                    written (Spoolman didn't take their writes, or didn't answer): <b>Apply</b> tries again,
+                    and FCC first checks whether each landed.`
+                : `The <b>${fmtG(h.retryG)}g</b> picked for ${esc(h.retryWho)} couldn't be confirmed as
+                    written (Spoolman didn't take the write, or didn't answer): <b>Apply</b> tries again,
+                    and FCC first checks whether it landed.`);
+        }
+        if (h.held.length) {
+            parts.push(`The <b>${fmtG(h.heldG)}g</b> on ${esc(h.who)} ${h.many ? 'are' : 'is'} held, not charged:
+               ${h.many ? 'they' : 'it'} ${heldDid(h, true)}, as ${h.many ? 'their lines say' : 'its line says'}.`);
+        }
+        return parts.join(' ');
+    }
+    // The picture walk (Derek, 2026-11-23, "12.4g unconfirmed"): a failed write's retry
+    // row may have landed (FCC checks before it tries again), so the corner calls its
+    // grams unconfirmed, never uncharged; a card with other grams too counts the two
+    // apart, and a card with no retry row keeps "uncharged".
+    function shortfallCorner(rec, h) {
+        if (!h.retry.length) return `${fmtG(rec.total_grams)}g uncharged`;
+        const rest = Math.max(0, (Number(rec.total_grams) || 0) - h.retryG);
+        if (rest <= 0.05) return `${fmtG(h.retryG)}g unconfirmed`;
+        return `${fmtG(rest)}g uncharged; ${fmtG(h.retryG)}g unconfirmed`;
+    }
+
+    function shortfallCardHtml(rec) {
+        const head = shortfallHead(rec);
         // A failed write's retry keeps its row (the picked spool) on the card.
         const rows = (rec.spools || []).map((s) => spoolRowHtml(s, rec)).join('');
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-kind="shortfall" data-ambiguous="0" data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
+                 data-ask-fixed="${askFixed(rec, 'shortfall') ? '1' : '0'}"
+                 data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-                    <div style="font-weight:bold;color:#ffd27a;">⚖️ ${esc(rec.printer_name)} — ${total}g went to no spool</div>
-                    <div style="color:#9aa;font-size:0.92rem;">${total}g uncharged</div>
+                    <div class="fcc-cr-short-title" style="font-weight:bold;color:#ffd27a;">⚖️ ${esc(rec.printer_name)} — ${esc(shortfallTitle(rec, head))}</div>
+                    <div class="fcc-cr-short-total" style="color:#9aa;font-size:0.92rem;">${esc(shortfallCorner(rec, head))}</div>
                 </div>
                 <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
-                <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
+                <div class="fcc-cr-short-banner" style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
-                    FCC charged what it could for this print, but <b>${total}g</b> went to no spool. If the
-                    printer carried on from another spool (a <b>joined spool</b>), or you know where the
-                    filament came from, <b>pick that spool</b> and <b>Apply</b>. A spool whose record is at
-                    0 g takes nothing, and whatever a spool can't take stays on this card. If a record was
-                    off (the spool still has filament), weigh that spool. Or <b>Discard</b> if you've already
-                    weighed them.
+                    ${shortfallBanner(rec, head)}
                 </div>
                 ${rows}
                 ${shortfallLinesHtml(rec)}
@@ -923,8 +1248,230 @@
     // Why a progress_unknown review couldn't measure its print (the record's
     // `unmeasured_reason`, print_deduct._UNMEASURED_WHY's keys; Group 56.3). A
     // record from before 56.3 has none and was always "replaced".
-    function unmeasuredBanner(rec) {
-        const weigh = `<b>Weigh the spool</b> and adjust it directly, or <b>Discard</b> this review.`;
+    // Group 65.1 (1) (Derek, 2026-11-09: "the 30% last seen is the real issue"): an end
+    // FCC saw only after it lost sight of the print (a network drop, a power cut, FCC
+    // restarting) says where FCC last saw the print and when it saw the printer again,
+    // in the browser's clock, from the seconds the server stores (dev's container runs
+    // on UTC, prod's on Pacific time). A card from before the release has no
+    // `lost_contact` and keeps its look.
+    const LOST_STATE_WORDS = {
+        IDLE: 'idle', READY: 'idle', OPERATIONAL: 'idle', STOPPED: 'stopped', ERROR: 'showing an error',
+        FINISHED: 'finished', PRINTING: 'printing another job', PAUSED: 'paused in another job',
+        PAUSING: 'paused in another job', RESUMING: 'printing another job', ATTENTION: 'waiting at a prompt',
+        BUSY: 'busy',
+    };
+    function clockAt(s) {
+        const n = Number(s);
+        if (s === null || s === undefined || s === '' || !Number.isFinite(n) || n <= 0) return '';
+        const d = new Date(n * 1000);
+        const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return d.toDateString() === new Date().toDateString()
+            ? hm : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${hm}`;
+    }
+    function lostContactHtml(rec, mayHaveGoneFurther) {
+        const lc = rec && rec.lost_contact;
+        if (!lc || typeof lc !== 'object') return '';
+        const pct = Math.round(Math.max(0, Math.min(1, Number(lc.progress) || 0)) * 100);
+        const at = (s) => { const t = clockAt(s); return t ? ` (${t})` : ''; };
+        const back = clockAt(lc.back_at);
+        let words;
+        if (lc.why === 'restart') {
+            words = `FCC last saw this print at ~${pct}%${at(lc.seen_at)}, before FCC restarted${back ? ` at ${back}` : ''}.`;
+        } else {
+            const state = LOST_STATE_WORDS[String(lc.back_state || '').toUpperCase()] || 'again';
+            const lost = `FCC lost contact with ${esc(rec.printer_name)} at ~${pct}%`
+                + at(lc.lost_at != null ? lc.lost_at : lc.seen_at);
+            // Group 65 fix review 5 (RZ2): a finished print's card (a completion FCC saw only
+            // after it lost contact) says FCC saw it finish, never that it may have been
+            // cancelled: its grams are the whole print's.
+            const finished = String(lc.back_state || '').toUpperCase() === 'FINISHED' && !rec.ambiguous
+                && Number(rec.progress) >= 1;
+            words = finished
+                ? `${lost} and next saw it ${state}${back ? ` at ${back}` : ''}.`
+                : mayHaveGoneFurther
+                ? `${lost} and next saw it ${state}${back ? ` at ${back}` : ''}, so the print may have gone further.`
+                : `${lost} and next saw it ${state}${back ? ` at ${back}` : ''}: it may have printed further before it was cancelled.`;
+        }
+        return `<div class="fcc-cr-lost" role="note"
+                     style="color:#9fd3ff;font-size:0.95rem;margin-bottom:8px;line-height:1.45;">📡 ${words}</div>`;
+    }
+
+    // Group 65.1 (1b) (Derek, 2026-11-09: "we should have a charge the whole print, or a
+    // way to change the percentage"): a card whose download kept its figures (an
+    // ambiguous end, a cancel FCC saw after it lost contact, a restart's review) is
+    // worked out again on the server at another basis. Charge the whole print only on a
+    // ❓ card (`offerWhole`); the percentage on those and on a 🛑 card seen late. The box
+    // is a weight box (a label scanned into it goes to the scan path); Enter in it works
+    // it out and never applies. A card from before keeps its look.
+    function hasFigures(rec) {
+        return !!(rec && rec.figures && typeof rec.figures === 'object' && rec.figures.footer);
+    }
+    // Group 65 review (PI5): the pending list says when a card can't be worked out again
+    // (an earlier Apply charged part of it, or a write of it may have landed), by the
+    // recompute's own rule: such a card offers no controls and its words don't invite them.
+    function canRework(rec) {
+        return hasFigures(rec) && !rec.rework_refused;
+    }
+    // Group 65 review (CM5): each line's spool pick that moved off what the card drew (the
+    // #ID box's text with it), to put back once the card is worked out again and drawn
+    // anew: a redirect made a moment before was silently undone, and Confirm charged the
+    // row's own spool for the whole print.
+    function keptPicks(card) {
+        return Array.from(card.querySelectorAll('.fcc-cr-pick')).map((sel) => {
+            const drawn = Array.from(sel.options).find((o) => o.defaultSelected) || sel.options[0];
+            const line = String(sel.dataset.line);
+            const other = card.querySelector(`.fcc-cr-other[data-line="${CSS.escape(line)}"]`);
+            const opt = sel.selectedOptions && sel.selectedOptions[0];
+            const group = opt && opt.parentElement;
+            return { line, value: sel.value, other: other ? other.value : '',
+                     text: opt ? opt.textContent : '', remaining: opt && opt.dataset ? (opt.dataset.remaining || '') : '',
+                     buffer: !!(group && group.classList && group.classList.contains('fcc-cr-buffer')),
+                     moved: !drawn || sel.value !== drawn.value };
+        }).filter((p) => p.moved);
+    }
+    // Put `picks` back on the card drawn again (a line it still has, with that choice),
+    // through the picker's own change handler; returns the lines it couldn't (a line the
+    // card no longer has). A pick the fresh picker no longer lists (a spool that left the
+    // scan buffer, a head's spool changed since) is listed again as it was, as the
+    // buffer's group keeps a pick (Group 65 fix review, CD3: a pick never changes by itself).
+    function putPicksBack(card, picks) {
+        const lost = [];
+        picks.forEach((p) => {
+            const sel = card.querySelector(`.fcc-cr-pick[data-line="${CSS.escape(p.line)}"]`);
+            if (!sel) { lost.push(p.line); return; }
+            if (!Array.from(sel.options).some((o) => o.value === p.value)) {
+                const opt = document.createElement('option');
+                opt.value = p.value;
+                opt.dataset.remaining = p.remaining || '';
+                opt.textContent = p.text || `#${p.value}`;
+                const otherOpt = sel.querySelector('option[value="other"]');
+                let home = null;
+                if (p.buffer) {
+                    home = sel.querySelector('.fcc-cr-buffer');
+                    if (!home) {
+                        home = document.createElement('optgroup');
+                        home.setAttribute('label', BUFFER_GROUP);
+                        home.className = 'fcc-cr-buffer';
+                        sel.insertBefore(home, otherOpt);
+                    }
+                }
+                if (home) home.appendChild(opt); else sel.insertBefore(opt, otherOpt);
+            }
+            const other = card.querySelector(`.fcc-cr-other[data-line="${CSS.escape(p.line)}"]`);
+            if (p.value === 'other' && other) other.value = p.other;
+            sel.value = p.value;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        return lost;
+    }
+    // Group 65 fix review 3 (CX2 / CX3 / CX4): a card worked out again (or a stale card's
+    // Confirm) is drawn anew only once the keyboard is quiet: no character typed in the
+    // last 300 ms and no scan arriving (`scanIsArriving`), waiting 2 s at most. A scan read
+    // meanwhile then finishes where it started, whole, and goes to the scan path as it does
+    // anywhere. Drawn under it, its first keys went with the old card (the weight capture
+    // knows the old box only) and its last digit replaced the fresh figure: a 40 g line read
+    // 7 g, and ID:57 went out as ':57'.
+    const KEYS_QUIET_MS = 300;
+    const KEYS_QUIET_CAP_MS = 2000;
+    let lastCharAt = 0;
+    if (typeof window.addEventListener === 'function') {
+        window.addEventListener('keydown', (e) => {
+            if (e && typeof e.key === 'string' && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                lastCharAt = Date.now();
+            }
+        }, true);
+    }
+    // Group 65 fix review 4 (CY3): a scan that pauses inside its label for longer than 300 ms
+    // (a scanner stalled after "ID") is still arriving while the scan buffer holds its first
+    // keys, or the weight capture holds a label's letters (a scan typed into a grams box or
+    // How far it got never reaches the scan buffer): drawn under it, ":57" went out without
+    // its "ID". Both clear within the accumulator's 2 s, the wait's own cap.
+    function scanHeld() {
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+        return !!buf || (typeof window.fccWeightKeysHeld === 'function' && !!window.fccWeightKeysHeld());
+    }
+    async function keysQuiet() {
+        const start = Date.now();
+        for (;;) {
+            const arriving = (typeof window.scanIsArriving === 'function' && window.scanIsArriving()) || scanHeld();
+            if (!arriving && Date.now() - lastCharAt >= KEYS_QUIET_MS) return;
+            if (Date.now() - start >= KEYS_QUIET_CAP_MS) return;
+            await new Promise((r) => setTimeout(r, 50));
+        }
+    }
+    // A figure as a person types one in How far it got ("62", "62.5", "62 %", half typed
+    // "62."): only that is carried over a redraw (CX4: a scan's letters were carried as one).
+    const PCT_FIGURE = /^\s*\d*(?:\.\d*)?\s*%?\s*$/;
+    const pctNumber = (s) => {
+        const t = String(s == null ? '' : s).trim().replace(/\s*%$/, '');
+        return t === '' ? NaN : Number(t);
+    };
+    // Group 65 fix review 6 (CU1): a figure as the person typed it, for the words (62.25,
+    // never fmt's 62.3).
+    const pctAsTyped = (s) => String(s == null ? '' : s).trim().replace(/\s*%$/, '');
+    // Where the keyboard was on a card, to find it again on the card drawn anew (Group 65
+    // fix review, CD5): the control's own class and the line, spool or head it belongs to.
+    function focusKey(el) {
+        const cls = el ? String(el.className || '').split(/\s+/).find((c) => c.startsWith('fcc-cr-')) : null;
+        if (!cls) return null;
+        const d = el.dataset || {};
+        const attr = d.line != null ? 'line' : (d.sid != null ? 'sid' : (d.pos != null ? 'pos' : null));
+        return { cls, attr, val: attr ? String(d[attr]) : null };
+    }
+    function findByKey(card, key) {
+        if (!key) return null;
+        return card.querySelector(`.${key.cls}` + (key.attr ? `[data-${key.attr}="${CSS.escape(key.val)}"]` : ''));
+    }
+    function basisPct(rec) {
+        if (rec.basis === 'whole') return 100;
+        if (typeof rec.basis === 'number') return rec.basis;
+        // Group 65.1 (1c): an end FCC never sampled has no last percentage to offer.
+        if (rec.kind === 'progress_unknown' || rec.unmeasured_was) return '';
+        return Math.round((Number(rec.progress) || 0) * 1000) / 10;
+    }
+    // Group 65.1 (1c): figures for every percent, or only the footer (a file whose
+    // moves FCC can't read: Charge the whole print only).
+    function hasPercents(rec) {
+        const b = rec && rec.figures && rec.figures.by_pct;
+        return !!(b && typeof b === 'object' && Object.keys(b).length);
+    }
+    function basisWords(rec) {
+        // Group 65 review (CM6): an end FCC never sampled has no percentage it last saw.
+        const never = rec.seen_progress === null && (rec.basis === 'whole' || typeof rec.basis === 'number');
+        const seen = Math.round((Number(rec.seen_progress != null ? rec.seen_progress : rec.progress) || 0) * 100);
+        const saw = never ? 'FCC never read its progress' : `FCC last saw ~${seen}%`;
+        if (rec.basis === 'whole') return `for the whole print (${saw})`;
+        if (typeof rec.basis === 'number') return `at ${fmt(rec.basis)}% (${saw})`;
+        return `at the last progress FCC saw (~${seen}%)`;
+    }
+    function basisHtml(rec, offerWhole) {
+        if (!canRework(rec)) return '';
+        const id = `fcc-cr-pct-${String(rec.printer_name)}-${String(rec.job_id)}`.replace(/[^A-Za-z0-9_-]/g, '-');
+        const said = rec.basis === 'whole' ? 'Worked out for the whole print.'
+            : (typeof rec.basis === 'number' ? `Worked out at ${fmt(rec.basis)}%.` : '');
+        const pct = basisPct(rec);
+        const box = !hasPercents(rec) ? '' : `
+                <label for="${id}" style="color:#ddd;margin:0;">How far it got:</label>
+                <div class="input-group input-group-sm" style="width:auto;flex:none;">
+                    <input type="text" inputmode="decimal" id="${id}" autocomplete="off"
+                           class="form-control bg-dark text-white border-secondary fcc-cr-pct fcc-weight-box"
+                           value="${pct === '' ? '' : fmt(pct)}" style="width:4.5rem;" placeholder="e.g. 62" />
+                    <span class="input-group-text bg-dark text-light border-secondary">%</span>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-info fcc-cr-workout">Work it out</button>`;
+        return `
+            <div class="fcc-cr-basis" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px 0;">
+                ${offerWhole ? `<button type="button" class="btn btn-sm btn-outline-info fcc-cr-whole">Charge the whole print</button>` : ''}
+                ${box}
+                ${said ? `<span class="fcc-cr-basis-said" style="color:#9fd3ff;">${said}</span>` : ''}
+            </div>`;
+    }
+
+    // Group 65 review (OR1): once its file gave the card figures, it no longer says to weigh
+    // the spool and adjust it directly, beside a button that charges the print.
+    function unmeasuredBanner(rec, withFigures) {
+        const weigh = withFigures ? '' : `<b>Weigh the spool</b> and adjust it directly, or <b>Discard</b> this review.`;
         switch (rec.unmeasured_reason) {
             case 'no_footer':
                 return `FCC couldn't measure how much filament this print used — <b>its file's
@@ -943,6 +1490,10 @@
                 return `FCC couldn't measure how much filament this print used — <b>it couldn't
                    download or read the print's file</b> from the printer (it may have been deleted,
                    or stayed locked on the printer's screen), so nothing was deducted. ${weigh}`;
+            case 'compute_failed':
+                return `FCC couldn't measure how much filament this print used — <b>its deduct
+                   kept failing</b> for the whole time FCC kept trying (the Activity Log has the
+                   error), so nothing was deducted. ${weigh}`;
             case 'unsampled':
                 return `FCC couldn't measure how much filament this print used — <b>it ended before
                    FCC read its progress</b> (the printer reported none while FCC watched, or FCC
@@ -972,7 +1523,13 @@
         const noted = Object.keys(rec.unresolved_notes || {}).length > 0;
         // Review fix: such a card's heads may well have had a spool (one that
         // changed during the print), so its header says what its banner says.
-        const header = isNoSpool
+        // Group 65.1 (1c): a "couldn't measure" card FCC read the file for afterwards has
+        // figures; worked out, it is a card to pick on that says what it was worked out at.
+        const fromUnmeasured = isNoSpool && !!rec.unmeasured_was;
+        const header = fromUnmeasured
+            ? `❓ ${esc(rec.printer_name)} — ${total}g ${rec.basis === 'whole' ? 'for the whole print'
+                : `at ${fmt(rec.basis)}%`}, spools to pick`
+            : isNoSpool
             ? `⚠️ ${esc(rec.printer_name)} — ${total}g computed, ${noted ? 'spool not certain' : 'no spool bound'}`
             : `❓ ${esc(rec.printer_name)} — couldn't measure usage`;
         // Review fix: a line that is a set of spools asks for each one's grams.
@@ -982,7 +1539,22 @@
             : sets === keys.length ? `<b>Type the grams each spool used</b> (or put them all on one)`
             : `<b>Pick the spool each head used</b> (on a head with several spools, <b>type the grams each
                one used</b>)`;
-        const banner = isNoSpool && noted
+        const banner = fromUnmeasured
+            ? `FCC couldn't tell how far this print got, so it's worked out
+               ${rec.basis === 'whole' ? '<b>for the whole print</b>' : `at <b>${fmt(rec.basis)}%</b>`}:
+               <b>${total}g</b>. FCC didn't read the heads when it ended, so ${ask.charAt(0) === '<'
+                ? ask.replace('<b>Pick', '<b>pick').replace('<b>Type', '<b>type') : ask}, then <b>Apply</b>.
+               ${canRework(rec) ? 'You can work it out again with the buttons below. ' : ''}Or <b>Discard</b>
+               if you've already trued it up.`
+            : !isNoSpool && canRework(rec)
+            ? `${unmeasuredBanner(rec, true)} ${hasPercents(rec)
+                ? `FCC read the print's file afterwards: press <b>Charge the whole print</b> if it finished, or
+                   type how far it got and press <b>Work it out</b>, then pick the spool each head used.`
+                : `FCC can't read this file's moves, but its slicer total is known: press <b>Charge the whole
+                   print</b> if it finished, then pick the spool each head used.`} A spool FCC weighed since the
+                   print ended is held at 0 g, the scale having counted it. Or <b>Discard</b> if you've already
+                   trued it up.`
+            : isNoSpool && noted
             ? `FCC computed this print used <b>${total}g</b>, but isn't sure which spool it came from
                on the heads below. ${ask}, then <b>Apply</b>. Or
                <b>Discard</b> if you've already trued it up.`
@@ -1000,16 +1572,22 @@
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-kind="${esc(kind)}" data-ambiguous="${rec.ambiguous ? '1' : '0'}"
+                 data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
+                 data-basis="${esc(rec.basis == null ? '' : rec.basis)}"
+                 data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
+                 data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:${isNoSpool ? '#ffd27a' : '#7ec8ff'};">${header}</div>
                     <div style="color:#9aa;font-size:0.92rem;">${isNoSpool ? total + 'g' : 'unmeasured'}</div>
                 </div>
                 <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
+                ${lostContactHtml(rec, !isNoSpool || !!rec.ambiguous)}
                 <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
                     ${banner}
                 </div>
+                ${isNoSpool ? basisHtml(rec, !!rec.ambiguous || fromUnmeasured) : basisHtml(rec, true)}
                 ${lines}
                 <div style="display:flex;flex-direction:row-reverse;justify-content:flex-start;gap:8px;margin-top:10px;">
                     ${applyBtn}
@@ -1048,7 +1626,10 @@
         // (it would dump the whole tool's usage on the replacement + record 0g on
         // the run-out spool); the user splits the grams manually.
         const spoolChanged = kind === 'spool_changed';
-        const changedPos = (rec.changed_positions || []).join(', ');
+        // Group 65's picture walk (Derek, 2026-11-24: the rows said HEAD-1 and the
+        // banner "toolhead position(s) 0"): the banner names each changed head as
+        // the rows do.
+        const changedOn = spoolChanged ? changedHeadsWords(rec) : '';
         // Ambiguous (2026-06-13): the print reached idle without an observed
         // terminal state, so FCC couldn't confirm cancel vs completion. Reword
         // the header + banner; the grams are computed at the last seen progress
@@ -1072,19 +1653,19 @@
             headerColor = '#ffb74d';
             header = `🔁 ${esc(rec.printer_name)} — spool changed mid-print`;
             banner = held
-                ? `🔁 A spool feeding this print was <b>changed mid-print</b> at position(s)
-               <b>${esc(changedPos)}</b>, so the slicer total was <b>NOT auto-applied</b>. FCC can't tell
+                ? `🔁 A spool feeding this print was <b>changed mid-print</b>${changedOn}, so the
+               slicer total was <b>NOT auto-applied</b>. FCC can't tell
                which spool printed there, so it charges ${heldNone} by itself: each such head is listed
                below with every spool it had. ${pickWords}, then <b>Confirm</b>. Or <b>Discard</b>.`
                 : autoSplit
                 ? `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament run-out
-               or M600) at toolhead position(s) <b>${esc(changedPos)}</b>. FCC <b>auto-split</b>
+               or M600)${changedOn}. FCC <b>auto-split</b>
                the slicer total by ${cut.by} — each row below is charged only <b>its own
                segment</b> (${cut.rows}), pre-filled.
                ${confirmWords} ${cut.own} sensor→nozzle
                remnant is included when a per-printer path value is configured. Or <b>Discard</b>.`
                 : `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament
-               run-out or M600) at toolhead position(s) <b>${esc(changedPos)}</b>, so the full
+               run-out or M600)${changedOn}, so the full
                slicer total was <b>NOT auto-applied</b> — it would charge the whole tool's usage
                to the <b>replacement</b> spool and leave the run-out spool at 0g. The rows below
                are the <b>replacement</b> spool(s) at completion: nudge each <b>down</b> to what
@@ -1092,10 +1673,25 @@
                here once it left the toolhead). Confirm to deduct, or <b>Discard</b>.`;
         } else {
             headerColor = ambiguous ? '#7ec8ff' : '#ffd27a';
+            const worked = rec.basis === 'whole' ? 'worked out for the whole print'
+                : (typeof rec.basis === 'number' ? `worked out at ${fmt(rec.basis)}%` : '');
             header = ambiguous
-                ? `❓ ${esc(rec.printer_name)} — ended at ~${pct}% (couldn't confirm: completed or cancelled?)`
-                : `🛑 ${esc(rec.printer_name)} — cancelled at ~${pct}%`;
-            banner = ambiguous
+                ? `❓ ${esc(rec.printer_name)} — ${worked || `ended at ~${pct}%`} (couldn't confirm: completed or cancelled?)`
+                : `🛑 ${esc(rec.printer_name)} — ${worked || `cancelled at ~${pct}%`}`;
+            banner = ambiguous && canRework(rec)
+                ? `❓ FCC couldn't tell whether this print <b>finished</b> or was <b>cancelled</b> — it
+                   reached idle without a clear cancel/finish signal. The grams below are worked out
+                   ${esc(basisWords(rec))}. If it finished, press <b>Charge the whole print</b>; if you saw
+                   how far it got, type that percentage and press <b>Work it out</b>. You can still nudge
+                   each spool's grams. <b>Confirm</b> to deduct, or <b>Discard</b> if it was already handled.`
+                : ambiguous && (rec.basis === 'whole' || typeof rec.basis === 'number')
+                // Group 65 fix review (CD4): worked out, and no longer open to it (an Apply kept
+                // it): the grams are the basis's, never "the last seen progress" to nudge up.
+                ? `❓ FCC couldn't tell whether this print <b>finished</b> or was <b>cancelled</b> — it
+                   reached idle without a clear cancel/finish signal. The grams below are worked out
+                   ${esc(basisWords(rec))}. You can still nudge each spool's grams. <b>Confirm</b> to deduct,
+                   or <b>Discard</b> if it was already handled.`
+                : ambiguous
                 ? `❓ FCC couldn't tell whether this print <b>finished</b> or was <b>cancelled</b> — it
                    reached idle without a clear cancel/finish signal (a fast restart, or the printer
                    power-cycled). The grams below are computed at the last seen progress (~${pct}%).
@@ -1110,16 +1706,22 @@
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-ambiguous="${ambiguous ? '1' : '0'}" data-kind="${esc(kind)}"
+                 data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
+                 data-basis="${esc(rec.basis == null ? '' : rec.basis)}"
+                 data-ask-fixed="${askFixed(rec, kind) ? '1' : '0'}"
+                 data-head-names="${esc(JSON.stringify(cardHeadNames(rec)))}"
                  style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
                 <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
                     <div style="font-weight:bold;color:${headerColor};">${header}</div>
                     <div style="color:#9aa;font-size:0.92rem;">${fmtG(total)}g total</div>
                 </div>
                 <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
+                ${lostContactHtml(rec, ambiguous)}
                 <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
                             background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
                     ${banner}
                 </div>
+                ${(ambiguous || rec.lost_contact) ? basisHtml(rec, ambiguous) : ''}
                 ${rows}
                 ${unresolvedLinesHtml(rec)}
                 <div style="display:flex;flex-direction:row-reverse;justify-content:flex-start;gap:8px;margin-top:10px;">
@@ -1151,6 +1753,9 @@
                 <div style="padding:8px 18px 4px;color:#bbb;font-size:0.95rem;">
                     Nudge the grams or pick the spools on each card, then press its green button. <b>Closing keeps everything for later</b> — only <b>Discard</b> drops a review.
                 </div>
+                <div id="fcc-cr-panel-notice" role="status" aria-live="polite"
+                     style="display:none;margin:4px 18px 0;color:#e6c074;font-size:var(--fcc-fs-small);line-height:1.4;
+                            background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:7px 10px;"></div>
                 <div id="fcc-cr-body" style="padding:8px 18px 14px;max-height:60vh;overflow:auto;">
                     ${cards}
                 </div>
@@ -1248,43 +1853,64 @@
         return changed;
     }
     async function refreshBadge() {
-        applyBadges(await fetchPending());
+        const pending = await fetchPending();
+        // Group 64 fix review 4 (UP7): a list FCC couldn't read keeps the last counts
+        // (Group 52: a read that failed says so, never "empty"), the pill's tooltip
+        // saying why, instead of hiding every 🛑 until a read works again.
+        const badge = document.getElementById('cancel-review-badge');
+        if (badge && badge.dataset.titleWas == null) badge.dataset.titleWas = badge.getAttribute('title') || '';
+        if (pendingReadFailed) {
+            if (badge) {
+                badge.dataset.read = 'failed';
+                badge.setAttribute('title', `${badge.dataset.titleWas} (FCC couldn't read the review list just now: `
+                    + 'this count is from its last read)');
+                // Derek, 2026-11-23 (the walk's sample (d)): the title bar counts' stale
+                // look, a "?" after the count and a dashed edge (global.css), so the count
+                // reads as possibly wrong; the tooltip still says why.
+                if (!badge.querySelector('.fcc-cr-stale-mark')) {
+                    const q = document.createElement('span');
+                    q.className = 'fcc-cr-stale-mark';
+                    q.setAttribute('aria-hidden', 'true');
+                    q.textContent = '?';
+                    badge.appendChild(q);
+                }
+            }
+            return;
+        }
+        if (badge) {
+            delete badge.dataset.read;
+            badge.setAttribute('title', badge.dataset.titleWas);
+            const q = badge.querySelector('.fcc-cr-stale-mark');
+            if (q) q.remove();
+        }
+        applyBadges(pending);
     }
 
     // The open review's scan-buffer listener (scope D), so a review opened again
     // over an open one leaves only its own listening.
     let _offBuffer = null;
 
-    // Review fix (hotfix 2026-11-11): a scan read while the keyboard is in a grams
-    // box (where the review starts) goes to the scan path, as it does from the
-    // rest of the card. The dashboard's scan accumulator leaves an INPUT's keys
-    // alone, so a label's digits were typed into the grams ("ID:229" made #42's
-    // 30 g read 30229 g) and the spool never reached the scan buffer, where the
-    // pickers list it. inv_core.js's capture (its one copy, a document listener)
-    // puts back what the box held before the scan's first key; installed once,
-    // when a review first opens.
-    let _gramsScanCapture = false;
-    function captureScansInGramsBoxes() {
-        if (_gramsScanCapture || typeof window.installFieldScanCapture !== 'function') return;
-        _gramsScanCapture = true;
-        window.installFieldScanCapture({
-            match: (el) => !!(el && el.classList && el.closest
-                && (el.classList.contains('fcc-cr-grams') || el.classList.contains('fcc-cr-pgrams'))
-                && el.closest(`#${OVERLAY_ID}`)),
-            isScanPayload: (txt) => !!(window.looksLikeScanPayload && window.looksLikeScanPayload(txt)),
-            onScan: (payload, el) => {
-                // The box holds what it held before the scan again: its preview and
-                // its set's count follow it.
-                try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) { /* noop */ }
-                if (window.processScan) window.processScan(payload, 'barcode');
-            },
-        });
-    }
+    // A scan read while the keyboard is in a grams box (where the review starts)
+    // goes to the scan path, as it does from the rest of the card (hotfix
+    // 2026-11-11: a label's digits were typed into the grams, "ID:229" making #42's
+    // 30 g read 30229 g). Group 64.2 (11): the boxes are weight boxes
+    // (`fcc-weight-box`), so inv_core.js's one weight capture serves them as every
+    // other: a label from its ':' at any speed (a slower scanner's digits went into
+    // the grams under the old field capture, which caught only a scan ending
+    // within 150 ms), digits faster than a person types, the box put back as it
+    // was before the scan with an `input` event, so its preview and its set's
+    // count follow. Enter in a box still presses nothing.
 
     async function openCancelReview() {
-        captureScansInGramsBoxes();
         const pending = await fetchPending();
         if (!pending.length) {
+            if (pendingReadFailed) {
+                // Group 64 fix review 4 (UP7): a list FCC couldn't read is no "no reviews",
+                // and the counts stay as they were.
+                toast("FCC couldn't read the review list just now, so it can't be shown. Try again in a moment.",
+                    'warning', 7000);
+                return;
+            }
             toast('No pending cancel reviews.', 'info');
             applyBadges(pending);
             return;
@@ -1372,27 +1998,315 @@
         // `freshHeads`: re-read the printer's heads first. After an Apply that
         // emptied a spool (43.2), the cached list still offers it with its old
         // "Ng left".
-        async function rerenderCard(card, freshHeads) {
+        async function rerenderCard(card, freshHeads, keep) {
             const printer = card.dataset.printer;
             const job = card.dataset.job;
             const rec = (await fetchPending()).find(
                 (r) => String(r.printer_name) === printer && String(r.job_id) === job);
-            if (!rec) { card.remove(); updateCount(); refreshBadge(); closeIfEmpty(); return null; }
+            if (!rec && pendingReadFailed) {
+                // TP6: the list couldn't be read: the card stays as it was drawn, its Apply
+                // usable again (the server checks it: its revision, a row no longer on it,
+                // a retry by its attempt), rather than taken off the panel while the server
+                // still holds it.
+                const btn = card.querySelector('.fcc-cr-confirm');
+                if (btn) btn.disabled = false;
+                // Group 64 fix review 4 (UP2): marked, so its words say it may be out of
+                // date (sayOnCard) and its next Apply reads the list again first.
+                card.dataset.stale = '1';
+                return card;
+            }
+            if (!rec) {
+                // Group 65 fix review 4 (CY1): settled, as its caller may say; a card that left
+                // the page meanwhile (the panel closed, or drawn again) returns null unmarked.
+                card._fccSettled = true;
+                card.remove(); updateCount(); refreshBadge(); closeIfEmpty(); return null;
+            }
             if (freshHeads) liveHeads[printer] = await fetchCandidates(printer);
+            // Fix review 3 (CX2 / CX3 / CX4): never under a scan still arriving.
+            if (keep) await keysQuiet();
+            if (card.isConnected === false) return null;     // closed, or drawn again meanwhile
+            // Group 65 fix review 2 (CA2): what the person did on the card (its picks, a figure
+            // being typed, where the keyboard is) is read here, after every read this redraw
+            // makes and right before the fresh card takes its place: read at the press, or
+            // before the list read, a key or a pick made meanwhile was lost.
+            const kept = keep ? keepCard(card) : null;
             const tmp = document.createElement('div');
             tmp.innerHTML = cardHtml(rec).trim();
             const fresh = tmp.firstElementChild;
             card.replaceWith(fresh);
+            fresh.dataset.drawnAt = String(Date.now());      // fix review 4 (CY4)
+            // Fix review 6 (CU3 / AU3): How far it got as the person left it, read right before
+            // the fresh card took its place: a queued Enter's figure is judged against it.
+            fresh._fccKeptPct = kept && kept.pct ? kept.pct.value : null;
             if (liveHeads[printer]) withHeads(fresh, liveHeads[printer]);
-            const first = fresh.querySelector('.fcc-cr-pick, .fcc-cr-grams');
-            if (first) { try { first.focus(); } catch (_) { /* noop */ } }
+            if (kept) {
+                fresh._fccKept = restoreCard(fresh, kept, keep);
+            } else {
+                const first = fresh.querySelector('.fcc-cr-pick, .fcc-cr-grams');
+                if (first) { try { first.focus(); } catch (_) { /* noop */ } }
+            }
             return fresh;
+        }
+        // Group 65 fix review 2 (CA1 / CA2 / CA5): a card's picks, the How far it got figure
+        // the person was typing, and where the keyboard was, with its caret and selection.
+        function keepCard(card) {
+            const was = document.activeElement;
+            const inCard = !!(was && was !== document.body && card.contains(was));
+            const basis = inCard && ['fcc-cr-pct', 'fcc-cr-whole', 'fcc-cr-workout']
+                .some((c) => String(was.className || '').split(/\s+/).includes(c));
+            const pct = card.querySelector('.fcc-cr-pct');
+            const caret = (el) => {
+                try { return [el.selectionStart, el.selectionEnd]; } catch (_) { return [null, null]; }
+            };
+            return {
+                picks: keptPicks(card),
+                was, inCard, basis: basis || !was || was === document.body,
+                key: inCard ? focusKey(was) : null,
+                caret: inCard ? caret(was) : [null, null],
+                pct: pct ? { value: String(pct.value), drawn: String(pct.getAttribute('value') || '') } : null,
+            };
+        }
+        function restoreCard(fresh, kept, opts) {
+            const lost = putPicksBack(fresh, kept.picks);
+            const pct = fresh.querySelector('.fcc-cr-pct');
+            // CA5: a figure the person was typing in How far it got stays theirs. Fix review 3
+            // (CX4 / CX5): only a figure (a scan's letters are none), and never the one this
+            // redraw's own Enter sent: refused as stale, it stood over a card drawn for the
+            // whole print, and Confirm charged the whole print beside it.
+            const sent = opts && opts.sent != null ? pctNumber(opts.sent) : NaN;
+            const typedPct = !!(kept.pct && kept.pct.value !== kept.pct.drawn && PCT_FIGURE.test(kept.pct.value)
+                && !(Number.isFinite(sent) && pctNumber(kept.pct.value) === sent));
+            if (pct && typedPct) pct.value = kept.pct.value;
+            let target = null;
+            let select = false;
+            let caret = null;
+            // Fix review 3 (CX1 / AX2): a stale card's Confirm draws it again for the person to
+            // read: the keyboard goes where Enter applies nothing (the first pick or grams box),
+            // never back onto Confirm, nor into How far it got, where a double press's second
+            // Enter applied the card unread or worked it out again.
+            const onApply = !!(kept.key && (kept.key.cls === 'fcc-cr-confirm' || kept.key.cls === 'fcc-cr-discard'));
+            if (onApply || (opts && opts.from === 'confirm' && (!kept.key || kept.key.cls === 'fcc-cr-whole'
+                    || kept.key.cls === 'fcc-cr-workout'))) {
+                target = fresh.querySelector('.fcc-cr-pick, .fcc-cr-grams');
+                select = !!(target && target.classList && target.classList.contains('fcc-cr-grams'));
+            } else if (kept.key && kept.key.cls !== 'fcc-cr-whole' && kept.key.cls !== 'fcc-cr-workout') {
+                target = findByKey(fresh, kept.key);
+                const carried = kept.key.cls === 'fcc-cr-other' || (kept.key.cls === 'fcc-cr-pct' && typedPct);
+                // CA1: a box whose text came across keeps the caret and selection the person left;
+                // a box whose figure the redraw replaced has the new figure selected, so the
+                // next digit replaces it rather than joining it.
+                if (carried) caret = kept.caret; else select = true;
+            } else if (kept.basis) {
+                target = pct || fresh.querySelector(opts && opts.whole ? '.fcc-cr-whole' : '.fcc-cr-workout');
+                select = !typedPct;
+            } else if (!kept.inCard && kept.was && kept.was.isConnected !== false && typeof kept.was.focus === 'function') {
+                target = kept.was;
+            }
+            try {
+                if (target) {
+                    target.focus();
+                    if (select && typeof target.select === 'function') target.select();
+                    else if (caret && caret[0] != null && typeof target.setSelectionRange === 'function') {
+                        target.setSelectionRange(caret[0], caret[1]);
+                    }
+                }
+            } catch (_) { /* noop */ }
+            return { lost, picks: kept.picks.length };
         }
         // Say on the card (review fix) and in a toast: the toast layer is drawn
         // under the review panel. A card drawn again is told on its new self.
         function tell(card, msg, type, dur) {
-            sayOnCard(card, msg);
+            sayOnCard(card, headPieces(card, msg));
             toast(msg, type || 'warning', dur || 7000);
+        }
+
+        // Group 65.1 (1b): work the card out again on the server, for the whole print or
+        // at the percentage in its box, and draw it again as FCC holds it now (its
+        // revision one up, so a view drawn before can't apply). Nothing is charged here.
+        async function recompute(card, whole) {
+            // Group 65 fix review (PI3): nothing is worked out while the card's own Apply is out.
+            if (card.dataset.recomputing === '1' || card.dataset.applying === '1') return;
+            const box = card.querySelector('.fcc-cr-pct');
+            const payload = { printer_name: card.dataset.printer, job_id: card.dataset.job,
+                              rev: Number(card.dataset.rev || 0) };
+            if (whole) {
+                payload.whole = true;
+            } else {
+                const typed = box ? String(box.value).trim().replace(/\s*%$/, '') : '';
+                const n = Number(typed);
+                if (!typed || !Number.isFinite(n) || n < 0 || n > 100) {
+                    tell(card, 'Type how far the print got, from 0 to 100 %, then press Work it out.');
+                    if (box) { try { box.focus(); box.select(); } catch (_) { /* noop */ } }
+                    return;
+                }
+                payload.percent = n;
+            }
+            card.dataset.recomputing = '1';
+            // Group 65 review (OR2): Discard waits too, so it can't land between the server's
+            // work and the redraw.
+            const btns = Array.from(card.querySelectorAll('.fcc-cr-whole, .fcc-cr-workout, .fcc-cr-confirm, .fcc-cr-discard'));
+            btns.forEach((b) => { b.disabled = true; });
+            let d = null;
+            try {
+                const r = await fetch('/api/cancel_deduct/recompute', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                d = await r.json();
+            } catch (_) { d = null; }
+            // Fix review 3: the card stays busy until it is drawn again (its redraw can wait for a
+            // scan to finish), so an Enter in How far it got meanwhile works nothing out twice.
+            const settled = (d && (d.status === 'recomputed' || d.stale || d.status === 'already_handled'));
+            if (!settled) delete card.dataset.recomputing;
+            if (d && d.status === 'already_handled') {
+                // Group 65 review (PI1): the card goes from under the pointer (and the panel
+                // with it, when it was the only card): a double click's second press reaches
+                // nothing, as every other branch that takes a card away does.
+                if (typeof window.fccShieldNextPress === 'function') window.fccShieldNextPress();
+                await rerenderCard(card);
+                toast('That card was already settled: nothing more to work out on it.', 'info');
+                if (body.querySelector('.fcc-cr-card')) sayOnPanel('That card was already settled: nothing more to work out on it.');
+                return;
+            }
+            if (d && (d.status === 'recomputed' || d.stale)) {
+                // Group 65 review (PI2 / PI4) and fix reviews (CD1 / CD5 / CA1 / CA2 / CA5): the
+                // redraw keeps what the person did on the card and gives the keyboard back as
+                // they left it (from a basis control, or from nowhere: How far it got, its figure
+                // selected, so a figure typed next replaces it).
+                const fresh = await rerenderCard(card, false, { whole, from: 'basis',
+                    sent: whole ? null : payload.percent });
+                if (fresh === card) {
+                    // Group 65 fix review (CD2) and fix review 2 (CA3): the list couldn't be read
+                    // to draw it: every button back (Discard too), and what the answer was (the
+                    // card's own words then say the list couldn't be read).
+                    delete card.dataset.recomputing;
+                    btns.forEach((b) => { b.disabled = false; });
+                    // Fix review 5 (CZ1): a figure queued meanwhile is said as not worked out.
+                    tell(card, (d.stale ? 'This card changed since it was drawn, and FCC couldn’t draw it again here.'
+                        : 'FCC worked it out, but couldn’t draw it here.') + queuedNotDone(card));
+                    return;
+                }
+                if (fresh) {
+                    const back = fresh._fccKept || { lost: [], picks: 0 };
+                    const lost = back.lost;
+                    const picks = { length: back.picks };
+                    // Group 65 review (WD5 / CM5): the words name the card's own button, and the
+                    // picks kept or lost.
+                    const how = whole ? 'Worked out for the whole print' : `Worked out at ${fmt(payload.percent)}%`;
+                    const kept = picks.length > lost.length;
+                    const next = fresh.dataset.kind === 'no_spool'
+                        ? (kept ? 'your picks are kept: check them and the grams, then Apply.'
+                            : 'pick the spool each head used, then Apply.')
+                        : (kept ? 'your picks are kept: check the grams, then Confirm.' : 'check the grams, then Confirm.');
+                    const gone = lost.length ? ' A pick on a line the card no longer has couldn’t be kept: pick it again.' : '';
+                    // Fix review 3 (CX5): a percentage refused as stale is said as not worked out.
+                    // Fix review 4 (CY4): unless the card FCC holds is at that percentage already
+                    // (another device worked it out there): it said both, and typing it again did nothing.
+                    const freshBox = fresh.querySelector('.fcc-cr-pct');
+                    const at = freshBox ? pctNumber(freshBox.getAttribute('value')) : NaN;
+                    const notDone = whole ? ''
+                        : (Number.isFinite(at) && at === Number(payload.percent))
+                            ? ` It is worked out at ${fmt(payload.percent)}% already: ${next}`
+                            : ` ${fmt(payload.percent)}% wasn’t worked out: type it again if you still mean it.`;
+                    sayOnCard(fresh, d.stale
+                        ? (d.msg || 'This card changed since it was drawn: it is drawn again as it is now.') + notDone
+                        : `${how}: ${next}${gone}`);
+                    // Fix review 4 (CY2) / 5 (CZ1 / CZ2): an Enter in How far it got while the card
+                    // was being worked out: its figure is worked out now, as the person asked;
+                    // fix review 6: never the figure this press sent again (a double press).
+                    afterQueued(card, fresh, { sent: whole ? null : payload.percent });
+                }
+                // The redraw put new buttons where the pointer is: a double click's second
+                // press reaches nothing (Group 58's rule).
+                if (typeof window.fccShieldNextPress === 'function') window.fccShieldNextPress();
+                return;
+            }
+            btns.forEach((b) => { b.disabled = false; });
+            // Fix review 6 (CU2): a queued copy of the figure FCC just refused (a double press's
+            // second Enter) goes with the refusal's own words, never "press Enter again".
+            if (!whole && pctNumber(card.dataset.queuedPct) === Number(payload.percent)) {
+                delete card.dataset.queuedPct;
+                delete card.dataset.queuedTypo;
+            }
+            tell(card, ((d && d.msg) || "FCC didn't answer, so the card wasn't worked out again. Try again in a moment.")
+                + queuedNotDone(card));
+        }
+
+        // Group 65 fix review 5 (CZ1 / CZ2 / CZ3): an Enter in How far it got while the card was
+        // busy (worked out, or read again by a stale Confirm) keeps its figure (`queuedPct`).
+        // Once the card is drawn again the figure is worked out there, unless the card is at it
+        // already; a box changed since the Enter, or a card that couldn't be drawn again, says
+        // the figure wasn't worked out, never works out one nobody pressed Enter on.
+        function queuedNotDone(card) {
+            const q = card.dataset.queuedPct;
+            delete card.dataset.queuedPct;
+            delete card.dataset.queuedTypo;
+            return (q != null && q !== '') ? ` ${pctAsTyped(q)}% wasn’t worked out: press Enter again.` : '';
+        }
+        // Words added after what the card already says (a redraw's own words stand).
+        function addToNotice(card, words) {
+            const n = card && card.querySelector('.fcc-cr-card-notice');
+            const now = n ? String(n.textContent || '').trim() : '';
+            sayOnCard(card, now ? `${now} ${words}` : words);
+        }
+        // Group 65 fix review 6 (CU1 / CU3 / AU1 / AU2 / AU3, CZ1 a): the queued Enter, judged
+        // on the old card's box as the redraw read it (`_fccKeptPct`): changed since the Enter,
+        // it is said and never worked out; the figure the press itself sent (a double press's
+        // second Enter) is never worked out again, nor one the card is at (its exact basis,
+        // `data-basis`, never the box's rounding); else the figure as typed goes out on the
+        // card drawn again. `ctx.sent`: the percentage the redraw's own press sent.
+        function afterQueued(old, fresh, ctx) {
+            const q = old.dataset.queuedPct;
+            const typo = old.dataset.queuedTypo;
+            delete old.dataset.queuedPct;
+            delete old.dataset.queuedTypo;
+            if (!fresh) return;
+            if ((q == null || q === '') && typo != null && typo !== '') {
+                addToNotice(fresh, `“${typo}” in How far it got isn’t a percentage from 0 to 100, so it wasn’t worked out.`);
+                return;
+            }
+            if (q == null || q === '') return;
+            const want = pctNumber(q);
+            if (!Number.isFinite(want)) return;
+            const left = fresh._fccKeptPct;
+            if (left != null && pctAsTyped(left) !== pctAsTyped(q)) {
+                addToNotice(fresh, `${pctAsTyped(q)}% wasn’t worked out: How far it got changed after you pressed `
+                    + 'Enter. Press Enter to work out what it holds.');
+                return;
+            }
+            if (ctx && ctx.sent != null && want === Number(ctx.sent)) return;
+            const basis = String(fresh.dataset.basis == null ? '' : fresh.dataset.basis);
+            if ((basis === 'whole' && want === 100) || (basis !== '' && basis !== 'whole' && Number(basis) === want)) return;
+            const box = fresh.querySelector('.fcc-cr-pct');
+            if (!box) return;
+            box.value = pctAsTyped(q);
+            recompute(fresh, false);
+        }
+        // Group 65 fix review 6 (CU4): an Enter in How far it got on a card kept as drawn after
+        // a read that failed reads the card again first, then works its figure out on the card
+        // FCC holds, never sending the old revision (refused as stale, the figure lost).
+        async function readAgainThenQueued(card) {
+            card.dataset.recomputing = '1';
+            const btns = Array.from(card.querySelectorAll('.fcc-cr-whole, .fcc-cr-workout, .fcc-cr-confirm, .fcc-cr-discard'));
+            btns.forEach((b) => { b.disabled = true; });
+            sayOnCard(card, 'Reading this card again first…');
+            const fresh = await rerenderCard(card, true, { from: 'basis' });
+            if (fresh && fresh !== card) {
+                sayOnCard(fresh, 'Drawn again as FCC holds this card now.');
+                afterQueued(card, fresh, {});
+            } else if (fresh) {
+                delete card.dataset.recomputing;
+                btns.forEach((b) => { b.disabled = false; });
+                sayOnCard(card, `FCC still couldn’t read the review list.${queuedNotDone(card)}`);
+            }
+        }
+        // Group 65 fix review 6 (CZ1 c): a card drawn again with a figure in How far it got that
+        // it isn't worked out at (typed, never worked out) says so: Confirm charges the card's.
+        function sayCarried(fresh) {
+            const box = fresh && fresh.querySelector('.fcc-cr-pct');
+            if (!box) return;
+            const typed = pctAsTyped(box.value);
+            const drawn = pctAsTyped(box.getAttribute('value'));
+            if (typed === '' || typed === drawn || !PCT_FIGURE.test(typed)) return;
+            addToNotice(fresh, `How far it got reads ${typed}%, which isn’t worked out: press Enter to work it out.`);
         }
 
         // 43.2: an Apply that couldn't place every gram opened an uncharged-grams
@@ -1427,7 +2341,10 @@
         function updatePreview(input) {
             const sid = input.dataset.sid;
             const g = parseFloat(input.value);
-            const prev = overlay.querySelector(`.fcc-cr-preview[data-sid="${sid}"]`);
+            // Group 65 fix review 2 (CA4): its own card's preview (a lookup that answers after
+            // the card was drawn again painted the fresh card's from the old grams).
+            const scope = (input.closest && input.closest('.fcc-cr-card')) || overlay;
+            const prev = scope.querySelector(`.fcc-cr-preview[data-sid="${sid}"]`);
             if (!prev) return;
             if (Number.isNaN(g)) { prev.textContent = '→ —'; prev.style.color = '#9aa'; return; }
             // 43.1: no known capacity, so no remaining to preview.
@@ -1441,6 +2358,20 @@
         }
         function closeIfEmpty() {
             if (!body.querySelector('.fcc-cr-card')) cleanup();
+        }
+        // Group 64 full review (PI1): a Confirm or a Discard takes its card away; when
+        // another card keeps the panel up, its outcome is said here too, since the
+        // toast layer is drawn under the panel. Cleared at the next press.
+        function sayOnPanel(msg) {
+            const n = overlay.querySelector('#fcc-cr-panel-notice');
+            if (!n) return;
+            n.textContent = msg || '';
+            n.style.display = msg ? '' : 'none';
+        }
+        // A toast, and the same words kept for the panel's line.
+        function toastAndKeep(said, msg, type, dur) {
+            toast(msg, type, dur);
+            said.push(msg);
         }
 
         // Scope B: a held set's count of the grams still to place follows its boxes.
@@ -1510,7 +2441,7 @@
             }
             let j = null;
             if (r.ok) { try { j = await r.json(); } catch (_) { j = null; } }
-            if (inp._fccLook !== seq) return;
+            if (inp._fccLook !== seq || card.isConnected === false) return;
             const s = j && j.success !== false ? j.data : null;
             if (!s || s.id == null || Number(s.id) !== id) {
                 setBoxInfo(info, `FCC couldn't find spool #${id}.`, true);
@@ -1560,6 +2491,129 @@
                 lookUpBox(card, t, false);
             }
         });
+        // Group 64.2 (4): a scan with the keyboard on a picker (a closed <select>)
+        // picks that spool on its line. The dashboard's scan accumulator reads a
+        // select's keys (it skips only an INPUT's), so a label scanned there went to
+        // the scan path (the spool joined the scan buffer), and the select's own
+        // typeahead moved the pick with the label's letters. The scan's Enter, read
+        // as a scan when the buffer looks like one (looksLikeScanPayload: a ':' or
+        // '/' in it) or came as a scanner burst, never reaches the accumulator (this
+        // capture runs before it), and the line takes the scanned spool, whatever
+        // the typeahead did: the picker's own option for it when it lists it, else
+        // "Another spool by #ID…" with the label in its box, looked up as a typed
+        // number is. A person's typeahead moves the select as ever; their Enter
+        // after it goes on, however soon it comes (Group 64 review, O1: "#2" and a
+        // quick Enter was in flight, isScanInFlight's 500 ms, and moved the line to
+        // spool #2: a bare in-flight test is never a scan here).
+        // Group 64 fix review (FP1): when each key typed on a picker came, so a
+        // bare-number label (an old label with no prefix, "57") read at a scanner's
+        // pace is still a scan: it has no ':' or '/', and two digits are never a
+        // scanner burst. A person's typeahead goes slower, and the picker's options
+        // all start with '#', so digits alone jump nowhere anyway.
+        const pickKeys = { el: null, at: [] };
+        const PICK_SCAN_GAP_MS = 80;
+        // Group 65.1 (1b): Enter in the percentage box works the card out again and never
+        // applies it. A scan's Enter is the scan's (the weight capture sends a label on to
+        // the scan path, and enterIsAScan says so for the Enter after it).
+        overlay.addEventListener('keydown', (e) => {
+            const t = e.target;
+            if (e.key !== 'Enter' || e.isComposing || !t || !t.classList || !t.classList.contains('fcc-cr-pct')) return;
+            if (typeof window.enterIsAScan === 'function' && window.enterIsAScan()) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.repeat) return;
+            // Group 65 fix review 3 (CX1 / CX6): an Enter on the figure the card was drawn with
+            // works nothing out (the card is that already). After a redraw the keyboard lands
+            // here with that figure selected, and a double press's second Enter worked the card
+            // out again ("whole" became "100%", a second log line).
+            const card = t.closest('.fcc-cr-card');
+            if (!card) return;
+            const busy = card.dataset.recomputing === '1';
+            if (busy || card.dataset.stale === '1') {
+                // Fix review 4 (CY2) / 5 (CZ1 / CZ2 / CZ3): the card is being worked out, or a
+                // stale Confirm reads it again: the figure the Enter was pressed on (any figure,
+                // the old card's own too) is kept, as typed, and worked out once the card is
+                // drawn again (afterQueued); one that isn't from 0 to 100 is said at once, never
+                // promised, and again on the card drawn again (fix review 6, CZ1 a). Fix review
+                // 6 (CU4): a card kept as drawn after a read that failed is read again first, so
+                // its Enter goes out on the revision FCC holds, never refused as stale.
+                const text = String(t.value).trim();
+                const n = pctNumber(text);
+                if (!PCT_FIGURE.test(text) || !Number.isFinite(n) || n < 0 || n > 100) {
+                    card.dataset.queuedTypo = text;
+                    delete card.dataset.queuedPct;
+                    sayOnCard(card, 'Type how far the print got, from 0 to 100 %, then press Enter.');
+                    return;
+                }
+                card.dataset.queuedPct = text;
+                delete card.dataset.queuedTypo;
+                if (busy) {
+                    sayOnCard(card, `Still working this card out: ${pctAsTyped(text)}% is worked out once it is drawn again.`);
+                    return;
+                }
+                readAgainThenQueued(card);
+                return;
+            }
+            const drawn = pctNumber(t.getAttribute('value'));
+            if (Number.isFinite(drawn) && pctNumber(t.value) === drawn) {
+                // Fix review 4 (CY4): said, but not to a double press's second Enter right after
+                // the card was drawn (its own words stand).
+                if (Date.now() - Number(card.dataset.drawnAt || 0) >= 700) {
+                    const verb = card.dataset.kind === 'no_spool' ? 'Apply' : 'Confirm';
+                    sayOnCard(card, `It is worked out at ${fmt(drawn)}% already: check the grams, then ${verb}.`);
+                }
+                return;
+            }
+            recompute(card, false);
+        });
+        overlay.addEventListener('keydown', (e) => {
+            const t = e.target;
+            if (!t || !t.classList || !t.classList.contains('fcc-cr-pick') || e.key === 'Enter') return;
+            const now = Date.now();
+            if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) { pickKeys.el = null; pickKeys.at = []; return; }
+            const last = pickKeys.at[pickKeys.at.length - 1];
+            if (pickKeys.el !== t || (last != null && now - last > PICK_SCAN_GAP_MS)) { pickKeys.el = t; pickKeys.at = []; }
+            pickKeys.at.push(now);
+        }, true);
+        const bareLabelAtScannerPace = (t, buf) => {
+            const text = String(buf || '').trim();
+            const keys = pickKeys.at;
+            if (!/^#?\d+$/.test(text) || pickKeys.el !== t || keys.length !== text.length) return false;
+            for (let i = 1; i < keys.length; i += 1) if (keys[i] - keys[i - 1] > PICK_SCAN_GAP_MS) return false;
+            return Date.now() - keys[keys.length - 1] <= PICK_SCAN_GAP_MS;
+        };
+        overlay.addEventListener('keydown', (e) => {
+            const t = e.target;
+            if (e.key !== 'Enter' || e.isComposing || !t || !t.classList || !t.classList.contains('fcc-cr-pick')) return;
+            // inv_core.js's `let state` is a script-global binding, not a window
+            // property: read it by name, as the buffer list above does.
+            const st = (typeof state !== 'undefined') ? state : window.state;
+            const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+            const bare = bareLabelAtScannerPace(t, buf);
+            pickKeys.el = null; pickKeys.at = [];
+            if (!buf.trim() || !((window.looksLikeScanPayload && window.looksLikeScanPayload(buf.trim()))
+                    || (window.isScannerBurst && window.isScannerBurst()) || bare)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (st) st.lastScanEnterAt = Date.now();     // as the accumulator marks a scan's Enter
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            const card = t.closest('.fcc-cr-card');
+            if (card) pickByScan(card, t, buf);
+        }, true);
+        // The scanned spool on the picker's line: its own option, or the #ID box.
+        function pickByScan(card, sel, text) {
+            const got = readSpoolBox(text);
+            const own = got.sid != null && Array.from(sel.options || []).find((o) => o.value === String(got.sid));
+            if (own) {
+                sel.value = String(got.sid);
+            } else {
+                const box = card.querySelector(`.fcc-cr-other[data-line="${CSS.escape(String(sel.dataset.line))}"]`);
+                if (!box) return;
+                box.value = String(text).trim();
+                sel.value = 'other';
+            }
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
         // Scope D: an Enter in the #id box (a scanner ends every label with one,
         // and some send two) reads the box and nothing else: it never applies the
         // card or presses a button, and goes no further. Its text is left
@@ -1599,7 +2653,58 @@
             const printer = card.dataset.printer;
             const job = card.dataset.job;
 
+            if (e.target.classList.contains('fcc-cr-whole') || e.target.classList.contains('fcc-cr-workout')) {
+                // Group 65.1 (1b): a double click's second press works nothing out again
+                // (a press from the keyboard has detail 0).
+                if (e.detail > 1) return;
+                sayOnPanel('');
+                await recompute(card, e.target.classList.contains('fcc-cr-whole'));
+                return;
+            }
+
             if (e.target.classList.contains('fcc-cr-confirm')) {
+                if (e.detail <= 1) sayOnPanel('');
+                // Group 64 review (R1): a double click's second press is no Apply. Its
+                // first applied this card and took it away, the next card slid up
+                // under the pointer, and the second press applied that one, unread
+                // (a press from the keyboard has detail 0).
+                if (e.detail > 1) return;
+                // Group 64 fix review 4 (UP2): a card kept as drawn after a list FCC couldn't
+                // read is read again before anything is posted: drawn again as FCC holds it
+                // (its next Apply posts what that shows), or still said to be unread. Posted
+                // as drawn, a spool an earlier Apply had charged read as a failure.
+                if (card.dataset.stale === '1') {
+                    // Group 65 fix review 4 (CY1): the card's other buttons wait too, as a
+                    // recompute's do: a basis press meanwhile drew it again under this read,
+                    // which then said a card FCC still holds was settled.
+                    const held = Array.from(card.querySelectorAll(
+                        '.fcc-cr-confirm, .fcc-cr-whole, .fcc-cr-workout, .fcc-cr-discard'));
+                    held.forEach((b) => { b.disabled = true; });
+                    // Fix review 5 (CZ3): How far it got's Enter waits too (it is queued, as while
+                    // the card is worked out): sent now, it went out on the old revision.
+                    card.dataset.recomputing = '1';
+                    // Group 65 fix review (CD2) and fix review 2 (CA2): the picks, read right
+                    // before the fresh card takes its place, after the redraw's own reads.
+                    const fresh = await rerenderCard(card, true, { from: 'confirm' });
+                    if (fresh && fresh !== card) {
+                        sayOnCard(fresh, 'Drawn again as FCC holds this card now: check it, then Apply.');
+                        // Fix review 6 (CZ1 c): a typed figure the card isn't at is said.
+                        const queued = !!card.dataset.queuedPct;
+                        afterQueued(card, fresh, {});
+                        if (!queued) sayCarried(fresh);
+                    } else if (fresh) {
+                        delete card.dataset.recomputing;
+                        held.forEach((b) => { b.disabled = false; });
+                        sayOnCard(card, queuedNotDone(card).trim());
+                        toast(STALE_CARD_WORDS, 'warning', 7000);
+                    } else if (card._fccSettled) {
+                        toast('That card was already settled: nothing more to apply on it.', 'info');
+                        if (body.querySelector('.fcc-cr-card')) sayOnPanel('That card was already settled: nothing more to apply on it.');
+                    }
+                    // Else the card left the page meanwhile (🛑 Review closed): nothing was
+                    // applied, FCC still holds it, and there is nothing to say.
+                    return;
+                }
                 // 43.3: explicit picks become `charges`; a card whose rows all keep
                 // their own spool still sends the old `updates` shape.
                 const payload = { printer_name: printer, job_id: job };
@@ -1687,22 +2792,61 @@
                     }
                     // 43.2: a shortfall card names no spool of its own, so an Apply
                     // with nothing picked would charge nothing (the server refuses it too).
-                    if (card.dataset.kind === 'shortfall' && !redirected && !Object.keys(updates).length) {
+                    // Decision 1 (Group 64): a card whose every line is a spool weighed
+                    // (or changed) after its print, each left at 0 g, settles with
+                    // nothing charged: the scale counted the print.
+                    // Group 64 review (O3): the lines left without a pick count, so a
+                    // card with a pick for one line and a weighed line left at 0 g
+                    // settles that line in the same Apply (settle_held beside the
+                    // picks), instead of keeping it and asking for a spool for grams
+                    // the scale already counted.
+                    const shortLines = Array.from(card.querySelectorAll('.fcc-cr-shortline'));
+                    const pickedPos = new Set(charges.filter((c) => c.position != null).map((c) => String(c.position)));
+                    const leftLines = shortLines.filter((ln) => !pickedPos.has(String(ln.dataset.pos)));
+                    // Group 64 full review (FX6): a pick an earlier Apply held stays on the
+                    // card as a row marked weighed; left at 0 g it settles as such a line
+                    // does (any other row, a failed write's retry, still needs its Apply).
+                    const cardRows = Array.from(card.querySelectorAll('.fcc-cr-row'));
+                    const rowsAt0 = cardRows.every((r) => r.dataset.weighed === '1'
+                        && !(parseFloat((r.querySelector('.fcc-cr-grams') || {}).value) > 0));
+                    const settleLeft = card.dataset.kind === 'shortfall' && (leftLines.length > 0 || cardRows.length > 0)
+                        && rowsAt0
+                        && leftLines.every((ln) => ln.dataset.weighed === '1'
+                            && !(parseFloat((ln.querySelector('.fcc-cr-pgrams') || {}).value) > 0));
+                    const settleHeld = settleLeft && !redirected && !Object.keys(updates).length;
+                    if (settleHeld) {
+                        payload.settle_held = true;
+                        payload.charges = [];
+                    } else if (card.dataset.kind === 'shortfall' && !redirected && !Object.keys(updates).length) {
                         endSetAsk(card);
                         tell(card, 'Pick the spool that took these grams (or Discard).');
                         return;
                     }
-                    if (redirected) payload.charges = charges; else payload.updates = updates;
-                    // 43.2: the card's revision, so an Apply from a view opened before
-                    // another Apply changed it is refused instead of charging again.
-                    if (card.dataset.kind === 'shortfall') payload.rev = Number(card.dataset.rev || 0);
+                    if (!settleHeld) { if (redirected) payload.charges = charges; else payload.updates = updates; }
+                    if (settleLeft && redirected) payload.settle_held = true;
                 }
+                // 43.2: the card's revision, so an Apply from a view opened before
+                // another Apply changed it is refused instead of charging again. Every
+                // card since the Group 64 full review (FX7): a hold keeps a card too, and
+                // a view drawn before it charged the held row's old grams on top.
+                payload.rev = Number(card.dataset.rev || 0);
                 // Review fix: a set whose boxes don't add up to its grams (left
                 // empty, part placed, or over) is said in the set and on the card;
                 // a second press with the same grams goes ahead (never a double
                 // click's second press).
                 if (!setsConfirmed(card, e)) return;
+                // Group 64.2 (2): a set whose grams don't add up goes out only after
+                // its question, and says what the person saw (the server checks it).
+                const acked = setProblems(card);
+                if (acked.length) {
+                    payload.set_ack = {};
+                    acked.forEach((p) => { payload.set_ack[String(p.box.dataset.pos)] = p.placed; });
+                }
                 e.target.disabled = true;
+                // Group 65 fix review (PI3): working the card out again waits for its Apply.
+                card.dataset.applying = '1';
+                const basisBtns = Array.from(card.querySelectorAll('.fcc-cr-whole, .fcc-cr-workout'));
+                basisBtns.forEach((b) => { b.disabled = true; });
                 try {
                     const r = await fetch('/api/cancel_deduct/confirm', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1710,39 +2854,178 @@
                     });
                     const d = await r.json();
                     const took = (d.applied || []).reduce((a, x) => a + (Number(x.grams) || 0), 0);
+                    // Group 64 review (O4 / Y2): the weighed spools this Apply left
+                    // uncharged are said by name, in the words of what FCC knows
+                    // (weighed on FCC after the print, or a change it can't place).
+                    // Fix review 4 (US1 / US3): an Apply whose write failed settles them
+                    // too, so they are said beside a hold or a failure as well.
+                    const left = Array.isArray(d.left_weighed) ? d.left_weighed : [];
+                    // Group 65 fix review 3 (RX5): each kind in its own words, as the Activity Log
+                    // line says them (a spool FCC saw weighed after the print isn't one it couldn't
+                    // place): weighed after the print, a change FCC can't place, or weighed while FCC
+                    // couldn't see the print (RE1). An entry from an older FCC, with no
+                    // `known_order`, reads by the answer's `settled_unsure` as before.
+                    const kindOf = (l) => (l.unseen ? 'unseen' : (l.seen ? 'seen'
+                        : ((l.known_order === false || (l.known_order == null && d.settled_unsure)) ? 'unsure' : 'known')));
+                    const leftGroup = (kind) => {
+                        const g = left.filter((l) => kindOf(l) === kind);
+                        if (!g.length) return '';
+                        const grams = fmtG(g.reduce((a, l) => a + (Number(l.grams) || 0), 0));
+                        const who = spoolListWords(g.map((l) => l.sid));
+                        const many = g.length > 1;
+                        if (kind === 'known') return `left ${grams}g uncharged on ${who}: ${many ? 'they were' : 'it was'} weighed after the print`;
+                        if (kind === 'seen') {
+                            return `left ${grams}g uncharged on ${who}: ${many ? 'they were' : 'it was'} weighed `
+                                + 'after FCC last saw the print';
+                        }
+                        if (kind === 'unseen') {
+                            return `left ${grams}g uncharged on ${who} as set: `
+                                + `${many ? 'they were' : 'it was'} weighed while FCC couldn’t see the print`;
+                        }
+                        return `left ${grams}g uncharged on ${who} as set: `
+                            + `${many ? 'their weights' : 'its weight'} changed after the print`;
+                    };
+                    const leftParts = ['known', 'seen', 'unsure', 'unseen'].map(leftGroup).filter(Boolean);
+                    const leftWords = leftParts.join('; ');
+                    const leftTail = leftParts.map((w) => ` ${w.charAt(0).toUpperCase()}${w.slice(1)}.`).join('');
+                    // Fix review 4 (UP1): a refused write in words (spoolman_api.refusal_words),
+                    // never Spoolman's raw answer; FCC's own sentences have no `words`.
+                    const errWords = (x) => String((x && (x.words || x.error)) || 'failed');
                     if (d.status === 'confirmed' && d.kept) {
                         // 43.2: the picks couldn't take everything (a run-out or
                         // near-empty spool); the rest stays on the card to pick again.
-                        const msg = `Charged ${fmtG(took)}g. ${fmtG(d.shortfall_g)}g still have no spool — pick another spool, or Discard.`;
+                        // Group 64 fix review (FS2): the card's weighed lines (kept_weighed)
+                        // wait at what it filled in; they are no grams with no spool.
+                        const kw = Array.isArray(d.kept_weighed) ? d.kept_weighed : [];
+                        const kwG = kw.reduce((a, l) => a + (Number(l.grams) || 0), 0);
+                        const other = Math.max(0, (Number(d.shortfall_g) || 0) - kwG);
+                        const parts = [`Charged ${fmtG(took)}g.`];
+                        if (other > 0.05 || !kw.length) parts.push(`${fmtG(other)}g still have no spool — pick another spool, or Discard.`);
+                        if (kw.length) {
+                            parts.push(`${fmtG(kwG)}g on ${spoolListWords(kw.map((l) => l.sid))}, `
+                                + (kw.every((l) => l.known_order)
+                                    ? 'weighed after the print, stay on the card: Apply again to leave them uncharged, or Discard.'
+                                    : 'whose weight changed after the print, stay on the card: check them, then Apply again or Discard.'));
+                        }
+                        const msg = parts.join(' ');
                         toast(msg, 'warning', 7000);
-                        sayOnCard(await rerenderCard(card, true), msg);
+                        const kept = await rerenderCard(card, true);
+                        sayOnCard(kept, headPieces(kept, msg));
+                        refreshBadge();
+                        document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                    } else if (Array.isArray(d.held) && d.held.length) {
+                        // Group 64 full review: a spool weighed (or changed) after the
+                        // card was shown is charged nothing; the card stays, its line
+                        // marked and filled in again, for the person to look again. A
+                        // hold with nothing else applied answers status 'error' (FX3: it
+                        // read as a failed Apply); a write that failed beside it is said too.
+                        const why = d.held.map((h) => h.words + '.').join(' ');
+                        const heldSids = new Set(d.held.map((h) => String(h.sid)));
+                        // Fix review 4 (UP2): a stale card's "not in this review" is no failure.
+                        const failed = (d.errors || []).filter((x) => !heldSids.has(String(x.sid))
+                            && x.error !== 'not in this review');
+                        const failWords = failed.length ? ` ${failed.length} other spool(s) failed — check the log.` : '';
+                        // Group 64 fix review 2 (CP5): the spools this Apply charged leave
+                        // the redrawn card; the card's own line says so, as a kept card's does.
+                        // Group 64 fix review 3 (TP7): a spool that took 0 g (its record at
+                        // 0 g) is said as such, never named as charged.
+                        const took0 = (d.applied || []).filter((a) => !(Number(a.grams) > 0));
+                        const tookSome = (d.applied || []).filter((a) => Number(a.grams) > 0);
+                        const chargedWords = (tookSome.length
+                            ? `Charged ${fmtG(took)}g to ${spoolListWords(tookSome.map((a) => a.sid))}. ` : '')
+                            + (took0.length === 1 ? `#${took0[0].sid}'s record was at 0 g, so nothing was charged to it. `
+                                : took0.length ? `The records of ${spoolListWords(took0.map((a) => a.sid))} were at 0 g, so nothing was charged to them. ` : '');
+                        toast(`${chargedWords}${why} Nothing was charged to it: check its line and Apply again.${failWords}${leftTail}`,
+                            failed.length ? 'error' : 'warning', 7000);
+                        const fresh = await rerenderCard(card, true);
+                        sayOnCard(fresh, headPieces(fresh, `${chargedWords}${why} Nothing was charged to it: check its line and Apply again.${failWords}${leftTail}`));
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'confirmed') {
-                        if (took > 0) toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
-                        else toast('Nothing was charged: the spool picked has 0 g left on record.', 'warning', 7000);
+                        const said = [];
+                        if (took > 0) {
+                            toastAndKeep(said, `Deducted from ${(d.applied || []).length} spool(s)${leftWords ? `; ${leftWords}` : ''}.`, 'success');
+                        } else if (leftWords) {
+                            toastAndKeep(said, `${leftWords.charAt(0).toUpperCase()}${leftWords.slice(1)}.`, 'success');
+                        } else if (d.settled_held) {
+                            toastAndKeep(said, `Left ${fmtG(d.shortfall_g)}g uncharged: the spool was weighed after the print.`, 'success');
+                        } else {
+                            toastAndKeep(said, 'Nothing was charged: the spool picked has 0 g left on record.', 'warning', 7000);
+                        }
                         if (d.shortfall_card) {
                             // 43.2: what the picked spools couldn't take is on a new card.
-                            toast(`${fmtG(d.shortfall_g)}g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard.`, 'warning', 7000);
-                        } else if (Number(d.shortfall_g) > 0.05) {
+                            // Group 64 fix review 3 (TP8): the new card's own grams, never the
+                            // weighed spools' named just above as left uncharged.
+                            toastAndKeep(said, `${fmtG(d.shortfall_card_g != null ? d.shortfall_card_g : d.shortfall_g)}g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard.`, 'warning', 7000);
+                        }
+                        // Fix review 4 (UP3): the rest of the shortfall (a head nobody picked)
+                        // is said beside a new card too, less that card's own grams (an older
+                        // FCC's answer, with no shortfall_card_g, says only the card's).
+                        const unplaced = Number(d.shortfall_g) - (Number(d.left_in_shortfall_g) || 0)
+                            - (d.shortfall_card ? (Number(d.shortfall_card_g) || 0) : 0);
+                        if (!d.settled_held && (!d.shortfall_card || d.shortfall_card_g != null) && unplaced > 0.05) {
+                            // A settle's grams were left on purpose (Group 64 review, Y2), and so
+                            // were the weighed spools' named above (Group 64 fix review 2, CS4:
+                            // said twice, once as left uncharged and once as "couldn't be applied").
                             // Partial-bind / clamp shortfall (no_spool re-resolve path): part of the
                             // computed usage couldn't be applied — surface it AT THE OVERLAY, not only
                             // in the Activity Log, so the user knows to weigh the still-short spool.
-                            toast(`${fmtG(d.shortfall_g)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
+                            // Group 64 fix review 3 (TP1): the server says what of the shortfall
+                            // the weighed spools account for (left_in_shortfall_g); on a card's
+                            // first Apply a weighed row left at 0 g was never in it, and taking its
+                            // grams off hid an unpicked head's.
+                            toastAndKeep(said, `${fmtG(unplaced)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
                         }
-                        if ((d.errors || []).length) toast(`${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
-                        card.remove(); updateCount(); refreshBadge();
-                        if (d.shortfall_card) await showNewCard(printer, d.shortfall_card);
-                        closeIfEmpty();
-                        document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                        // Group 64 fix review 2 (CP7): a write that failed on a spool of this
+                        // card was re-queued by the server (a 43.6 retry row), so the card
+                        // stays: drawn again with both outcomes on it. Only a stale card's
+                        // "not in this review" leaves nothing to retry.
+                        const retrying = (d.errors || []).filter((x) => x && x.error !== 'not in this review');
+                        if (retrying.length) {
+                            // Group 64 fix review 3 (TP2): each spool's own words (a write
+                            // Spoolman refused, a weight that changed since the last try, a spool
+                            // gone), never one sentence for all of them.
+                            const why = retrying.map((x) => `#${x.sid} (${errWords(x).replace(/[.\s]+$/, '')})`).join('; ');
+                            toastAndKeep(said, `Not charged: ${why}. The card stays: check it, then Apply again or Discard.`, 'error', 7000);
+                            const fresh = await rerenderCard(card);
+                            if (fresh) sayOnCard(fresh, headPieces(fresh, said.join(' ')));
+                            // TP6: the list couldn't be read (the card is drawn again at the next
+                            // open): the words go on the panel while another card keeps it up.
+                            else if (body.querySelector('.fcc-cr-card')) sayOnPanel(said.join(' '));
+                            refreshBadge();
+                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                        } else {
+                            // Fix review 4 (UP2): every error left here is a spool no longer on this
+                            // card ("not in this review": an earlier Apply settled it), no failure.
+                            const gone = (d.errors || []).filter((x) => x && x.error === 'not in this review');
+                            if (gone.length) {
+                                const them = gone.length > 1 ? 'them' : 'it';
+                                toastAndKeep(said, `${spoolListWords(gone.map((x) => x.sid))} ${gone.length > 1 ? 'were' : 'was'} `
+                                    + `no longer on this card (an earlier Apply settled ${them}): nothing more was charged to ${them}.`, 'info');
+                            }
+                            // R1: the card under the pointer goes, so the second press of a
+                            // double click reaches nothing behind it.
+                            if (window.fccShieldNextPress) window.fccShieldNextPress();
+                            card.remove(); updateCount(); refreshBadge();
+                            if (d.shortfall_card) await showNewCard(printer, d.shortfall_card);
+                            // PI1: another card keeps the panel up: its words are said on it too.
+                            if (body.querySelector('.fcc-cr-card')) sayOnPanel(said.join(' '));
+                            closeIfEmpty();
+                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                        }
                     } else if (d.stale) {
                         // 43.2: another Apply changed this card since it was shown.
                         const msg = d.msg || 'This card changed — check it and Apply again.';
                         toast(msg, 'warning', 7000);
-                        sayOnCard(await rerenderCard(card, true), msg);
+                        const fresh = await rerenderCard(card, true);
+                        sayOnCard(fresh, headPieces(fresh, msg));
                     } else if (d.status === 'already_handled') {
                         toast('Already handled elsewhere.', 'info');
-                        card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
+                        if (window.fccShieldNextPress) window.fccShieldNextPress();
+                        card.remove(); updateCount(); refreshBadge();
+                        // Group 64 fix review 2 (CP3): said on the panel too, as a Discard's is.
+                        if (body.querySelector('.fcc-cr-card')) sayOnPanel('Already handled elsewhere.');
+                        closeIfEmpty();
                     } else if (d.status === 'still_no_spool' || d.status === 'manual_only') {
                         // Not applied, but the review is kept server-side — LEAVE the
                         // card so the user can bind a spool / weigh, then retry Apply.
@@ -1750,17 +3033,26 @@
                         tell(card, d.msg || 'Not applied — still no spool bound.');
                     } else {
                         e.target.disabled = false;
-                        const why = d.msg || ((d.errors || [])[0] || {}).error || 'Confirm failed — check the log.';
+                        const e0 = (d.errors || [])[0];
+                        const why = (d.msg || (e0 ? errWords(e0) : '') || 'Confirm failed — check the log.') + leftTail;
                         tell(card, why, 'error');
                         // Writes that failed leave a reshaped review: show what it holds now.
-                        if ((d.errors || []).length) sayOnCard(await rerenderCard(card), why);
+                        if ((d.errors || []).length) {
+                            const fresh = await rerenderCard(card);
+                            sayOnCard(fresh, headPieces(fresh, why));
+                        }
                     }
                 } catch (err) {
                     e.target.disabled = false;
                     tell(card, 'Confirm failed.', 'error');
+                } finally {
+                    delete card.dataset.applying;
+                    basisBtns.forEach((b) => { b.disabled = false; });
                 }
             } else if (e.target.classList.contains('fcc-cr-discard')) {
                 const btn = e.target;
+                // PI1: a press clears the panel's last outcome (not a double press's second).
+                if (!(btn.dataset.armed === '1' && Date.now() - Number(btn.dataset.armedAt || 0) < 700)) sayOnPanel('');
                 // First click ARMS (no backend call); second click within 4s
                 // discards. Guards an accidental click from a permanent drop.
                 // A second press under 700 ms is a double press, not a decision
@@ -1785,8 +3077,14 @@
                     });
                     const d = await r.json();
                     if (d.status === 'dismissed' || d.status === 'already_handled') {
-                        toast(d.status === 'dismissed' ? 'Review discarded (no deduct).' : 'Already handled elsewhere.', 'info');
-                        card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
+                        const words = d.status === 'dismissed' ? 'Review discarded (no deduct).' : 'Already handled elsewhere.';
+                        toast(words, 'info');
+                        // Group 64 fix review: the next card slides up under the pointer
+                        // here too, as after Confirm (R1).
+                        if (window.fccShieldNextPress) window.fccShieldNextPress();
+                        card.remove(); updateCount(); refreshBadge();
+                        if (body.querySelector('.fcc-cr-card')) sayOnPanel(words);     // PI1
+                        closeIfEmpty();
                     } else {
                         btn.disabled = false; disarmDiscard(btn);
                         tell(card, d.msg || 'Discard failed — check the log.', 'error');
@@ -1819,4 +3117,50 @@
     } else {
         startBadge();
     }
+})();
+
+// Group 64.4 (Derek, 2026-11-20: a way to recover once he has fixed what kept a print
+// file from being read, or its deduct from working): the "↻ Try again now" button on
+// the Activity Log line FCC writes the first time a queued print's file downloads but
+// can't be read, or its deduct fails (print_deduct._fetch_retry_button). The line holds
+// the button itself, as the take-off's "Take it off" (inv_weigh_out.js), so it is in
+// #live-logs and in the 📡 pill's list alike: one delegated click posts
+// /api/cancel_deduct/retry_fetch {printer_name, job_id} and toasts the answer's words,
+// which the pill's list also shows on its own line (its overlay covers the toast layer).
+// A press while one is out for that print asks nothing, nor does a double click's
+// second (`detail` 2). The click is window.fccFetchRetryClick, so a hermetic harness
+// can press it (tests/test_fetch_backoff_64_4_js.py).
+(() => {
+    const out = new Set();
+    const say = (msg, ok, fromPill) => {
+        showToast(msg, ok ? 'success' : 'warning', ok ? 4000 : 7000);
+        if (fromPill && typeof window.logPillNotice === 'function') window.logPillNotice(msg);
+    };
+    window.fccFetchRetryClick = (e) => {
+        const t = e.target && e.target.closest ? e.target : null;
+        const btn = t ? t.closest('.fcc-fetch-retry-btn') : null;
+        if (!btn || !btn.closest('#live-logs, #fcc-log-pill-overlay')) return;
+        e.preventDefault();
+        if (e.detail > 1) return;
+        const printer = btn.getAttribute('data-fetch-printer') || '';
+        const job = btn.getAttribute('data-fetch-job') || '';
+        const key = `${printer}::${job}`;
+        if (!printer || !job || out.has(key)) return;
+        out.add(key);
+        const fromPill = !!btn.closest('#fcc-log-pill-overlay');
+        if (fromPill && typeof window.logPillNotice === 'function') window.logPillNotice('');
+        (window.fetchT || fetch)('/api/cancel_deduct/retry_fetch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ printer_name: printer, job_id: job }),
+        })
+            .then((r) => r.json())
+            .then((res) => say(String((res && res.msg) || `FCC couldn't queue job ${job} again.`),
+                               !!(res && res.success), fromPill),
+                  () => say("FCC didn't answer, so nothing changed. Try again in a moment.",
+                            false, fromPill))
+            .catch((err) => console.error(err))
+            .finally(() => out.delete(key));
+    };
+    document.addEventListener('click', (e) => window.fccFetchRetryClick(e));
 })();

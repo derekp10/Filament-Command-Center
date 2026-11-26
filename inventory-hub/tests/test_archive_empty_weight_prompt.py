@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
 from playwright.sync_api import Page, expect
 
 # Unit import for the backend-side shape check
@@ -281,6 +282,26 @@ def test_archive_empty_weight_prompt_validates_weight(page: Page):
     assert page.evaluate("() => window.__updateFilamentPayload") is None
 
 
+@pytest.mark.parametrize("typed", ["0.2kg", "7 oz", "16,7"])
+def test_archive_empty_weight_prompt_refuses_a_weight_in_another_unit(page: Page, typed):
+    """Group 63.9(b): the box is a text box read strictly as grams
+    (window.parseGramsReading): a weight in another unit, or with a decimal comma,
+    is refused in words and nothing is saved, with no unit conversion. RED on
+    e1b22f4: a number box, which kept only the digits (or took nothing)."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.showArchiveEmptyWeightPrompt === 'function'")
+    _stub_filament_and_writes(page, {})
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 7); }")
+    page.wait_for_selector("#fcc-archive-empty-wt", state="visible", timeout=3_000)
+    page.locator("#fcc-archive-empty-wt").fill(typed)
+    page.locator("#fcc-archive-save").click()
+    err = page.locator("#fcc-archive-empty-err")
+    expect(err).to_have_text(f'"{typed}" is not a weight in grams: type grams only, like 167 or 167.5')
+    assert page.evaluate("() => window.__updateFilamentPayload") is None
+    page.locator("#fcc-archive-later").click()
+
+
 def test_archive_empty_weight_prompt_enter_key_submits(page: Page):
     """L46: Enter from the input submits the prompt (no mouse needed)."""
     page.goto("http://localhost:8000")
@@ -390,7 +411,12 @@ def test_archive_empty_weight_prompt_keeps_a_place_id_whole_on_a_phone(page: Pag
                 lines = page.evaluate(_ID_LINES, place)
                 if lines != 1:
                     split.append((size, place, sid, lines))
-                page.locator("#fcc-archive-later").click()
+                # PIN UPDATED DELIBERATELY (Group 63 review, round 3): closed with Escape
+                # (Later's own key). A person's answer now shields the next press at its
+                # spot for 700 ms (window.fccShieldNextPress: a double click's second
+                # press reaches nothing behind it), and the next prompt's Later sits
+                # exactly there, so a click on it this soon is that second press.
+                page.keyboard.press("Escape")
                 page.wait_for_selector("#fcc-archive-empty-overlay", state="detached", timeout=3_000)
     assert split == [], split
 

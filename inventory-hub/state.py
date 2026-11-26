@@ -1,11 +1,19 @@
 import logging
 import sys
+import threading
 import time
 from logging.handlers import RotatingFileHandler
 
 # --- GLOBAL STATE ---
 UNDO_STACK = []
 RECENT_LOGS = []
+# Each Activity Log entry's `ts` (Group 62.7d): epoch milliseconds, strictly
+# increasing across entries, so the 📡 pill can count the lines newer than the
+# last one seen. Its 'HH:MM:SS' text compared as text, so after midnight a line
+# earlier than the last-seen time never raised the pill. Re-entrant: add_log_entry
+# holds it across a line's stamp and its insert (the review of Group 62).
+_LAST_LOG_TS = 0
+_LOG_TS_LOCK = threading.RLock()
 ACKNOWLEDGED_FILABRIDGE_ERRORS = set()
 
 # --- PERSISTENT STATE ---
@@ -96,9 +104,23 @@ logger.addHandler(c_handler)
 # File Output. delay=True (Group 45.9): the file is opened at the first log line,
 # not at import, so importing this module (every host test run, every script)
 # creates no hub.log in whatever the working directory is.
-f_handler = RotatingFileHandler('hub.log', maxBytes=1000000, backupCount=5, delay=True)
+# 20 files of 5 MB, 100 MB (Group 65.4; Derek, 2026-11-03: "I didn't realize how
+# handy those logs are, and I'm beginning to wonder if we shouldn't keep them
+# longer"). It kept 6 of 1 MB, and from 2026-02-16 to 02-19 one repeated line
+# filled four of them and pushed out everything logged before. At today's rate
+# (~66 KB a month) 100 MB never fills; a burst like February's takes ~38 days.
+f_handler = RotatingFileHandler('hub.log', maxBytes=5_000_000, backupCount=19, delay=True)
 f_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(f_handler)
+
+def _next_log_ts():
+    """Now in epoch milliseconds, one past the last entry's when two come in the
+    same millisecond (or the clock steps back): strictly increasing."""
+    global _LAST_LOG_TS
+    with _LOG_TS_LOCK:
+        _LAST_LOG_TS = max(int(time.time() * 1000), _LAST_LOG_TS + 1)
+        return _LAST_LOG_TS
+
 
 def add_log_entry(msg, category="INFO", color_hex=None, meta=None):
     """Adds a log entry to the in-memory list and the system log."""
@@ -143,9 +165,15 @@ def add_log_entry(msg, category="INFO", color_hex=None, meta=None):
     entry = {"time": timestamp, "msg": ui_msg, "type": category}
     if meta:
         entry["meta"] = meta
-        
-    RECENT_LOGS.insert(0, entry)
-    if len(RECENT_LOGS) > 50: RECENT_LOGS.pop()
+
+    # The stamp and the line's place in the list are taken together (the review of
+    # Group 62): stamped under the lock and put in the list after it, a line held between
+    # the two, while another thread stamped and put its own in, landed on top with the
+    # older stamp, and the page's pill then counted a line already read as new.
+    with _LOG_TS_LOCK:
+        entry["ts"] = _next_log_ts()
+        RECENT_LOGS.insert(0, entry)
+        if len(RECENT_LOGS) > 50: RECENT_LOGS.pop()
     
     # Standard Python Logging
     if category == "ERROR":

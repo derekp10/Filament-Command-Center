@@ -1,0 +1,157 @@
+"""Group 62.4 (from Group 73's task file, 2026-11-17): an Escape reaches only the window
+on top.
+
+The location manager's Escape handler listens on the document in the capture phase, so
+it hears an Escape before any window does. With a place's window (the Location Manager)
+open anywhere underneath, it closed or stepped back that window, while the window on
+top (a spool's window, a filament's, Edit Filament, the QR view) stayed open; with no
+place's window, it hid the top window itself, past that window's own Escape code (Edit
+Filament's "Close without saving?" among it). Checked in a browser on 2026-11-17 before
+the fix: a spool window over LR-MDB-1's window, the focus on the page or inside the spool
+window, and Escape closed LR-MDB-1's window.
+
+Now the place's window takes an Escape only when it is on top; any other window on top
+answers its own (with the focus on the page, the Escape is handed to it).
+
+On the real dashboard, read-only: every write is answered in the browser
+(test_text_size_guard._read_only), the heartbeat quieted, and the place and the spool
+picked from what dev holds at the time (never a fixed id). RED on 697bc4f for the first
+two; the third pins what was right.
+"""
+from __future__ import annotations
+
+import pytest
+from playwright.sync_api import Page
+
+PICK = """async () => {
+    const rows = (state.allLocations || []).filter((l) => l && l.LocationID && l.Type === 'Dryer Box');
+    for (const r of rows) {
+        const items = await fetch('/api/get_contents?id=' + encodeURIComponent(r.LocationID)).then((x) => x.json());
+        const s = (Array.isArray(items) ? items : []).find((i) => i && i.id);
+        if (s) return { box: r.LocationID, sid: s.id };
+    }
+    return null;
+}"""
+
+
+def _shown(page: Page):
+    return page.evaluate("() => Array.from(document.querySelectorAll('.modal.show')).map((m) => m.id).sort()")
+
+
+def _ready(page: Page, base_url: str):
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openManage === 'function' && typeof openSpoolDetails === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    pick = page.evaluate(PICK)
+    if not pick:
+        pytest.skip("dev holds no Dryer Box with a spool in it to open")
+    return pick
+
+
+def _place_window(page: Page, box: str):
+    page.evaluate("(id) => window.openManage(id)", box)
+    page.wait_for_function("() => document.getElementById('manageModal').classList.contains('show')", timeout=15_000)
+    page.wait_for_timeout(600)
+
+
+def _spool_window(page: Page, sid):
+    page.evaluate("(id) => openSpoolDetails(id)", sid)
+    page.wait_for_function("() => document.getElementById('spoolModal').classList.contains('show')", timeout=15_000)
+    page.wait_for_timeout(600)
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("focus", ["page", "spool-window"])
+def test_escape_with_a_spool_window_over_a_place_window_closes_only_the_spool_window(page: Page, base_url: str, focus):
+    pick = _ready(page, base_url)
+    _place_window(page, pick["box"])
+    _spool_window(page, pick["sid"])
+    assert _shown(page) == ["manageModal", "spoolModal"]
+    if focus == "page":
+        page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    else:
+        page.evaluate("() => { const m = document.getElementById('spoolModal'); m.focus(); }")
+        assert page.evaluate("() => document.getElementById('spoolModal').contains(document.activeElement)")
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.getElementById('spoolModal').classList.contains('show')", timeout=5_000)
+    page.wait_for_timeout(400)
+    assert _shown(page) == ["manageModal"], "the place's window under the spool window answered the Escape"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_escape_with_only_a_place_window_still_closes_it(page: Page, base_url: str):
+    """A pin: the place's window on top still takes its Escape (closeManage)."""
+    pick = _ready(page, base_url)
+    _place_window(page, pick["box"])
+    page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.getElementById('manageModal').classList.contains('show')", timeout=5_000)
+
+
+SEARCH_UP = "() => document.getElementById('offcanvasSearch').classList.contains('show')"
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("focus", ["search-button", "page"])
+def test_escape_with_the_search_over_a_place_window_closes_only_the_search(page: Page, base_url: str, focus):
+    """The review of Group 62 (older than the group): the global search is a Bootstrap
+    offcanvas, not a modal, and the handler picked the window on top among the modals
+    only. With the search open over a place's window and the keyboard on one of its
+    buttons, Escape closed the place's window and left the search open, its own Escape
+    never heard. The search counts as a window now. RED before the review's fix."""
+    pick = _ready(page, base_url)
+    _place_window(page, pick["box"])
+    page.evaluate("() => bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('offcanvasSearch')).show()")
+    page.wait_for_function(SEARCH_UP, timeout=5_000)
+    page.wait_for_timeout(600)
+    if focus == "search-button":
+        page.evaluate("() => document.getElementById('global-search-refresh').focus()")
+        assert page.evaluate("() => document.activeElement && document.activeElement.id") == "global-search-refresh"
+    else:
+        page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.getElementById('offcanvasSearch').classList.contains('show')", timeout=5_000)
+    page.wait_for_timeout(400)
+    assert _shown(page) == ["manageModal"], "Escape closed the place's window under the search"
+
+
+# Bootstrap 5.3's offcanvas slides 0.3 s each way: `showing` until it is in, `show hiding`
+# until it is out. The Escape is dispatched in the same tick as show() / hide(), on the page
+# (the focus nowhere), so it lands inside the slide whatever the machine's load.
+ESCAPE_ON_PAGE = "document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_escape_while_the_search_slides_in_closes_nothing_under_it(page: Page, base_url: str):
+    """The second review of Group 62: the search counted as a window only once Bootstrap
+    gave it `show`, at the end of its slide-in, so an Escape in the slide closed the place's
+    window under it. The search is on top from its first frame now, and the Escape waits
+    (its hide() in the slide would leave it half shown). RED before the fix."""
+    pick = _ready(page, base_url)
+    _place_window(page, pick["box"])
+    page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    page.evaluate("() => { bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('offcanvasSearch')).show(); "
+                  + ESCAPE_ON_PAGE + " }")
+    page.wait_for_function(SEARCH_UP, timeout=5_000)
+    page.wait_for_timeout(400)
+    assert _shown(page) == ["manageModal"], "an Escape in the search's slide-in closed the place's window"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_escape_while_the_search_slides_out_reaches_the_place_window(page: Page, base_url: str):
+    """The search closing (`show hiding`) is no window on top any more: an Escape in its
+    slide-out is the place's window's, as before the first round. RED before the fix: it
+    was handed to the closing search, whose hide() did nothing."""
+    pick = _ready(page, base_url)
+    _place_window(page, pick["box"])
+    page.evaluate("() => bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('offcanvasSearch')).show()")
+    page.wait_for_function(SEARCH_UP, timeout=5_000)
+    page.wait_for_timeout(600)
+    page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    page.evaluate("() => { bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('offcanvasSearch')).hide(); "
+                  + ESCAPE_ON_PAGE + " }")
+    page.wait_for_function("() => !document.getElementById('manageModal').classList.contains('show')", timeout=5_000)

@@ -25,6 +25,7 @@ Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
 from flask import request, jsonify  # type: ignore
 import html
+import re
 import time
 
 import state  # type: ignore
@@ -55,44 +56,47 @@ def api_prusament_apply_weights():
         if not sid:
             return jsonify({"status": "error", "msg": "Missing spool_id"})
 
-        live = spoolman_api.get_spool(sid)
-        if not live:
-            return jsonify({"status": "error", "msg": f"Spool #{sid} not found"})
-        if live.get('archived'):
-            return jsonify({
-                "status": "blocked",
-                "msg": "Spool is archived — not changing its weights "
-                       "(that would return it to active inventory).",
-            })
-
-        live_used = _pm_num(live.get('used_weight')) or 0.0
-        updates = {}
-        new_initial = _pm_num(req.get('initial_weight'))
-        new_tare = _pm_num(req.get('spool_weight'))
-        if new_initial is not None and new_initial > 0:
-            # Hard floor against the live used — never let a correction zero out
-            # and auto-archive a still-loaded spool.
-            if new_initial <= live_used + _PM_WEIGHT_TOL:
+        # Group 64.2 (1): the spool's write lock from the live read to the write, as a
+        # print's charge holds it (its `initial_weight` is the charge's clamp).
+        with spoolman_api.spool_lock(sid):
+            live = spoolman_api.get_spool(sid)
+            if not live:
+                return jsonify({"status": "error", "msg": f"Spool #{sid} not found"})
+            if live.get('archived'):
                 return jsonify({
                     "status": "blocked",
-                    "msg": f"Total {new_initial:g}g would leave ~0g against the "
-                           f"{live_used:g}g already used — not applied "
-                           f"(it would archive/unassign the spool).",
+                    "msg": "Spool is archived — not changing its weights "
+                           "(that would return it to active inventory).",
                 })
-            updates['initial_weight'] = new_initial
-        if new_tare is not None and new_tare > 0:
-            updates['spool_weight'] = new_tare
-        if not updates:
-            return jsonify({"status": "noop", "msg": "Nothing to update"})
 
-        try:
-            spoolman_api.update_spool_or_raise(sid, updates)
-        except spoolman_api.SpoolmanRejection as e:
-            state.add_log_entry(
-                f"❌ Prusament weight apply failed for spool #{sid}: {e}",
-                "ERROR", "ff4444",
-            )
-            return jsonify({"status": "error", "msg": str(e)})
+            live_used = _pm_num(live.get('used_weight')) or 0.0
+            updates = {}
+            new_initial = _pm_num(req.get('initial_weight'))
+            new_tare = _pm_num(req.get('spool_weight'))
+            if new_initial is not None and new_initial > 0:
+                # Hard floor against the live used — never let a correction zero out
+                # and auto-archive a still-loaded spool.
+                if new_initial <= live_used + _PM_WEIGHT_TOL:
+                    return jsonify({
+                        "status": "blocked",
+                        "msg": f"Total {new_initial:g}g would leave ~0g against the "
+                               f"{live_used:g}g already used — not applied "
+                               f"(it would archive/unassign the spool).",
+                    })
+                updates['initial_weight'] = new_initial
+            if new_tare is not None and new_tare > 0:
+                updates['spool_weight'] = new_tare
+            if not updates:
+                return jsonify({"status": "noop", "msg": "Nothing to update"})
+
+            try:
+                spoolman_api.update_spool_or_raise(sid, updates)
+            except spoolman_api.SpoolmanRejection as e:
+                state.add_log_entry(
+                    f"❌ Prusament weight apply failed for spool #{sid}: {e}",
+                    "ERROR", "ff4444",
+                )
+                return jsonify({"status": "error", "msg": str(e)})
 
         summary = ", ".join(f"{k}={v:g}" for k, v in updates.items())
         state.add_log_entry(
@@ -846,6 +850,68 @@ def _compute_prusament_spool_weight_diff(matched, fil, obj):
     }
 
 
+def _prusament_needles(spool_id, spool_hash):
+    """What finds a Prusament spool's own link in a stored product_url (Group 66.3:
+    shared by the dashboard scan and Edit Spool's link check).
+
+    The unique spool hash appears either in the PATH form (/spool/<id>/<hash>) the
+    physical QR encodes, or in the QUERY form (?spoolId=<hash>) some imports store.
+    Match EITHER: the hash is unique per physical spool, so this resolves the exact
+    spool whatever the stored URL shape, and never matches a sibling (a sibling
+    carries a different hash). Lower-cased: _pm_norm doesn't fold case and stored
+    hashes are lowercase hex. A hash-less link (rare, degenerate) can only be matched
+    at product-id granularity (the legacy behaviour; it may name the wrong duplicate)."""
+    if spool_hash:
+        h = str(spool_hash).lower()
+        return (f"/spool/{spool_id}/{h}", f"spoolid={h}")
+    return (f"/spool/{spool_id}/".lower(),)
+
+
+def _spools_linked_to(spools, needles):
+    """The spools, in list order, whose stored product_url holds one of `needles`."""
+    out = []
+    for s in spools or []:
+        if not isinstance(s, dict):
+            continue
+        extra = s.get('extra') if isinstance(s.get('extra'), dict) else {}
+        pu = _pm_norm(extra.get('product_url'))
+        if pu and any(n in pu.lower() for n in needles):
+            out.append(s)
+    return out
+
+
+_PRUSAMENT_SPOOL_URL = re.compile(r'prusament\.com/spool/(\d+)(?:/([0-9a-z]+))?', re.IGNORECASE)
+
+
+@app.route('/api/prusament/linked_spools', methods=['GET'])
+def api_prusament_linked_spools():
+    """Group 66.3 (Derek's (B)): which spools a Prusament spool's QR is already linked
+    to, for Edit Spool's link box, read-only. ?url=<the QR's link>.
+
+    Answers {success, spool_id, spool_hash, spools: [{id, display, archived}]}, by the
+    dashboard scan's own rule (_prusament_needles), archived spools included. A link
+    that isn't a Prusament spool's answers 400; a spool list FCC couldn't read answers
+    502 with words, never an empty list (CLAUDE.md: a read says "couldn't read", never
+    "none")."""
+    url = str(request.args.get('url') or '').strip()
+    m = _PRUSAMENT_SPOOL_URL.search(url)
+    if not m:
+        return jsonify({"success": False, "msg": "That isn't a Prusament spool's link."}), 400
+    spool_id, spool_hash = m.group(1), m.group(2)
+    spools, why = spoolman_api.read_spool_list(allow_archived=True)
+    if spools is None:
+        return jsonify({"success": False, "msg": "FCC couldn't read the spool list from Spoolman, so it couldn't "
+                        "check which spool has this QR. Try again in a moment.", "error": why}), 502
+    out = []
+    for s in _spools_linked_to(spools, _prusament_needles(spool_id, spool_hash)):
+        try:
+            text = spoolman_api.format_spool_display(s).get('text') or f"#{s.get('id')}"
+        except Exception:
+            text = f"#{s.get('id')}"
+        out.append({"id": s.get('id'), "display": text, "archived": bool(s.get('archived'))})
+    return jsonify({"success": True, "spool_id": spool_id, "spool_hash": spool_hash, "spools": out})
+
+
 def _handle_prusament_url_scan(res):
     """Prusament spool-QR scan (feature/scan-match-pipeline).
 
@@ -881,26 +947,11 @@ def _handle_prusament_url_scan(res):
     # unowned exact spool is a brand-new spool. Only a hash-less scan (rare /
     # degenerate) falls back to product-id granularity. Compared lower-cased
     # because _pm_norm doesn't fold case and stored hashes are lowercase hex.
-    if spool_hash:
-        # The unique spool hash appears either in the PATH form
-        # (/spool/<id>/<hash>) the physical QR encodes, or in the QUERY form
-        # (?spoolId=<hash>) some imports store. Match EITHER — the hash is
-        # unique per physical spool, so this resolves the exact spool whatever
-        # the stored URL shape, and never matches a sibling (a sibling carries
-        # a different hash). Lower-cased: _pm_norm doesn't fold case and stored
-        # hashes are lowercase hex.
-        h = spool_hash.lower()
-        needles = (f"/spool/{spool_id}/{h}", f"spoolid={h}")
-    else:
-        # Hash-less scan (rare / degenerate) — best we can do is product-id
-        # granularity (the legacy behavior; may resolve the wrong duplicate).
-        needles = (f"/spool/{spool_id}/".lower(),)
-    matched = None
-    for s in spoolman_api.get_all_spools(allow_archived=True):
-        pu = _pm_norm((s.get('extra') or {}).get('product_url'))
-        if pu and any(n in pu.lower() for n in needles):
-            matched = s
-            break
+    # Group 66.3: the needle rule and the match are shared with Edit Spool's link
+    # check (/api/prusament/linked_spools), so both read one rule.
+    linked = _spools_linked_to(spoolman_api.get_all_spools(allow_archived=True),
+                               _prusament_needles(spool_id, spool_hash))
+    matched = linked[0] if linked else None
 
     if not matched:
         state.add_log_entry(

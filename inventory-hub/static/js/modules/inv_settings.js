@@ -327,6 +327,9 @@
         if (!host) return;
         let html = `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">
             Toolheads keyed by LocationID. Add new ones (e.g. an MMU / indxx upgrade) or edit a name / position.
+            For an MMU, give each slot its own Position, the slicer's tool number (slot 1 = Position 0 for T0,
+            slot 2 = Position 1 for T1, and so on): FCC then charges a multi-color print slot by slot. Slots that
+            share one Position can't be told apart, so FCC asks which spool printed.
             A printer's toolheads share its ID prefix (PRINTER-1 … PRINTER-8 belong to printer PRINTER); each toolhead gets its
             Location Manager row automatically, and renaming the printer on one row renames it on all of them.
             Existing LocationIDs can't be renamed; removing one a dryer-box slot or spool still uses is blocked.

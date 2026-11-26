@@ -227,7 +227,7 @@ def test_the_collapsed_summary_says_where_the_price_comes_from(wiz):
     assert _summary(wiz) == "$25 ↩ from filament"
     wiz.locator(PRICE).fill("22")
     assert _summary(wiz) == "$22"
-    _open_edit(wiz, price=30.0)
+    _open_edit(wiz, over_changes=True, price=30.0)
     assert _summary(wiz) == "$30"
 
 
@@ -329,7 +329,8 @@ def test_a_tare_entered_in_the_weigh_window_is_the_spools_own(wiz):
 # filament box blanked an inherited spool box, its badge still up. Now, in Edit Spool
 # only, the copy goes only into a spool box that shows what the spool inherits, or
 # nothing: it shows what the spool inherits now (the filament's new value, else its
-# brand's), with its badge. Create and Clone copy as before.
+# brand's), with its badge. Group 66.5 gave every mode that rule (Create and Clone made a
+# plain copy).
 
 def _blur(page):
     """The focus leaves the box (its `change`)."""
@@ -414,14 +415,16 @@ def test_a_spool_box_the_person_emptied_stays_empty_when_the_filaments_changes(w
     assert body["filament_data"]["spool_weight"] == 205, body["filament_data"]
 
 
-def test_a_new_filaments_empty_weight_still_copies_into_the_spools_plainly(wiz):
-    """Create is unchanged by S1: in New Manual Form the spool's box shows what is
-    typed for the filament, plain, and the new spool takes it as its own. A pin: green
-    on the base, red on a fix that applies S1's rule in every mode."""
+def test_a_new_filaments_empty_weight_shows_in_the_spools_box_as_the_filaments(wiz):
+    """Group 66.5 changed this pin on purpose (it said the copy stays plain outside Edit
+    Spool, and was to go red on S1's rule in every mode): in New Manual Form the spool's
+    box shows what is typed for the filament, marked "↩ from filament", and the new spool
+    still takes it as its own (L34)."""
     _open_new_filament(wiz)
     wiz.locator("#wiz-fil-empty_weight").fill("210")
     _blur(wiz)
-    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("210", False)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("210", True)
+    assert wiz.locator("#wiz-spool-empty-inherited-source").inner_text() == "filament"
     assert _save(wiz, CREATE)["spool_data"]["spool_weight"] == 210
 
 
@@ -719,7 +722,7 @@ def test_the_weight_summary_follows_a_picked_filament(wiz):
     _open_new_spool(wiz)
     _pick(wiz, 10)
     assert _shown_summary(wiz, WEIGHT_SUMMARY) == "tare 170g ↩ from vendor"
-    _open_edit(wiz, spool_wt=None, vendor_wt=180.0)
+    _open_edit(wiz, over_changes=True, spool_wt=None, vendor_wt=180.0)
     wiz.locator("#wiz-fil-empty_weight").fill("")
     _blur(wiz)
     assert _shown_summary(wiz, WEIGHT_SUMMARY).endswith("· tare 180g ↩ from vendor"), _shown_summary(wiz, WEIGHT_SUMMARY)

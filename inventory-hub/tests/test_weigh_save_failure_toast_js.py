@@ -161,7 +161,14 @@ def test_a_refused_row_save_shows_the_servers_words_on_the_page(weigh):
     press(page, "425", 150)
     page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/spool/update')", timeout=5000)
     page.wait_for_function("() => document.querySelector('#toast-container .toast-msg.toast-error')", timeout=5000)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
+    # Group 63.6: the row's save also says what its reading was worked out from
+    # (updated deliberately).
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True,
+                               # (`screen`: the Group 63 review, C3, updated deliberately.)
+                               "based_on": {"mode": "net", "capacity": 750, "used": 100, "screen": "list"},
+                               # Group 65.3: what the save was (updated deliberately).
+                               "weigh": {"source": "weigh_out", "mode": "net", "reading": 425, "tare": None,
+                                         "tare_skipped": False}}]
     assert _toasts(page) == [MSG], _toasts(page)
     page.wait_for_timeout(2700)
     assert _toasts(page) == [MSG], "the error toast must still be up after 2.7 s"

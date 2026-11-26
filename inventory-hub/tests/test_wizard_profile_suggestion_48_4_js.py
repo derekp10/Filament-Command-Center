@@ -22,7 +22,9 @@ from test_core1_return_ejectall_js import pytestmark  # noqa: F401  (pytestmark:
 # wizard's own 'change' listener as a browser would.
 from test_spoolman_read_load_52_js import run as run_js
 
-MODULES = ["inv_core.js", "inv_wizard.js"]
+# weight_utils.js as the page loads it, before the wizard (Group 66.5: Import Database
+# redraws the spool's empty-weight box from the filament's, through its cascade).
+MODULES = ["inv_core.js", "weight_utils.js", "inv_wizard.js"]
 CHOICES = ["Prusament PLA", "Prusament PLA Blend", "Sunlu PLA + 2.0", "Generic PLA"]
 
 

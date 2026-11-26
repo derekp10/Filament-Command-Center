@@ -126,7 +126,7 @@ def test_swap_on_one_head_still_charges_the_other_heads():
     cums = {0.5: {1: 10.0}}
     seen = {}
 
-    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
+    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None, **_kw):
         seen["usage"] = dict(usage_map)
         rows = [{"sid": 300 + p, "grams": g, "position": p} for p, g in sorted(usage_map.items())]
         if charged_out is not None:   # as the real resolver does (43.4)
@@ -161,7 +161,7 @@ def test_swap_split_total_covers_every_printing_head():
     swap_log = [{"position": 1, "progress": 0.5, "from_sid": 201, "to_sid": 202}]
     cums = {0.5: {1: 10.0}}
 
-    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
+    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None, **_kw):
         rows = [{"sid": 300 + p, "grams": g, "position": p} for p, g in sorted(usage_map.items())]
         if charged_out is not None:   # as the real resolver does (43.4)
             charged_out.update(r["position"] for r in rows)
@@ -195,7 +195,7 @@ def test_swap_on_a_head_that_printed_nothing_is_ignored():
     ]
     cums = {0.5: {3: 20.0}}
 
-    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
+    def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None, **_kw):
         return []
 
     with patch.object(locations_db, "get_active_printer_map", return_value=_map(8)), \

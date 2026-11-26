@@ -271,6 +271,10 @@ const _AUDIT_REFUSES = new Map([
     ['CMD:DROP', 'Drop mode waits until the audit is finished or cancelled.'],
     ['CMD:EJECT', 'Eject mode waits until the audit is finished or cancelled.'],
     ['CMD:EJECTALL', 'Eject All waits until the audit is finished or cancelled.'],
+    // CMD:TRASH:<id> (matched by its start below), and a spool card's own 🗑️ (62.7b).
+    ['CMD:TRASH', 'Eject waits until the audit is finished or cancelled.'],
+    // CMD:DEPOSIT:<place> (matched by its start below), DEPOSIT HERE's own QR (62.6).
+    ['CMD:DEPOSIT', 'DEPOSIT HERE waits until the audit is finished or cancelled: the buffer is kept during an audit.'],
     ['CMD:CLEAR', 'The buffer is kept during an audit: finish or cancel it first.'],
     ['CMD:UNDO', 'Undo Last Move is off while an audit is running. Finish or cancel the audit first.'],
     ['CMD:BULKMOVE', 'A bulk move waits until the audit is finished or cancelled.'],
@@ -278,7 +282,8 @@ const _AUDIT_REFUSES = new Map([
 const _AUDIT_PANEL_COVERS = ['CMD:LOCATIONS', 'CMD:WEIGH', 'CMD:PREV', 'CMD:NEXT'];
 const _auditCommandRefusal = (upper) => {
     if (_AUDIT_REFUSES.has(upper)) return _AUDIT_REFUSES.get(upper);
-    if (upper.startsWith('CMD:TRASH:')) return 'Eject waits until the audit is finished or cancelled.';
+    if (upper.startsWith('CMD:TRASH:')) return _AUDIT_REFUSES.get('CMD:TRASH');
+    if (upper.startsWith('CMD:DEPOSIT:')) return _AUDIT_REFUSES.get('CMD:DEPOSIT');
     const covered = _AUDIT_PANEL_COVERS.includes(upper) || upper.startsWith('CMD:PRINT:');
     if (covered && window.isAuditPanelOpen && window.isAuditPanelOpen()) {
         return 'The audit panel is on top: press Hide, then scan that again.';
@@ -292,6 +297,17 @@ const _auditCommandRefusal = (upper) => {
 window.auditPressRefused = (cmd) => {
     if (!state.auditActive) return false;
     _auditSay(_AUDIT_REFUSES.get(cmd), 'warning');
+    return true;
+};
+
+// A press, or a scan, whose question would open behind the bulk move's panel waits
+// until the move is finished or cancelled, as CMD:TRASH: does (Group 39.9; 62.7b: Eject
+// All's "Nuke all?" and a card's 🗑️ asked behind the panel, z 20000, and their gating
+// dialog then swallowed every scan meant for the session). True when it waited.
+window.bulkMovePressWaits = (what) => {
+    if (!state.bulkMoveActive) return false;
+    showToast(`${what} waits until the bulk move is finished or cancelled`, 'info', 4000);
+    if (window.logClientEvent) window.logClientEvent(`ℹ️ ${what} ignored: a bulk move is armed — finish or cancel it first`, 'INFO');
     return true;
 };
 
@@ -778,6 +794,10 @@ window.commitBulkMove = () => {
         if (document.querySelector('[data-overlay-mount="1"]')
             && !(typeof window.isBulkMovePanelOpen === 'function' && window.isBulkMovePanelOpen())) return;
         if (document.querySelector('.modal.show, .offcanvas.show')) return;
+        // Nor under the ⌨️ list, which lists Shift+B (Group 62.5): read there, it armed
+        // a session and opened its panel under the list, out of sight. The 'B' stays
+        // in the scan buffer, and the list's close takes it out (shortcuts_registry.js).
+        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
         if (_scanInFlight()) return;
         e.preventDefault();
 
@@ -2922,6 +2942,11 @@ window.promptPrusamentMatched = (res) => {
     const name = res.filament_name || 'filament';
     const filled = res.filled || [];
     const conflicts = res.conflicts || [];
+    // Group 66.2 (the grounding's C5) and its review round 1 (R3-03): while this very spool
+    // is open in Edit Spool, its next Save would write the wizard's old values back over an
+    // update made here: the temps and the weights both wait.
+    const editingThis = !!(window.wizardEditingSpool && window.wizardEditingSpool() === String(sid));
+    const heldWords = `#${sid} is open in the wizard: close it first, then scan its QR again.`;
     const LABELS = {
         settings_extruder_temp: 'Nozzle (min)', nozzle_temp_max: 'Nozzle (max)',
         settings_bed_temp: 'Bed (min)', bed_temp_max: 'Bed (max)',
@@ -2941,7 +2966,8 @@ window.promptPrusamentMatched = (res) => {
                     <span>${esc(c.label || LABELS[c.field] || c.field)}</span>
                     <span><span style="color:#adb5bd;">${esc(c.current)}°C</span> &rarr; <span class="text-info fw-bold">${esc(c.scanned)}°C</span></span>
                 </div>`).join('')}
-            <button id="pm-update-temps" class="btn btn-sm btn-warning w-100 mt-2">Update to Prusament's spec</button>
+            ${editingThis ? `<div class="text-warning small mt-1">⚠️ ${esc(heldWords)}</div>`
+                : `<button id="pm-update-temps" class="btn btn-sm btn-warning w-100 mt-2">Update to Prusament's spec</button>`}
         </div>` : '';
 
     // L200 — spool weight-field corrections (total / tare), confirm-gated.
@@ -2962,9 +2988,13 @@ window.promptPrusamentMatched = (res) => {
                 <span>Remaining <span class="text-muted">(used ${g(sw.used)} kept)</span></span>
                 <span><span style="color:#adb5bd;">${g(sw.remaining.current)}</span> &rarr; <span class="text-success fw-bold">${g(sw.remaining.new)}</span></span>
             </div>` : '';
+        // Group 66.2 (the grounding's C5): held while this very spool is open in Edit
+        // Spool, whose next Save would write its old weights back over the correction.
+        const heldByWizard = !!(sw.rows && sw.rows.length && editingThis);
         const blockedLine = sw.blocked
-            ? `<div class="text-warning small mt-1">⚠️ ${esc(sw.blocked)}</div>` : '';
-        const applyBtn = (sw.rows && sw.rows.length)
+            ? `<div class="text-warning small mt-1">⚠️ ${esc(sw.blocked)}</div>`
+            : (heldByWizard ? `<div class="text-warning small mt-1">⚠️ ${esc(heldWords)}</div>` : '');
+        const applyBtn = (sw.rows && sw.rows.length && !heldByWizard)
             ? `<button id="pm-update-weights" class="btn btn-sm btn-success w-100 mt-2">📦 Update spool weights</button>` : '';
         weightHtml = `
             <div id="pm-weight-section" class="border border-success rounded p-2 mb-2" style="background:#2a2a2a;">
@@ -2976,6 +3006,7 @@ window.promptPrusamentMatched = (res) => {
             </div>`;
     }
 
+    if (editingThis && (conflicts.length || (sw && sw.rows && sw.rows.length))) showToast(heldWords, 'warning', 7000);
     const content = `
         <div class="p-3" style="max-width:26.25rem; background:#1e1e1e; color:#fff; border:1px solid #444; border-radius:8px;">
             <h6 class="text-info mb-1">🎯 Matched Prusament spool</h6>
@@ -3224,9 +3255,14 @@ const LOC_REPEAT_MS = 1500;
 // text read within LOC_REPEAT_MS of it as a scanner's double read.
 let _lastScanRead = null;
 window._fccLastLocScan = window._fccLastLocScan || null;
+// DEPOSIT HERE's own QR (CMD:DEPOSIT:<place>, Group 62.6) is read twice as a location
+// label is, by the same rule (the review of Group 62): it was the place's LOC: label, and
+// its second read, queued while the first move was answered, put the NEXT spool in the
+// buffer there (on a toolhead, Smart Load then took the first one back off).
+const _readOnceKey = (key) => key.startsWith('LOC:') || key.startsWith('CMD:DEPOSIT:');
 const _isLocRepeat = (key, capturedAt) => {
     const last = window._fccLastLocScan;
-    if (!key.startsWith('LOC:') || !last || last.text !== key) return false;
+    if (!_readOnceKey(key) || !last || last.text !== key) return false;
     const at = capturedAt || Date.now();
     return last.doneAt == null || at < last.doneAt + LOC_REPEAT_MS;
 };
@@ -3264,7 +3300,8 @@ const _quickPickItem = (locData, res) => {
     return direct;
 };
 
-// When a bare CMD:CANCEL last closed an open question (processScan).
+// When a bare CMD:CANCEL last closed an open question, the slot picker or a gating
+// dialog (processScan).
 let _questionCancelledAt = 0;
 
 // --- SCAN ROUTER ---
@@ -3289,11 +3326,13 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             `ℹ️ Scan "${escLog(String(text).trim())}" ignored: the same label was read twice within ${LOC_REPEAT_MS / 1000} s`, 'INFO');
         return;
     }
+    // The scan read just before this one (the cancel double-read rule below).
+    const prevRead = _lastScanRead;
     _lastScanRead = { text: locKey, at: capturedAt || Date.now() };
     // Answered at once unless it reaches the server below (every early return
     // here is an answer); in flight from the request until its answer.
     const locBefore = window._fccLastLocScan;
-    const locScan = locKey.startsWith('LOC:') ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
+    const locScan = _readOnceKey(locKey) ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
     const locInFlight = () => { if (locScan) locScan.doneAt = null; };
     const locDone = () => { if (locScan && locScan.doneAt == null) locScan.doneAt = Date.now(); };
     // A read the open question or the slot picker took by its last label (a key
@@ -3313,12 +3352,19 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // routes to the dialog's callback instead of hitting the backend or the
     // generic CMD-routes below. Returns true on a matched session — fall
     // through to the rest of the dispatch otherwise.
+    // A dialog's own Cancel QR it answered closed a question too: a second read of
+    // it is a closed dialog's QR (Group 63 review, round 2; below). It stamps no
+    // bare cancel: a bare CMD:CANCEL is never its second read, and the stamp held a
+    // person's Cancel Audit off for 1.5 s after a question's own Cancel QR (round 3).
+    const cancelQr = /CMD:CANCEL:[A-Z0-9_-]+$/.test(upper);
     if (window.routeConfirmScan && window.routeConfirmScan(text)) return;
-    // Group 40.3: a load question on screen (the three-way "Load it instead /
-    // Just store it / Cancel") holds off every other scan until it is answered.
-    // Its own QRs were answered just above; CMD:CANCEL cancels it; anything else
-    // is refused and does nothing (a second slot label used to start a second
-    // move behind the dialog). The dialog says why too: toasts sit under it.
+    // Group 40.3: a question on screen holds off every other scan until it is
+    // answered: the three-way "Load it instead / Just store it / Cancel", and since
+    // Group 62.2 the printing yes / no "Continue Anyway / Cancel" and the Quick-Swap
+    // confirm. Its own QRs were answered just above; CMD:CANCEL cancels it (the
+    // question, never an audit behind it); anything else is refused and does
+    // nothing (a second slot label used to start a second move behind the dialog).
+    // The dialog says why too: toasts sit under it.
     let openQuestion = window._fccOpenMoveQuestion;
     while (openQuestion && openQuestion.element && openQuestion.element.isConnected === false) {
         // Its dialog left the page without being answered (Group 40.3 review,
@@ -3330,9 +3376,38 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         window._fccOpenMoveQuestion = openQuestion;
     }
     if (openQuestion) {
+        // Group 63 review, round 2: questions now wait in a line (the refill
+        // question and the post-archive prompt), so the next one opens the moment
+        // one is answered. A session Cancel QR routeConfirmScan didn't answer is a
+        // closed dialog's, never this one's; and a bare CMD:CANCEL read right
+        // after the CMD:CANCEL that closed a question (or the slot picker, round
+        // 3), nothing read between them and within LOC_REPEAT_MS, is that read
+        // again (a scanner's double read):
+        // either cancelled the next question unread. A CMD:CANCEL after another
+        // scan (the slot label that opened this question) is meant, and answers it.
+        if (cancelQr) {
+            const said = 'That cancel QR belongs to a dialog that has closed — ignored';
+            if (openQuestion.flash) openQuestion.flash(said);
+            if (window.logClientEvent) window.logClientEvent(`ℹ️ ${said} ("${escLog(text)}")`, 'INFO');
+            unread();
+            return;
+        }
+        // Said on the question too (review round 3: only a log line said it, and the
+        // question stayed up with no word why). A third read stays compared with the
+        // second, so a scanner's repeats never cancel it either.
+        const readAt = capturedAt || Date.now();
+        if (/CMD:CANCEL$/.test(upper) && prevRead && /CMD:CANCEL$/.test(prevRead.text)
+                && readAt - prevRead.at < LOC_REPEAT_MS && readAt - _questionCancelledAt < LOC_REPEAT_MS) {
+            if (openQuestion.flash) openQuestion.flash(
+                'Ignored a second read of Cancel: it answered the question before this one. Scan it again in a moment to cancel this one.');
+            if (window.logClientEvent) window.logClientEvent(
+                `ℹ️ A second read of CMD:CANCEL was ignored, so "${escLog(openQuestion.title)}" stays open: the first read answered the question before it`, 'INFO');
+            unread();
+            return;
+        }
         // At the end of the text, as routeConfirmScan reads its QRs: a stray
         // key in front refused the question's own Cancel (round 5).
-        if (/CMD:CANCEL(:[A-Z0-9_-]+)?$/.test(upper)) { openQuestion.cancel(); _questionCancelledAt = Date.now(); return; }
+        if (/CMD:CANCEL$/.test(upper)) { openQuestion.cancel(); _questionCancelledAt = Date.now(); return; }
         // A question whose answers are labels (Group 40.5's "Record it as coming
         // from…": a feed slot's label picks it) routes them itself; 'refused'
         // (a held slot, round 9) is no read of the label.
@@ -3349,8 +3424,18 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // Group 40.1: an open slot picker claims every scan next. A choice's label
     // picks it, CMD:CANCEL cancels, anything else is refused with a warning, so
     // a scan never acts behind the picker (slot_picker.js; 'refused' says so).
+    // A bare CMD:CANCEL it took closed a question too (Group 63 review, round 3: a
+    // picker the refill question opened, cancelled, let the next refill question
+    // open, and the scanner's second read of that Cancel cancelled it unread).
     const picker = window.routePickerScan ? window.routePickerScan(text) : false;
-    if (picker) { if (picker === 'refused') unread(); else routed(); return; }
+    if (picker) {
+        if (picker === 'refused') unread();
+        else {
+            if (/CMD:CANCEL$/.test(upper)) _questionCancelledAt = Date.now();
+            routed();
+        }
+        return;
+    }
     // A session-scoped CMD:CONFIRM:<sid> that routeConfirmScan didn't claim
     // belongs to a dialog that has already closed. Never let it fall through to
     // the substring-matching routes below and answer whatever unrelated dialog
@@ -3400,6 +3485,29 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     if (auditRefusal) {
         _auditSay(auditRefusal, 'warning');
         if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: ${escLog(auditRefusal)}`, 'WARNING');
+        unread();
+        return;
+    }
+    // The review of Group 62: the two codes below are read only here, above the gating
+    // dialogs' gate further down, so they acted behind "Clear entire Buffer?" or "Nuke
+    // all?" (DEPOSIT HERE moved the top spool under the question, and CMD:CLOSE closed
+    // the window there), where the LOC: label and CMD:DONE they replaced were dropped.
+    // While one is up they wait, and say so; the dialog's own QRs still answer it.
+    if ((upper === 'CMD:CLOSE' || upper.startsWith('CMD:DEPOSIT:'))
+        && (state.activeModal === 'safety' || state.activeModal === 'confirm')) {
+        const why = 'Answer the question on screen first, then scan that again';
+        showToast(why, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: a question is still open`, 'WARNING');
+        unread();
+        return;
+    }
+    // Group 62.7(a): the location window's own Done / Sync QR. CMD:DONE is the audit's
+    // and the bulk move's, which took it while either ran (the window can be open under
+    // a hidden panel); this code, read only here, closes the window whatever else runs.
+    if (upper === 'CMD:CLOSE') {
+        const m = document.getElementById('manageModal');
+        if (m && m.classList.contains('show') && typeof window.closeManage === 'function') window.closeManage();
+        else showToast('ℹ️ No location window is open to close', 'info', 3000);
         return;
     }
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
@@ -3433,6 +3541,48 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         return;
     }
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if (parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
+    // Group 62.6: ⬇️ DEPOSIT HERE's own QR does what clicking the card does: the spool
+    // READY TO SLOT shows, into the place whose Location Manager window is open, through
+    // its slot or Printer picker where the click opens one. It was the place's LOC:
+    // label, which files the whole buffer (that printed label still does). Read only
+    // here: anywhere else, during a bulk move or (above) an audit, it moves nothing.
+    // Read twice, it acts once (_isLocRepeat); a read refused here is no read, so the
+    // QR scanned again once its window is open acts. It is in flight until it is answered,
+    // as a LOC: label's read is until the server's answer (the second review of Group 62: a
+    // second read held by the scan queue while the first move was out, on a head whose
+    // printer was slow to answer, went out once it landed, past the 1.5 s, and put the NEXT
+    // spool there): its move's answer, or the question or picker it opened. A deposit
+    // refused there (nothing in the buffer, a picker that didn't open) is no read either.
+    if (upper.startsWith('CMD:DEPOSIT:')) {
+        const place = upper.slice('CMD:DEPOSIT:'.length).trim();
+        if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) { unread(); return; }
+        const m = document.getElementById('manageModal');
+        const locEl = document.getElementById('manage-loc-id');
+        const open = (m && m.classList.contains('show') && locEl) ? String(locEl.value || '').trim() : '';
+        if (!place || !open || open.toUpperCase() !== place) {
+            showToast(`⬇️ DEPOSIT HERE ignored: open ${place || 'its place'}'s window first, then scan it again`, 'warning', 7000);
+            if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: DEPOSIT HERE `
+                + `${open ? `for another place (${escLog(open)}'s window is open)` : 'with no location window open'}`, 'WARNING');
+            unread();
+            return;
+        }
+        if (typeof window.depositShownSpool === 'function') {
+            locInFlight();
+            let settledYet = false;
+            const settled = (how) => {
+                if (settledYet) return;
+                settledYet = true;
+                clearTimeout(guard);
+                if (how === 'refused') unread(); else locDone();
+            };
+            // Every path answers well inside this (fetchT's 15 s, the printer check's 3 s);
+            // it only keeps a missed answer from dropping this QR's every later read.
+            const guard = setTimeout(() => settled('answered'), 30000);
+            try { window.depositShownSpool(open, { settled }); }
+            catch (e) { settled('refused'); console.error(e); }
+        }
+        return;
+    }
 
     // A CONFIRM scan may fire a dialog's callback ONLY while that dialog is
     // genuinely on screen (fully shown, not dismissed). activeModal/pendingConfirm
@@ -3852,9 +4002,34 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                 // (The old Step-2 "Import from External" did only the filament
                 // half, so the spool came up empty whenever the filament already
                 // existed — the bug Derek hit.)
-                showToast('🆕 New Prusament spool — opening the Add wizard to onboard it', 'info', 4500);
-                if (typeof window.openWizardModal === 'function') {
-                    Promise.resolve(window.openWizardModal()).then(() => {
+                // Group 66.2 and its review round 1: it used to open (and so reset) the
+                // wizard unasked, even one open with changes: an Edit silently became an Add.
+                // Now, in order:
+                //   - a QR a Spool box (or Edit Spool's link box) holds already is a second
+                //     read: said, nothing more;
+                //   - an Add whose filament the QR will name (New Manual Form, nothing typed
+                //     or picked for the filament) takes it into an empty Spool box;
+                //   - with a Save on its way, one sentence says it wasn't added;
+                //   - Edit Spool asks what the QR is (link it, an Add, or keep editing);
+                //   - otherwise openWizardModal asks first when the wizard holds changes, and
+                //     keeping them adds nothing, said in a toast and the Activity Log.
+                const escWords = window.escHtml || ((x) => x);
+                const url = res.url || '';
+                const startAdd = () => {
+                    if (typeof window.openWizardModal !== 'function') return;
+                    const editing = window.wizardEditingSpool ? window.wizardEditingSpool() : null;
+                    Promise.resolve(window.openWizardModal({ why: 'A new Prusament spool was scanned.' })).then((ok) => {
+                        if (ok === false) {
+                            const words = editing
+                                ? "Kept the wizard as it was, so the scanned Prusament spool wasn't added. Save first, then scan it again."
+                                : "Kept the wizard as it was, so the scanned Prusament spool wasn't added. Scan it into a Spool box, or Save first.";
+                            showToast(words, 'warning', 7000);
+                            if (window.logClientEvent) {
+                                window.logClientEvent(`⚠️ ${escWords(words)} (${escWords(res.url || '')})`, 'WARNING');
+                            }
+                            return;
+                        }
+                        showToast('🆕 New Prusament spool — opening the Add wizard to onboard it', 'info', 4500);
                         const rowEl = document.querySelector('[data-spool-row-idx]');
                         if (rowEl && typeof window.wizardScanSpoolRow === 'function') {
                             const idx = parseInt(rowEl.getAttribute('data-spool-row-idx'), 10) || 0;
@@ -3870,6 +4045,32 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                             if (q) { q.value = res.url || ''; window.wizardSearchExternal(true); }
                         }
                     });
+                };
+                const fed = window.wizardTakePrusamentLink ? window.wizardTakePrusamentLink(url) : false;
+                const editingNow = window.wizardEditingSpool ? window.wizardEditingSpool() : null;
+                if (fed && fed.already != null) {
+                    showToast(editingNow
+                        ? `That QR is in the link box already: Save links Spool #${editingNow} to it.`
+                        : `That spool's QR is in Spool ${fed.already + 1} already.`, 'info', 4000);
+                } else if (fed) {
+                    showToast(`🆕 New Prusament spool: scanning it into Spool ${fed.row + 1}`, 'info', 4000);
+                } else if (window.wizardIsSaving && window.wizardIsSaving()) {
+                    const words = "The wizard is saving, so the scanned Prusament spool wasn't added: scan it again once the Save is done.";
+                    showToast(words, 'warning', 7000);
+                    if (window.logClientEvent) window.logClientEvent(`⚠️ ${escWords(words)} (${escWords(url)})`, 'WARNING');
+                } else if (editingNow && window.wizardAskQrInEdit) {
+                    Promise.resolve(window.wizardAskQrInEdit(url)).then((answer) => {
+                        if (answer === 'add') { startAdd(); return; }
+                        if (answer === 'link') {
+                            showToast(`Checking the scanned QR in Spool #${editingNow}'s link box: Save links it.`, 'info', 4000);
+                            return;
+                        }
+                        const words = `Kept editing Spool #${editingNow}, so the scanned Prusament QR wasn't used.`;
+                        showToast(words, 'warning', 7000);
+                        if (window.logClientEvent) window.logClientEvent(`⚠️ ${escWords(words)} (${escWords(url)})`, 'WARNING');
+                    });
+                } else {
+                    startAdd();
                 }
             } else if (res.type === 'audit_done_question') {
                 // Done found spools to park, and nothing has moved. An audit
@@ -4214,10 +4415,12 @@ const _askRecordSource = (pick, sid, host) => {
         let question = null;
         let statusTimer = null;
         let hostOff = null;
+        let keysOff = null;
         const finish = (value) => {
             if (settled) return;
             settled = true;
             if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
+            if (keysOff) { keysOff(); keysOff = null; }
             if (qr) { try { qr.cleanup(); } catch (_) { /* noop */ } qr = null; }
             if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
             const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
@@ -4265,6 +4468,9 @@ const _askRecordSource = (pick, sid, host) => {
                     <div class="fcc-rs-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
                 </div>`,
             initialFocus: pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none',
+            // own-tab: onKeys below cycles Tab (and ← / →) through its free slots, No box
+            // and Cancel, never its ? button or a held slot.
+            trapTab: false,
         });
         // The host closing settles the question too (Group 40 review, BD-1), as
         // it does confirmActivePrint's: mountOverlay only removes the DOM, which
@@ -4289,16 +4495,30 @@ const _askRecordSource = (pick, sid, host) => {
             statusTimer = setTimeout(() => { line.style.display = 'none'; }, 7000);
         };
         const choose = (f) => finish({ box: String(f.box).toUpperCase(), slot: String(f.slot) });
+        // Its answers take no click until a double click has passed (Group 62.3): it opens
+        // where the Printer picker's question was, right after "Load it instead", and the
+        // second click of a double click on that recorded a home nobody had read. Cancel
+        // takes a click at once; Enter and the QRs answer at once (`acts`, never the click).
+        const armMs = window.questionArmMs ? window.questionArmMs() : 700;
+        const armed = (fn) => (window.armedClick ? window.armedClick(fn, armMs) : fn);
+        const acts = new Map();
         feeds.forEach((f, i) => {
             if (!f.free) return;
             const b = ov.querySelector(`.fcc-rs-opt[data-rs-i="${i}"]`);
-            if (b) b.onclick = () => choose(f);
+            if (b) { acts.set(b, () => choose(f)); b.onclick = armed(() => choose(f)); }
         });
         const noneBtn = ov.querySelector('.fcc-rs-none');
         const cancelBtn = ov.querySelector('.fcc-rs-cancel');
-        noneBtn.onclick = () => finish('');
+        acts.set(noneBtn, () => finish(''));
+        acts.set(cancelBtn, () => finish(null));
+        noneBtn.onclick = armed(() => finish(''));
         cancelBtn.onclick = () => finish(null);
-        ov.addEventListener('keydown', (e) => {
+        // Heard on the document while it is on top and the ⌨️ list is down (Group 62.4):
+        // on its own overlay they went dead after a click on its words, which moves the
+        // focus to the page.
+        const onKeys = (e) => {
+            if (window.isTopOverlay && !window.isTopOverlay(ov)) return;
+            if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
             const order = Array.from(ov.querySelectorAll('.fcc-rs-opt:not([disabled]), .fcc-rs-none, .fcc-rs-cancel'));
             if (e.key === 'Enter') {
                 // A scan's Enter is the scan's (Group 40 review, BD-2): a slower
@@ -4310,18 +4530,30 @@ const _askRecordSource = (pick, sid, host) => {
                 if (order.includes(ae)) {
                     e.preventDefault(); e.stopPropagation();
                     if (window.clearScanBuffer) window.clearScanBuffer();   // a key a person left starts no scan
-                    ae.click();
+                    (acts.get(ae) || (() => ae.click()))();                 // never waits: no second click
+                    return;
                 }
+                // Its other controls (its ?): Enter presses them, as on any button.
+                if (ae && ov.contains(ae)) return;
+                // On no answer (after a click on its words): the keyboard comes back to
+                // the answer it opened on, and the next Enter chooses it. Recording a
+                // home takes a choice the person can see.
+                e.preventDefault(); e.stopPropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                const first = ov.querySelector(pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none');
+                if (first) first.focus();
                 return;
             }
-            if (e.key === 'Tab' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            if ((e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                 const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
                 const idx = order.indexOf(document.activeElement);
-                const next = idx === -1 ? 0 : (idx + (back ? order.length - 1 : 1)) % order.length;
+                const next = idx === -1 ? (back ? order.length - 1 : 0) : (idx + (back ? order.length - 1 : 1)) % order.length;
                 e.preventDefault(); e.stopPropagation();
                 order[next].focus();
             }
-        }, true);
+        };
+        document.addEventListener('keydown', onKeys, true);
+        keysOff = () => document.removeEventListener('keydown', onKeys, true);
         if (window.attachConfirmQRs) {
             const panel = ov.querySelector('.fcc-rs-panel') || handle.panel;
             // With a slot pre-selected, No box gets its own code (Group 40
@@ -4606,10 +4838,9 @@ const printLabel = (sid) => {
                 const colorHex = fil.color_hex || '000000';
                 const rgb = hexToRgb(colorHex);
                 let typeStr = fil.material || "Unknown";
-                try {
-                    let attrs = (typeof extra.filament_attributes === 'string') ? JSON.parse(extra.filament_attributes) : extra.filament_attributes;
-                    if (Array.isArray(attrs) && attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr;
-                } catch (err) { }
+                // Group 66.6: the server's one reading of the tags (window.fccFilamentAttrs).
+                const attrs = window.fccFilamentAttrs(extra.filament_attributes);
+                if (attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr;
                 const qrEl = document.getElementById('print-qr');
                 if (qrEl) {
                     qrEl.innerHTML = "";

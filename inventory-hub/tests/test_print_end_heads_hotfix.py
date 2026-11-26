@@ -321,10 +321,12 @@ def test_a_completion_with_no_start_snapshot_never_charges_a_spool_loaded_after_
     assert print_deduct_ledger.was_deducted(INDX, JOB) and _rec() is None
 
 
-def test_a_completion_split_whose_print_end_read_disagrees_with_the_last_swap_keeps_the_split(logs):
+def test_a_completion_split_whose_print_end_read_disagrees_with_the_last_swap_holds_the_head(logs):
     """Critique hole 1: #42 ran out at 50% and #229 was loaded at the pause (a recorded
-    swap), then #77 turned up on RCOI-5 before FCC saw the end. The split charges #42
-    and #229, which printed it; #77 gets nothing, and the card says what it saw."""
+    swap), then #77 turned up on RCOI-5 before FCC saw the end. Group 64.2 (9): one rule
+    with the cancel: the head is held as a set of every spool it had, nothing
+    pre-filled, since #77 may have printed part of the last segment (the split used to
+    stand, #42 and #229 pre-filled, with a note under #229's row). Red on 6ad359f."""
     split = {4: [{"sid": 42, "grams": 20.0, "segment": 0, "runout": True},
                  {"sid": 229, "grams": 30.0, "segment": 1, "runout": False}]}
     with Indx() as p, _compute({4: 50.0}), \
@@ -337,9 +339,10 @@ def test_a_completion_split_whose_print_end_read_disagrees_with_the_last_swap_ke
         p.at["RCOI-5"] = [77]                   # unrecorded, before the edge
         _tick("FINISHED")
     rec = _rec()
-    assert rec["kind"] == "spool_changed" and rec["auto_split"] is True
-    assert sorted(r["sid"] for r in rec["spools"]) == [42, 229]
-    assert "#77" in rec["row_notes"]["229"], rec.get("row_notes")
+    assert rec["kind"] == "no_spool" and rec["spools"] == [], rec
+    assert [o["sid"] for o in rec["unresolved_sets"]["4"]] == [42, 229, 77], rec
+    assert "#77 was on it when the print ended" in rec["unresolved_notes"]["4"], rec
+    assert "row_notes" not in rec
     assert p.sm.patches == []
 
 
@@ -756,3 +759,164 @@ def test_the_card_carries_the_words_for_where_the_heads_were_read():
     assert words["start"] == "when the print started" and words["during"] == "during the print"
     assert print_deduct._heads_words("restart") == {"end": words["restart"], "start": words["start"],
                                                     "during": words["during"]}
+
+
+# --------------------------------------------------------------------------- #
+# Group 64.3 (4): the heads read when the printer first parks at ATTENTION       #
+# --------------------------------------------------------------------------- #
+# A runout parks the printer at ATTENTION, and a spool is often changed at its
+# prompt before the print is cancelled there (ATTENTION -> STOPPED), or the printer
+# is reset out of it (-> IDLE). Read at the end, the heads named the spool loaded at
+# the prompt; the read at the first park names the one that printed.
+
+def _end_sids(rec):
+    return {h["position"]: h["sid"] for h in rec["heads_at_end"] if not h.get("when")}
+
+
+def test_a_cancel_from_the_printers_prompt_names_the_spool_read_when_it_parked(logs, hublog):
+    """RCOI-5 runs out at 42%: the printer parks, #229 is loaded at the prompt, and the
+    print is cancelled from it. The review charges #42, read when the printer
+    paused, and says so; no read is taken for the end."""
+    # On 1d1ddc2: AssertionError: RCOI-5 held as a set of #42 and #229 (the end read saw #229,
+    # loaded at the prompt).
+    with Indx() as p, _compute(USAGE):
+        _tick("PRINTING", _job(0.30))
+        _tick("ATTENTION", _job(0.42))
+        p.load_229()
+        _tick("ATTENTION", _job(0.42))         # the printer re-polled at the prompt
+        _tick("STOPPED")
+    rec = _rec()
+    assert rec["heads_source"] == "park", rec
+    assert rec["heads_words"]["end"] == "when the printer paused", rec["heads_words"]
+    assert _end_sids(rec)[4] == 42
+    assert _rows(rec) == [(42, "RCOI-5", 84.28), (243, "RCOI-7", 75.32), (231, "RCOI-8", 21.9)]
+    assert not rec.get("unresolved_sets"), rec
+    assert sum(1 for m in hublog if "heads at the park of job 1141 (park" in m) == 1, hublog
+    assert not [m for m in hublog if "heads at the end of job 1141" in m], hublog
+    # The note under #42's row says where its spool was read.
+    assert rec["row_notes"] == {"42": "#229 is on RCOI-5 now; #42 was on it when the printer paused."}, rec
+
+
+def test_a_reset_out_of_the_prompt_takes_the_parks_read_too(logs):
+    """ATTENTION -> IDLE (the printer reset out of the prompt): the ambiguous review
+    names the park's spools."""
+    with Indx() as p, _compute(USAGE):
+        _tick("PRINTING", _job(0.30))
+        _tick("ATTENTION", _job(0.42))
+        p.load_229()
+        _tick("IDLE")
+    rec = _rec()
+    assert rec["ambiguous"] and rec["heads_source"] == "park", rec
+    assert _end_sids(rec)[4] == 42
+
+
+@pytest.mark.parametrize("between", ["BUSY", "PAUSED"])
+def test_a_cancel_after_a_load_at_the_prompt_takes_the_parks_read(logs, between):
+    """After a runout the printer can go BUSY while a filament is loaded at its prompt
+    (or sit PAUSED) before the print is cancelled: nothing printed since the park, so
+    the park's read still names the spool that printed (a PRINTING tick would have
+    spent it)."""
+    with Indx() as p, _compute(USAGE):
+        _tick("PRINTING", _job(0.30))
+        _tick("ATTENTION", _job(0.42))
+        p.load_229()
+        _tick(between, _job(0.42))
+        _tick("STOPPED")
+    rec = _rec()
+    assert rec["heads_source"] == "park", rec
+    assert _end_sids(rec)[4] == 42
+
+
+def test_the_park_read_is_kept_on_the_latch_and_saved_with_it(logs):
+    with Indx() as p:
+        _tick("PRINTING", _job(0.30))
+        _tick("ATTENTION", _job(0.42))
+        park = print_monitor._PRINT_TRACKER[INDX]["park_heads"]
+        assert park["source"] == "park" and park["job_id"] == str(JOB) and park["progress"] == 0.42, park
+        assert {h["position"]: h["sid"] for h in park["heads"]}[4] == 42
+        print_tracker_store.save({k: dict(v) for k, v in print_monitor._PRINT_TRACKER.items()})
+        assert print_tracker_store.load()[INDX]["park_heads"] == park
+        # One read a park: the prompt's re-polls read nothing more.
+        n = len(p.reads)
+        _tick("ATTENTION", _job(0.42))
+        assert len(p.reads) == n
+
+
+def test_a_resume_checks_for_a_swap_against_the_parks_read_and_spends_it(logs):
+    """#300 went onto RCOI-5 at 35% while it printed (no pause, so no swap was
+    recorded); it ran out at 42%, and #229 was loaded at the prompt. The resume
+    records #300 to #229, as the park read it (against the start snapshot it said
+    #42 to #229), and a cancel later reads the heads at its own end."""
+    # On 1d1ddc2: AssertionError: the swap recorded was #42 -> #229.
+    with Indx() as p, _compute(USAGE):
+        p.sm.spools[300] = _spool(5.0, "SHELF-1")
+        _tick("PRINTING", _job(0.30))
+        p.at["RCOI-5"] = [300]
+        p.sm.spools[300]["location"] = "RCOI-5"
+        p.sm.spools[42]["location"] = "CR-CT-2-R1"
+        _tick("PRINTING", _job(0.35))
+        _tick("ATTENTION", _job(0.42))
+        p.load_229()
+        _tick("PRINTING", _job(0.43))
+        latch = print_monitor._PRINT_TRACKER[INDX]
+        assert "park_heads" not in latch and "park_read" not in latch, latch
+        assert [(e["position"], e["from_sid"], e["to_sid"]) for e in latch["swap_log"]] == [(4, 300, 229)]
+        _tick("PRINTING", _job(0.60))
+        _tick("STOPPED")
+    rec = _rec()
+    assert rec["heads_source"] == "print_end", rec
+
+
+def test_a_second_park_reads_afresh(logs):
+    """Two parks in one print: each reads the heads once, and a cancel from the
+    second names its read, not the first's."""
+    with Indx() as p, _compute(USAGE):
+        p.sm.spools[300] = _spool(5.0, "SHELF-1")
+        _tick("PRINTING", _job(0.30))
+        _tick("ATTENTION", _job(0.42))         # first park: #42 on RCOI-5
+        p.load_229()
+        _tick("PRINTING", _job(0.43))          # resumed
+        _tick("ATTENTION", _job(0.50))         # second park: #229 on RCOI-5
+        p.at["RCOI-5"] = [300]                 # #300 loaded at the second prompt
+        p.sm.spools[300]["location"] = "RCOI-5"
+        p.sm.spools[229]["location"] = "SHELF-1"
+        _tick("STOPPED")
+    rec = _rec()
+    assert rec["heads_source"] == "park", rec
+    assert _end_sids(rec)[4] == 229
+
+
+def test_a_park_read_that_finds_nothing_leaves_the_end_read_to_the_end(logs):
+    """A Spoolman blip at the park (no spool on any head): nothing is kept, and the
+    cancel reads the heads at its end as before."""
+    with Indx() as p, _compute(USAGE):
+        _tick("PRINTING", _job(0.30))
+        p.blip = True
+        _tick("ATTENTION", _job(0.42))
+        p.blip = False
+        assert "park_heads" not in print_monitor._PRINT_TRACKER[INDX]
+        _tick("STOPPED")
+    rec = _rec()
+    assert rec["heads_source"] == "print_end" and _end_sids(rec)[4] == 42, rec
+
+
+@pytest.mark.parametrize("pause", ["ATTENTION", "PAUSED"], ids=["a park", "a pause from the menu"])
+def test_a_swap_carries_when_the_printer_stopped_for_it(logs, pause):
+    """Group 64 full review (OR2 / SP2), red on c7073d8 (the event had no moment): the
+    resume's swap carries when the printer stopped printing for that pause (its first
+    paused tick, not a later one), so a weighing of the spool it took off, even at the
+    printer's prompt, can be told from one before. A park (ATTENTION) and a pause from
+    the printer's menu (PAUSED) go through different branches of the tracker."""
+    import time as _t
+    with Indx() as p, _compute(USAGE):
+        _tick("PRINTING", _job(0.30))
+        t0 = _t.time()
+        _tick(pause, _job(0.42))
+        t1 = _t.time()
+        _tick(pause, _job(0.42))                # still paused: the moment stays the first tick's
+        p.load_229()
+        _tick("PRINTING", _job(0.43))
+        latch = print_monitor._PRINT_TRACKER[INDX]
+        ev = latch["swap_log"][0]
+        assert t0 <= ev["at"] <= t1, (t0, ev, t1)
+        assert "paused_at" not in latch, latch

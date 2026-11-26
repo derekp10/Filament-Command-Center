@@ -394,7 +394,10 @@ def test_an_unread_spools_archive_that_lands_and_times_out_says_where_it_is(wire
 
     monkeypatch.setattr(sm_api, "get_spool", first_read_fails)
     assert sm_api.update_spool(50, {"used_weight": 310.0, "archived": True, "location": "CR-SHELF"}) is None
-    assert len(reads) == 2, reads
+    # PIN UPDATED DELIBERATELY (Group 63.5): the re-read after the lost answer is
+    # get_spool_answer's (one read, kept for the caller), so get_spool is read once,
+    # before the write.
+    assert len(reads) == 1, reads
     assert sm.spools[50]["archived"] is True and sm.spools[50]["location"] == "CR-SHELF"
     assert _msgs("📦") == [f"📦 Spool #50 is archived — at CR-SHELF{UNREAD}"], state.RECENT_LOGS
 

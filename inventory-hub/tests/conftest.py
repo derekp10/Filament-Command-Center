@@ -86,7 +86,8 @@ DEV_LOCATIONS_FILE = os.path.join(_HUB_DIR, "data", "locations.json")
 # spoolman_api and every route module import locations_db). A module that starts
 # reading it goes here too.
 _READS_FCC_DATA_DIR = ("locations_db", "cancel_fetch_store", "cancel_review_store",
-                       "print_deduct_ledger", "print_tracker_store", "attr_migration")
+                       "print_deduct_ledger", "print_tracker_store", "attr_migration",
+                       "archive_takeoff")
 _DATA_DIR_ROOT = os.path.join(tempfile.gettempdir(), "fcc-pytest-data")
 _DATA_DIR_MAX_AGE_S = 24 * 3600
 # What a dev locations.json that won't parse is copied as: JSON that won't parse
@@ -243,7 +244,7 @@ else:
 # directory, which from inventory-hub/ (the canonical run) is the dev
 # container's own bind-mounted log. Before Group 45.9 it opened the file at
 # import, so pytest held it open for the whole run: Windows can't rename a file
-# another process holds, so the container's 1 MB rollover failed and Python's
+# another process holds, so the container's rollover (then at 1 MB) failed and Python's
 # handler DROPPED the container's records until the host happened to rotate
 # (dev's hub.log.1 and .5 with no .2-.4 between them are what those failed
 # rollovers leave). Since 45.9 it opens nothing until its first log line
@@ -738,6 +739,11 @@ def page(page, request):
     page.on("request", _started)
     page.on("requestfinished", _ended)
     page.on("requestfailed", _ended)
+    # Group 62.3: a question's answers take no click for 700 ms after it opens (a
+    # double click's second press must answer nothing). The tests press them at once,
+    # so the page's own value is 0 here; a test about the arming takes it away
+    # (`delete window.fccQuestionArmMs` in an init script of its own, added after this).
+    page.add_init_script("window.fccQuestionArmMs = 0;")
     request.node._fcc_net = net
     request.node._fcc_page = page
     request.node._fcc_hub_offset = hub_log_size()
@@ -876,7 +882,7 @@ def close_wizard(page, timeout: int = 5_000) -> None:
         const m = bootstrap.Modal.getInstance(document.getElementById('wizardModal'));
         if (m) {
             // wizardState is script-scoped, not on window: reference it by name.
-            try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}
+            try { wizardState.isDirty = false; } catch (_) {}
             m.hide();
         }
     """)
@@ -2343,6 +2349,9 @@ def isolated_page(_isolated_chromium):
     """
     context = _isolated_chromium.new_context(viewport=BASELINE_VIEWPORT)
     context.route("**/*", lambda route: route.abort())
+    # Group 62.3: a question's answers wait 700 ms for a click; the tests press them at
+    # once (see the `page` fixture). A test about the arming deletes it.
+    context.add_init_script("window.fccQuestionArmMs = 0;")
     page = context.new_page()
     try:
         yield page
@@ -2377,6 +2386,38 @@ def _isolate_attr_migration_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         attr_migration, "_HIDDEN_PATH", str(tmp_path / "attr_hidden_choices.json")
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_archive_takeoff_store(tmp_path, monkeypatch):
+    """Group 63.2: each test gets its own store of spools a weigh archived in place
+    that FCC couldn't take off (archive_takeoff). A test that drives a failed
+    take-off writes one down, and logic.perform_smart_move tries every spool written
+    down at a move's target first, so a record left in the run's shared folder would
+    reach later tests' moves. Host-side only, as above."""
+    try:
+        import archive_takeoff  # type: ignore
+    except ImportError:  # pragma: no cover - backend not importable in this env
+        return
+    monkeypatch.setattr(archive_takeoff, "_STORE_PATH", str(tmp_path / "pending_archive_takeoffs.json"))
+    # Its in-memory next tries and said-once marks too (Group 63 review, round 3:
+    # module-level, they carried over from one test to the next).
+    monkeypatch.setattr(archive_takeoff, "_NEXT_AT_MEM", {})
+    monkeypatch.setattr(archive_takeoff, "_STORE_FAIL_SAID", set())
+
+
+@pytest.fixture(autouse=True)
+def _isolate_weigh_stamps_store(tmp_path, monkeypatch):
+    """Group 64 review (S1): each test gets its own store of FCC's weighings and
+    charges (weigh_stamps). Every print charge notes its grams there, and a print's
+    Decision 1 check takes the charges made after its end read off the change it
+    sees, so a charge left in the run's shared folder by one test would reach a
+    later test whose end read is set in the past. Host-side only, as above."""
+    try:
+        import weigh_stamps  # type: ignore
+    except ImportError:  # pragma: no cover - backend not importable in this env
+        return
+    monkeypatch.setattr(weigh_stamps, "_STORE_PATH", str(tmp_path / "weigh_stamps.json"))
 
 
 # --- Group 38.7 — make `--offline` structurally airtight ---------------------

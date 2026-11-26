@@ -448,3 +448,143 @@ def test_a_two_spool_head_names_both(page: Page, base_url, reset_dom_state_js):
         "() => Array.from(document.querySelectorAll('.fcc-cr-pick[data-line=\"pos:1\"] .fcc-cr-ended option'))"
         ".map(o => o.value)")
     assert ended == ["96", "97"], ended
+
+
+# --------------------------------------------------------------------------- #
+# Group 64.2 (4) and (11): scans on the card, in the real browser               #
+# --------------------------------------------------------------------------- #
+# The real scan accumulator (scripts.html), the real weight capture (inv_core.js)
+# and Chromium's own <select> typeahead. processScan is replaced by a recorder, so a
+# scan that reaches it is seen and nothing is acted on.
+
+RECORD_SCANS_JS = """() => { window.__scans = []; window.processScan = (t, src) => { window.__scans.push([t, src]); }; }"""
+
+HELD_SET = {
+    "printer_name": INDX, "job_id": "J-1300", "filename": "set.bgcode", "progress": 0.6,
+    "total_grams": 61.32, "spools": [], "ambiguous": False, "kind": "partial",
+    "unresolved_usage": {"0": 61.32},
+    "unresolved_sets": {"0": [{"sid": 96, "when": "start", "display": "#96 Galaxy Black", "remaining": 100.0},
+                              {"sid": 97, "when": "end", "display": "#97 PLA Red", "remaining": 900.0}]},
+    "heads_at_end": [{"toolhead": "RCOI-1", "position": 0, "sid": 97, "sids": [97]},
+                     {"toolhead": "RCOI-1", "position": 0, "sid": 96, "when": "start"}],
+    "unresolved_notes": {"0": "FCC saw #96 when the print started and #97 when the print ended."},
+    "created": "2026-11-20 00:00:00",
+}
+
+
+def _line_state(page: Page, line: str) -> dict:
+    return page.evaluate(
+        "(line) => { const q = (c) => document.querySelector(`.${c}[data-line=\"${line}\"]`);"
+        " return { value: q('fcc-cr-pick').value, box: q('fcc-cr-other').value,"
+        " info: (q('fcc-cr-other-info') || {}).textContent || '' }; }", line)
+
+
+@pytest.mark.parametrize("delay", [5, 160], ids=["scanner pace", "a slow scanner"])
+def test_a_scan_on_a_picker_picks_that_spool_on_its_line(page: Page, base_url, reset_dom_state_js, delay):
+    """Group 64.2 (4): with the keyboard on a line's picker, a scanned label picks that
+    spool there ("Another spool by #ID…" with the label in its box, looked up), at a
+    scanner's pace and a slow scanner's, whatever Chromium's typeahead does with the
+    label's letters; the scan never reaches processScan."""
+    _open(page, base_url, reset_dom_state_js, [NO_SPOOL])
+    _wait_heads(page, "0")
+    page.evaluate(RECORD_SCANS_JS)
+    page.focus('.fcc-cr-pick[data-line="0"]')
+    page.keyboard.type("ID:98", delay=delay)
+    page.keyboard.press("Enter")
+    page.wait_for_function(
+        "(document.querySelector('.fcc-cr-other-info[data-line=\"0\"]') || {}).textContent.includes('PLA Blue')",
+        timeout=5_000)
+    got = _line_state(page, "0")
+    assert got["value"] == "other" and got["box"] == "ID:98", got
+    assert page.evaluate("() => window.__scans") == []
+
+
+def test_a_persons_typeahead_still_moves_the_picker(page: Page, base_url, reset_dom_state_js):
+    _open(page, base_url, reset_dom_state_js, [NO_SPOOL])
+    _wait_heads(page, "0")
+    page.evaluate(RECORD_SCANS_JS)
+    page.focus('.fcc-cr-pick[data-line="0"]')
+    page.keyboard.press("a")                  # "Another spool by #ID…"
+    page.wait_for_timeout(1100)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(200)
+    got = _line_state(page, "0")
+    assert got["value"] == "other" and got["box"] == "", got
+
+
+def test_a_slow_scanners_label_in_a_grams_box_goes_to_the_scan_path(page: Page, base_url, reset_dom_state_js):
+    """Group 64.2 (11): the grams boxes are weight boxes, so a label scanned 160 ms a
+    key into one goes to the scan path with the box as the person left it, its set's
+    count right; a person's slow "12.5" in the other box stays."""
+    _open(page, base_url, reset_dom_state_js, [HELD_SET])
+    page.evaluate(RECORD_SCANS_JS)
+    box = '.fcc-cr-pgrams[data-line="set:0:96"]'
+    page.click(box)
+    page.keyboard.type("30", delay=150)
+    page.wait_for_timeout(300)
+    page.keyboard.type("ID:98", delay=160)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(200)
+    assert page.input_value(box) == "30"
+    scans = page.evaluate("() => window.__scans")
+    assert scans == [["ID:98", "keyboard"]], scans
+    left = page.evaluate("() => document.querySelector('.fcc-cr-set-left').textContent")
+    assert left == "31.32 g of 61.32 g still to place", left
+    other = '.fcc-cr-pgrams[data-line="set:0:97"]'
+    page.click(other)
+    page.keyboard.type("12.5", delay=200)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(200)
+    assert page.input_value(other) == "12.5"
+    assert page.evaluate("() => window.__scans") == [["ID:98", "keyboard"]]
+
+
+def _dbl_card(job, sid):
+    row = dict(ROW, sid=sid, display=f"#{sid} PLA Red", toolhead="RCOI-3", position=2)
+    return dict(PARTIAL, job_id=job, spools=[row])
+
+
+def test_a_double_click_on_confirm_never_applies_the_next_card(page: Page, base_url, reset_dom_state_js):
+    """Group 64 review (R1), red on 82dbb38 (J-1 and J-2 posted; older than Group 64).
+    Four cards of one shape fill the panel, so its body scrolls and keeps its height:
+    the first press of a double click applies J-1, its card goes, J-2 slides up
+    under the pointer, and the second press applied J-2, unread. The removal now
+    shields that press, and Confirm refuses a click with detail 2 besides.
+
+    Since the full review's PI1 (c1ee3e0e) a Confirm that leaves cards up says its outcome
+    on the panel's own line, above the cards, and the line's first showing grows the panel
+    (centred), so the cards move down about 20 px and J-2's Confirm ends below the pointer.
+    So J-0 is confirmed first, with one press, and its outcome puts the line up: the double
+    click's first press clears it and its answer puts it back at the same height, so J-2
+    lands exactly where J-1 was, as it does for a person confirming one card after another
+    (the full sweep of 2026-11-23 found this test stopped at its precondition)."""
+    cards = [_dbl_card(f"J-{i}", 90 + i) for i in range(5)]
+    be = _open(page, base_url, reset_dom_state_js, cards, pending_after_confirm=cards[1:],
+               confirm_answer={"status": "confirmed", "errors": [],
+                               "applied": [{"sid": 91, "grams": 2.5, "remaining": 897.5}]})
+    page.wait_for_timeout(400)
+    page.locator('.fcc-cr-card[data-job="J-0"] .fcc-cr-confirm').click()
+    _until(page, lambda: len(be.confirms) == 1, 5_000, "J-0's Apply never posted")
+    page.wait_for_function("""() => !document.querySelector('.fcc-cr-card[data-job="J-0"]')
+        && (document.getElementById('fcc-cr-panel-notice').textContent || '').trim() !== ''""", timeout=5_000)
+    be.pending_after_confirm = cards[2:]
+    # J-0's removal shields the next press at its spot for 700 ms: this double click is
+    # a new one.
+    page.wait_for_timeout(900)
+    btn = page.locator('.fcc-cr-card[data-job="J-1"] .fcc-cr-confirm')
+    btn.scroll_into_view_if_needed()
+    box = btn.bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.up()
+    page.wait_for_timeout(150)
+    # The test means something only where J-2's Confirm slid under the pointer.
+    under = page.evaluate("""([x, y]) => { const el = document.elementFromPoint(x, y);
+        const b = el && el.closest('.fcc-cr-confirm'); const c = b && b.closest('.fcc-cr-card');
+        return c ? c.dataset.job : null; }""", [x, y])
+    assert under == "J-2", under
+    page.mouse.down(click_count=2)
+    page.mouse.up(click_count=2)
+    page.wait_for_timeout(800)
+    assert [c.get("job_id") for c in be.confirms] == ["J-0", "J-1"], be.confirms

@@ -35,7 +35,9 @@ import sys
 
 import pytest
 
+import archive_takeoff
 import attr_migration
+import weigh_stamps
 import cancel_fetch_store
 import cancel_review_store
 import conftest
@@ -90,6 +92,8 @@ def test_every_data_path_was_set_inside_the_runs_folder_at_import(monkeypatch):
             ("cancel_review_store._STORE_PATH", os.path.dirname(cancel_review_store._STORE_PATH)),
             ("print_deduct_ledger._LEDGER_PATH", os.path.dirname(print_deduct_ledger._LEDGER_PATH)),
             ("print_tracker_store._STORE_PATH", os.path.dirname(print_tracker_store._STORE_PATH)),
+            ("archive_takeoff._STORE_PATH", os.path.dirname(archive_takeoff._STORE_PATH)),
+            ("weigh_stamps._STORE_PATH", os.path.dirname(weigh_stamps._STORE_PATH)),
             ("attr_migration._DATA_DIR", attr_migration._DATA_DIR),
             ("attr_migration._HIDDEN_PATH", os.path.dirname(attr_migration._HIDDEN_PATH))):
         assert os.path.normcase(os.path.abspath(path)) == os.path.normcase(d), (name, path, d)
@@ -339,7 +343,7 @@ _PATHS_SCRIPT = r"""
 import json, sys
 sys.path.insert(0, sys.argv[1])
 import locations_db, cancel_fetch_store, cancel_review_store, print_deduct_ledger
-import print_tracker_store, attr_migration, state
+import print_tracker_store, attr_migration, archive_takeoff, weigh_stamps, state
 print("@@" + json.dumps({
     "locations_db._DATA_DIR": locations_db._DATA_DIR,
     "locations_db.JSON_FILE": locations_db.JSON_FILE,
@@ -349,6 +353,8 @@ print("@@" + json.dumps({
     "cancel_review_store._STORE_PATH": cancel_review_store._STORE_PATH,
     "print_deduct_ledger._LEDGER_PATH": print_deduct_ledger._LEDGER_PATH,
     "print_tracker_store._STORE_PATH": print_tracker_store._STORE_PATH,
+    "archive_takeoff._STORE_PATH": archive_takeoff._STORE_PATH,
+    "weigh_stamps._STORE_PATH": weigh_stamps._STORE_PATH,
     "attr_migration._DATA_DIR": attr_migration._DATA_DIR,
     "attr_migration._HIDDEN_PATH": attr_migration._HIDDEN_PATH,
     "state.f_handler.baseFilename": state.f_handler.baseFilename,
@@ -392,6 +398,8 @@ def test_with_fcc_data_dir_unset_every_path_is_todays():
         "cancel_review_store._STORE_PATH": HUB + sep + "data" + sep + "pending_cancel_deducts.json",
         "print_deduct_ledger._LEDGER_PATH": HUB + sep + "data" + sep + "print_deduct_ledger.json",
         "print_tracker_store._STORE_PATH": HUB + sep + "data" + sep + "print_tracker_latch.json",
+        "archive_takeoff._STORE_PATH": HUB + sep + "data" + sep + "pending_archive_takeoffs.json",
+        "weigh_stamps._STORE_PATH": HUB + sep + "data" + sep + "weigh_stamps.json",
         "attr_migration._DATA_DIR": HUB + sep + "data",
         "attr_migration._HIDDEN_PATH": HUB + sep + "data" + sep + "attr_hidden_choices.json",
     }
@@ -415,6 +423,8 @@ def test_with_fcc_data_dir_set_every_data_path_moves_into_it(tmp_path):
         "cancel_review_store._STORE_PATH": j(d, "pending_cancel_deducts.json"),
         "print_deduct_ledger._LEDGER_PATH": j(d, "print_deduct_ledger.json"),
         "print_tracker_store._STORE_PATH": j(d, "print_tracker_latch.json"),
+        "archive_takeoff._STORE_PATH": j(d, "pending_archive_takeoffs.json"),
+        "weigh_stamps._STORE_PATH": j(d, "weigh_stamps.json"),
         "attr_migration._DATA_DIR": d,
         "attr_migration._HIDDEN_PATH": j(d, "attr_hidden_choices.json"),
     }
@@ -579,6 +589,10 @@ class _TeardownPage:
         self.browser_gone = browser_gone
 
     def on(self, event, handler):
+        pass
+
+    def add_init_script(self, script):
+        # conftest.page sets the 62.3 arming seam on every page (window.fccQuestionArmMs).
         pass
 
     def close(self):

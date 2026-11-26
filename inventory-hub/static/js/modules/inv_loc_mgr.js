@@ -76,9 +76,9 @@ window.updateManageTitle = (loc, itemArray = null) => {
     // L298 Phase 2 — "Move all →" (the mouse entry to Bulk Moves; the scanner
     // entry is the CMD:BULKMOVE deck QR). Lives in the TITLE so it renders for
     // EVERY location type: the DANGER-ZONE Eject-All it parallels is built only
-    // by renderGrid, and renderList's `qr-eject-all-list` target doesn't exist
-    // in the live template — so a button placed there would be invisible on
-    // Rooms / Shelves / Carts, which are the most likely bulk-move sources.
+    // by renderGrid (under Unslotted Items, Derek's 62.9 answer (a), 2026-11-17:
+    // kept as it is), and renderList draws no Eject All, so a button placed there
+    // would be missing on Rooms / Shelves / Carts, the likeliest bulk-move sources.
     // Suppressed on single-occupancy locations, a head or a Printer row
     // (window.isHeadOrPrinterType), where every spool would be skipped as
     // "loaded in a toolhead slot" (a guaranteed no-op).
@@ -297,7 +297,10 @@ window.openManage = (id) => {
             // Generate QR for specific location
             const safeId = String(id).replace(/['"]/g, '');
             generateSafeQR('manage-loc-qr-mini', 'LOC:' + safeId, 45);
-            generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
+            // Its own code (Group 62.7a): CMD:DONE finishes an audit and commits a bulk
+            // move, and scanned while either ran (this window can be open under a
+            // hidden panel) it did that instead of closing the window.
+            generateSafeQR('qr-modal-done', 'CMD:CLOSE', 58);
 
             // Prime the Hash to prevent "First Pulse Wiggle". Nothing drawn (a
             // read that failed): no hash, so the first answer renders.
@@ -409,11 +412,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Bootstrap's per-modal handler never sees them, so the user gets
     // stuck on the locations list with no keyboard way out.
     //
-    // Strategy:
-    //   - If manageModal is showing, preempt Bootstrap and route through
-    //     closeManage so the breadcrumb pops instead of wiping.
-    //   - Otherwise, dismiss the topmost visible Bootstrap modal as a
-    //     fallback. This keeps Escape working across the whole stack.
+    // Strategy (Group 62.4: an Escape reaches only the window on top):
+    //   - If manageModal is the window on top, preempt Bootstrap and route
+    //     through closeManage so the breadcrumb pops instead of wiping.
+    //   - Another window on top (a spool's or a filament's window over a
+    //     place's, Edit Filament, the QR view) answers its own Escape: with the
+    //     focus inside it, its own handlers hear this one; with the focus on the
+    //     page, the Escape is handed to it, as if the focus were there. This
+    //     handler hears every Escape first (the document, capture phase), and it
+    //     used to close a place's window open anywhere underneath, and to hide
+    //     the top window past its own Escape code (Edit Filament's "Close
+    //     without saving?").
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
 
@@ -431,33 +440,46 @@ document.addEventListener('DOMContentLoaded', () => {
         const tag = (e.target && e.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
 
-        // Manage-modal priority path: breadcrumb pop or close.
-        if (modalEl.classList.contains('show')) {
+        // The window on top: the highest z-index (the page gives each window it
+        // shows one above the open ones, inv_core.js). The global search is a window
+        // too (a Bootstrap offcanvas, z 1090; the review of Group 62): over a place's
+        // window, an Escape with the keyboard in it closed the place's window, and the
+        // search stayed open. It slides 0.3 s each way (the second review): sliding in
+        // (`showing`) it is on top already, and the Escape waits, since its hide() in
+        // the slide leaves it half shown (it closed the place's window under it);
+        // sliding out (`show hiding`) it is no window, and the Escape is the next one's
+        // (it was handed to the closing search, and did nothing).
+        if (document.querySelector('.offcanvas.showing')) {
             e.preventDefault();
             e.stopImmediatePropagation();
-            window.closeManage();
             return;
         }
-
-        // Fallback: dismiss the topmost visible Bootstrap modal. This
-        // covers locMgrModal / locModal / any other stacked modal whose
-        // own keyboard handler may have lost focus tracking.
-        const shown = Array.from(document.querySelectorAll('.modal.show'));
+        const shown = Array.from(document.querySelectorAll('.modal.show, .offcanvas.show:not(.hiding)'));
         if (shown.length === 0) return;
         const topmost = shown.reduce((a, b) => {
             const za = parseInt(getComputedStyle(a).zIndex || '0', 10) || 0;
             const zb = parseInt(getComputedStyle(b).zIndex || '0', 10) || 0;
             return zb > za ? b : a;
         });
-        // Respect any modal that has opted out of keyboard dismissal.
-        if (topmost.getAttribute('data-bs-keyboard') === 'false') return;
-        const inst = (window.bootstrap && window.bootstrap.Modal)
-            ? window.bootstrap.Modal.getInstance(topmost)
-            : null;
-        if (!inst) return;
+
+        // Manage-modal priority path: breadcrumb pop or close, only when it is on top.
+        if (topmost === modalEl) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            window.closeManage();
+            return;
+        }
+
+        // Another window on top answers its own Escape. With the focus inside it,
+        // its own handlers hear this one (Bootstrap's dismiss, a guard of its own).
+        if (topmost.contains(e.target)) return;
+        // With the focus on the page they would hear nothing (Bootstrap's own
+        // handler sits on the window), so the Escape is handed to it: a window
+        // that opted out of keyboard dismissal (data-bs-keyboard="false") still
+        // runs its own Escape code, and only that window's.
         e.preventDefault();
         e.stopImmediatePropagation();
-        inst.hide();
+        topmost.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     }, true);
 
     modalEl.addEventListener('hidden.bs.modal', () => {
@@ -1117,7 +1139,8 @@ const renderGrid = (data, max) => {
 // landed, so prev/next followed by a quick click deposited the PREVIOUS spool
 // (Derek, prod 2026-10-08). Its click now resolves the spool when it happens,
 // and the buffer-updated listener repaints it synchronously (_syncDepositCard).
-// Its QR is the location's (LOC:<id>) and never depends on the spool.
+// Its QR (CMD:DEPOSIT:<id>, Group 62.6) is drawn once per window and never
+// depends on the spool either: processScan reads the spool shown at the scan.
 const _paintDepositCard = (card, item) => {
     const styles = getFilamentStyle(item.color, item.color_direction || 'longitudinal');
     card.style.background = styles.frame;
@@ -1130,28 +1153,44 @@ const _paintDepositCard = (card, item) => {
     if (label) label.textContent = display.startsWith(`#${item.id} `) || display === `#${item.id}` ? display : `#${item.id} - ${display}`;
 };
 
+// The card's action: the spool READY TO SLOT shows, read when it happens, into `locId`.
+// Its click and its QR (CMD:DEPOSIT:<id>, processScan) both run it (Group 62.6: the QR
+// was this place's own LOC: label, which files the whole buffer, while the click placed
+// one spool, and the comment here said the two matched).
+// `opts.settled(how)`: processScan's, for the QR's read, which stays in flight until it is
+// called once: 'answered' (its move's answer, or the question or picker it opened) or
+// 'refused' (nothing moved and nothing was asked: no read; the second review of Group 62).
+window.depositShownSpool = (locId, opts = {}) => {
+    const settled = (opts && typeof opts.settled === 'function') ? opts.settled : () => {};
+    // The click waits during an audit or a bulk move, as the QR does (the review of
+    // Group 62: the QR was refused while a click still moved the spool shown).
+    if (window.auditPressRefused && window.auditPressRefused('CMD:DEPOSIT')) { settled('refused'); return; }
+    if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) { settled('refused'); return; }
+    const top = state.heldSpools[0];
+    if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); settled('refused'); return; }
+    // Group 40.5 (and D2.4): a multi-slot box, or a Printer row that isn't its own
+    // toolhead (XL, RCOI), opens its picker for this spool (a slot; a head or a
+    // Printer Pool slot). It used to file the spool on the printer row itself, which
+    // the engine refuses since 40.0a.
+    const row = (state.allLocations || []).find(l => String(l.LocationID) === String(locId));
+    if (window._placeBufferWithPicker && window.openSlotPicker && row
+            && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
+                || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row)))) {
+        window._placeBufferWithPicker(locId, [top.id]);
+        // Its picker is its answer. One that didn't open said why (another window up, a
+        // bulk move armed, a placement already running), and asked nothing.
+        settled(window.isSlotPickerOpen && window.isSlotPickerOpen() ? 'answered' : 'refused');
+        return;
+    }
+    doAssign(locId, top.id, null, null, { onSettled: settled });
+};
+
 const _buildDepositCard = (locId) => {
     const depositCard = document.createElement('div');
     depositCard.id = 'manage-deposit-card';
     depositCard.className = "cham-card manage-list-item";
     depositCard.style.cssText = `border: 2px dashed #fff; cursor: pointer; margin-bottom: 15px;`;
-    depositCard.onclick = () => {
-        const top = state.heldSpools[0];
-        if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); return; }
-        // Group 40.5 (and D2.4): the card's QR is this location's label, so a
-        // click does what scanning it does: a multi-slot box, or a Printer row
-        // that isn't its own toolhead (XL, RCOI), opens its picker for this spool
-        // (a slot; a head or a Printer Pool slot). It used to file the spool on
-        // the printer row itself, which the engine refuses since 40.0a.
-        const row = (state.allLocations || []).find(l => String(l.LocationID) === String(locId));
-        if (window._placeBufferWithPicker && window.openSlotPicker && row
-                && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
-                    || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row)))) {
-            window._placeBufferWithPicker(locId, [top.id]);
-            return;
-        }
-        doAssign(locId, top.id, null);
-    };
+    depositCard.onclick = () => window.depositShownSpool(locId);
 
     depositCard.innerHTML = `
         <div class="list-inner-gold" style="justify-content: center; align-items: center; flex-direction: column; padding: 15px;">
@@ -1184,7 +1223,7 @@ const _syncDepositCard = () => {
         list.insertBefore(_buildDepositCard(locId), list.firstChild);
         if (emptyMsg) emptyMsg.style.display = 'none';
         const safeId = String(locId).replace(/['"]/g, '');
-        requestAnimationFrame(() => generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85));
+        requestAnimationFrame(() => generateSafeQR('qr-deposit-trigger', 'CMD:DEPOSIT:' + safeId, 85));
     } else if (card) {
         card.remove();
         if (emptyMsg && list.children.length === 0) emptyMsg.style.display = 'block';
@@ -1326,11 +1365,12 @@ const renderList = (data, locId) => {
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 reOrderedData.forEach((s, i) => renderBadgeQRs(s, i));
-                generateSafeQR('qr-eject-all-list', 'CMD:EJECTALL', 56);
+                // (No Eject All QR: the list view draws no Eject All. A call for a
+                // target that didn't exist was removed, Group 62.9 answer (a).)
 
                 if (document.getElementById('qr-deposit-trigger')) {
                     const safeId = String(locId).replace(/['"]/g, '');
-                    generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85);
+                    generateSafeQR('qr-deposit-trigger', 'CMD:DEPOSIT:' + safeId, 85);
                 }
             });
         });
@@ -1338,7 +1378,7 @@ const renderList = (data, locId) => {
         requestAnimationFrame(() => {
             if (document.getElementById('qr-deposit-trigger')) {
                 const safeId = String(locId).replace(/['"]/g, '');
-                generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85);
+                generateSafeQR('qr-deposit-trigger', 'CMD:DEPOSIT:' + safeId, 85);
             }
         });
     }
@@ -1588,7 +1628,7 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
             // Active print → inline confirm overlay (no nested Swal). Its Yes
             // confirms this head, the one whose warning it shows (Group 39.1).
             setProcessing(false);
-            return _confirmActivePrintAssign({
+            const asked = _confirmActivePrintAssign({
                 loc,
                 spool,
                 slot,
@@ -1597,6 +1637,9 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
                 options,
                 heads: [String(loc).toUpperCase()],
             });
+            // `options.onSettled` (DEPOSIT HERE's QR): the question is its answer.
+            if (typeof options.onSettled === 'function') options.onSettled('answered');
+            return asked;
         });
     }
 
@@ -1643,6 +1686,9 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
 };
 
 const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedHeads = [], options = {}) => {
+    // `options.onSettled` (DEPOSIT HERE's QR, whose read is in flight until then): the move
+    // was answered, or got no answer. Its caller takes the first call only.
+    const settle = () => { if (typeof options.onSettled === 'function') options.onSettled('answered'); };
     // FIX: 0-based index correction for MMU/CORE slots
     let finalSlot = slot;
     if (slot !== null) {
@@ -1667,6 +1713,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         if (spoolObj && (spoolObj.archived === true || String(spoolObj.archived).toLowerCase() === 'true')) {
             showToast("Cannot assign an ARCHIVED spool to a location!", "error");
             setProcessing(false);
+            settle();
             return;
         }
     }
@@ -1712,6 +1759,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
     // success handling follows a move that landed, so it only reaches the console.
     const noAnswer = (e) => {
         setProcessing(false);
+        settle();
         showToast(`❌ #${spoolIdStr} → ${loc} failed: ${(e && e.message) || 'network error'} — check the Activity Log`, 'error', 7000);
         if (window.logClientEvent) window.logClientEvent(
             `❌ Assign #${spoolIdStr} → ${loc} got no answer: ${(e && e.message) || 'network error'}`, 'ERROR');
@@ -1726,6 +1774,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         .then(res => {
             if (res === null) return;
             setProcessing(false);
+            settle();
             // The server asks before it moves: a printing head (the yes / no:
             // the printer flipped to PRINTING after our probe, the probe missed
             // it, or the spool is LEAVING a printing head, 39.4), or a bound
@@ -1837,11 +1886,16 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 window.takeIntoBuffer(res);
             }
         })
-        .catch((e) => { setProcessing(false); console.error(e); });
+        .catch((e) => { setProcessing(false); settle(); console.error(e); });
     _postManageAdd(first, { heads: first.confirmed_toolheads });
 };
 
 window.ejectSpool = (sid, loc, pickup) => {
+    // Group 62.7(b): a card's own 🗑️ waits for an audit as CMD:TRASH: does (the scan's
+    // words, nothing sent), and for a bulk move, where its question would open behind
+    // the bulk panel.
+    if (!pickup && window.auditPressRefused && window.auditPressRefused('CMD:TRASH')) return;
+    if (!pickup && window.bulkMovePressWaits && window.bulkMovePressWaits('Eject')) return;
     if (pickup) {
         // Group 58 review: the buffer is kept during an audit, and this door's ID: goes
         // to the audit as a scan, so a press would count as finding the spool. The
@@ -2067,6 +2121,11 @@ window.triggerBulkMove = (loc, replace = false) => {
 };
 
 window.triggerEjectAll = (loc) => {
+    // Group 62.7(b): its button waits for an audit as its scan does (the scan's words,
+    // nothing sent), and both wait for a bulk move ("Nuke all?" opened behind the
+    // bulk panel and swallowed the session's scans).
+    if (window.auditPressRefused && window.auditPressRefused('CMD:EJECTALL')) return;
+    if (window.bulkMovePressWaits && window.bulkMovePressWaits('Eject All')) return;
     const target = String(loc == null ? '' : loc).trim();
     // Never prompt, let alone send, an Eject All with no location: the backend
     // matcher reads "" as every Unassigned spool (2026-09-13). The scan route

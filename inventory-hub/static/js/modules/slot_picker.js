@@ -498,12 +498,21 @@
                 <div>${feeds}</div>
             </div>
             <div class="d-flex align-items-center gap-3">
+                ${_cancelQrBlock(s)}
+                <button type="button" class="btn btn-sm btn-secondary" data-sp-act="cancel">Cancel</button>
+            </div>`;
+    };
+
+    // Its 📷 CANCEL QR, in every view (Group 62.7c: the loading view and the "couldn't
+    // read" message drew none, though a cancel scan works there too). _drawCancelQr
+    // draws the code once the view is on the page.
+    const _cancelQrBlock = (s) => `
                 <div class="d-flex flex-column align-items-center" title="Scan to cancel">
                     <div class="fcc-sp-qr" id="fcc-sp-qr-${s.id}-cancel"></div>
                     <div class="fcc-qr-caption" style="font-size:var(--fcc-fs-label); color:#c8c8c8; font-weight:700;">📷 CANCEL</div>
-                </div>
-                <button type="button" class="btn btn-sm btn-secondary" data-sp-act="cancel">Cancel</button>
-            </div>`;
+                </div>`;
+    const _drawCancelQr = (s) => {
+        if (typeof generateSafeQR === 'function') generateSafeQR(`fcc-sp-qr-${s.id}-cancel`, 'CMD:CANCEL', 48);
     };
 
     const _header = (s, chips) => {
@@ -536,7 +545,9 @@
             <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="loading" tabindex="-1">
                 ${_header(s)}
                 <div class="fcc-sp-msg">⏳ Loading ${_esc(s.location)}…</div>
+                <div class="card-footer d-flex justify-content-end">${_cancelQrBlock(s)}</div>
             </div>`);
+        _drawCancelQr(s);
         // D1: the panel takes the focus at once, so a field behind it (the
         // Location Manager's ID box, say) no longer receives a scanner's keys.
         const panel = s.handle && s.handle.element.querySelector('.fcc-sp-panel');
@@ -548,11 +559,13 @@
             <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="message">
                 ${_header(s)}
                 <div class="fcc-sp-msg">${_esc(text)}</div>
-                <div class="card-footer d-flex justify-content-end gap-2">
+                <div class="card-footer d-flex justify-content-end align-items-center gap-2">
+                    ${_cancelQrBlock(s)}
                     ${retry ? '<button type="button" class="btn btn-sm btn-info" data-sp-act="retry">Retry</button>' : ''}
                     <button type="button" class="btn btn-sm btn-secondary" data-sp-act="cancel">Cancel</button>
                 </div>
             </div>`);
+        _drawCancelQr(s);
         const first = s.handle && s.handle.element.querySelector('[data-sp-act="retry"], [data-sp-act="cancel"]');
         if (first) { try { first.focus(); } catch (_) { /* noop */ } }
     };
@@ -585,7 +598,7 @@
         // QR codes: each choice's own label, so the screen can be scanned too.
         if (typeof generateSafeQR === 'function') {
             s.tiles.forEach((t, i) => { const q = _qrText(t); if (q) generateSafeQR(`fcc-sp-qr-${s.id}-${i}`, q, 56); });
-            generateSafeQR(`fcc-sp-qr-${s.id}-cancel`, 'CMD:CANCEL', 48);
+            _drawCancelQr(s);
         }
         // First highlight: the caller's preselect (or the tile a Back returned
         // from), else the ⭐, else the first slot the picker can take.
@@ -658,6 +671,10 @@
         const actions = c.actions.concat([{ key: 'back', label: 'Back', sub: 'pick another slot' }]);
         s.view = 'choice';
         s.choice = { tile: t, via, actions };
+        // Its answers take no click until a double click on the tile has passed (Group
+        // 62.3): the question opens in the panel under the pointer, and the second click
+        // chose for the slot's spool. Back, Enter and the QRs never wait.
+        s.choiceArmedAt = Date.now() + (window.questionArmMs ? window.questionArmMs() : 700);
         const occ = (t.data && t.data.spool) || null;
         // One tone per action, for its button AND its QR (attachConfirmQRs'
         // tones are named after the Bootstrap button variants).
@@ -835,10 +852,17 @@
     // it), one in flight (under 500 ms), a scanner-speed burst, or a buffer that
     // looks like a scan payload. That Enter reaches processScan, then
     // routePickerScan, which refuses it. Only the lone digit just taken as a
-    // hotkey, then Enter, is a person picking.
+    // hotkey, then Enter, is a person picking. Also the Enter right behind a
+    // scan's own, under 100 ms (window.enterIsAScan's clause, state.lastScanEnterAt;
+    // Group 62.10): a scanner whose end-of-scan key sends two Enters (CR LF) left
+    // the second one an empty buffer, and it picked the highlighted ⭐ after a
+    // refused scan, or answered Swap (or "Swap it out") after an occupied slot's
+    // label. A scanner that sends one Enter never meets this rule.
     const _enterIsAScans = (s) => {
-        const buf = String(_st().scanBuffer || '');
+        const st = _st();
+        const buf = String(st.scanBuffer || '');
         if (s && s.hotkey && buf === s.hotkey.digit) return false;
+        if (st.lastScanEnterAt && Date.now() - st.lastScanEnterAt < 100) return true;
         if (buf.length >= 2) return true;
         if (window.isScanInFlight && window.isScanInFlight()) return true;
         if (window.isScannerBurst && window.isScannerBurst()) return true;
@@ -906,9 +930,12 @@
         if (_session !== s || s.settled || !_isTopmost(s)) return;
         if (e.ctrlKey || e.altKey || e.metaKey) return;
         // D1: a key aimed at a field behind the picker (focus outside its panel)
-        // never drives it: a scan typed into that field used to pick a slot.
+        // never drives it: a scan typed into that field used to pick a slot. Except
+        // Tab, which no scan carries: it comes into the panel (Group 62.4; it walked
+        // on through the page behind).
         const ae = document.activeElement;
-        if (ae && ae !== document.body && s.handle && !s.handle.element.contains(ae)) return;
+        const outside = ae && ae !== document.body && s.handle && !s.handle.element.contains(ae);
+        if (outside && e.key !== 'Tab') return;
         const k = e.key;
         if (s.view === 'choice') { _choiceKeys(s, e, k); return; }
         if (k === 'Tab') {
@@ -964,6 +991,9 @@
             backdrop: true,
             occlude: ['select'],
             onEscape: () => _finish(s, null),
+            // own-tab: _keyHandler cycles Tab through its tiles and buttons (and the
+            // occupied slot's question's choices), on the document.
+            trapTab: false,
         });
         const root = s.handle.element;
         root.setAttribute('role', 'dialog');
@@ -991,7 +1021,11 @@
             const choice = e.target.closest && e.target.closest('[data-sp-choice]');
             if (choice) {
                 e.preventDefault();
-                _choose(s, choice.getAttribute('data-sp-choice'));
+                const key = choice.getAttribute('data-sp-choice');
+                // Armed (62.3), but never against a click the keyboard made (a Space,
+                // `detail` 0): it is no double click's second press (the review of Group 62).
+                if (key !== 'back' && e.detail !== 0 && s.choiceArmedAt && Date.now() < s.choiceArmedAt) return;
+                _choose(s, key);
                 return;
             }
             const tile = e.target.closest && e.target.closest('.fcc-sp-tile');

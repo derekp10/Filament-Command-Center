@@ -49,12 +49,12 @@
         lines: [
             'One place and its spools: a box with several slots as its numbered slots, any other place as a list.',
             'Scan a spool and it waits under READY TO SLOT (◀ PREV and NEXT ▶ pick another from your buffer). Click an empty slot, or ⬇️ DEPOSIT HERE, to put it here; a slot that feeds a toolhead loads it onto that toolhead too. A full slot asks first.',
-            'A click on ⬇️ DEPOSIT HERE puts only the spool shown. Scanning its QR (this place\'s own label) puts your buffer here: a toolhead or other one-spool place takes only the top spool, and a box with slots or a printer asks where each spool goes.',
+            '⬇️ DEPOSIT HERE puts only the spool shown, clicked or its QR scanned. This place\'s own printed label puts your whole buffer here: a toolhead or other one-spool place takes only the top spool, and a box with slots or a printer asks where each spool goes.',
             'On a spool: ✋ PICK puts it in your buffer, ⏏️ EJECT or 🗑️ TRASH takes it out of this place after asking, ✏️ edits it, and 🖨️ adds its label to the print queue. A loaded spool\'s ↩️ RETURN SPOOL puts it back in its slot.',
             'A dryer box has 🔗 Slot → Toolhead Feeds (press Show): choose which toolhead each slot feeds, then 💾 Save Feeds. 🖨️ Print Location Label adds this place\'s label to the print queue, and its small QR opens bigger, to scan from the screen.',
-            'Scans while it is open: the QR on a slot\'s tile does what clicking that slot does, and this place\'s own label puts your buffer here, as above.',
+            'Scans while it is open: the QR on a slot\'s tile does what clicking that slot does, DEPOSIT HERE\'s QR what clicking it does, and this place\'s own label puts your buffer here, as above.',
             'In a box with slots, spools with no slot are under Unslotted Items. EJECT ALL in the ☢️ DANGER ZONE below them (or its QR) asks, then sends each back where it came from, or to Unassigned after one more question. A spool loaded on a toolhead stays.',
-            '✅ Done / Sync closes the window, or goes back to the place you came from. The QR beside it does the same, except during an audit, where it is the audit\'s Done, or a bulk move, where it commits the move.',
+            '✅ Done / Sync closes the window, or goes back to the place you came from, and so does the QR beside it, whatever else is running.',
         ],
         sections: [{
             title: '⚡ Quick-Swap (a toolhead or a printer)',
@@ -80,6 +80,7 @@
             'A spool going onto a toolhead takes the place of the one there, which goes back to the box slot it came from (with no record of one, to the printer\'s room, else Unassigned).',
             'On an idle toolhead the question opens on Yes, swap. While the printer prints, or when FCC couldn\'t check the printer, it says so and opens on No, cancel, so a stray Enter moves nothing.',
             'While the printer prints, it also shows a QR above each button: scan one to answer. Enter presses the button that has the keyboard, and Tab moves between the two.',
+            'While it is open, any other scan is ignored, and the question says so: answer it first, then scan again.',
         ],
     });
 
@@ -119,12 +120,14 @@
         title: 'Add Inventory Wizard',
         match: { modal: 'wizardModal' },
         lines: [
-            'Adds new spools, or edits a spool and its filament.',
+            "Adds new spools, or edits a spool and its filament. A label scanned while a box has the keyboard isn't typed there: it goes on as a scan, and the box keeps what you had typed.",
             'Step 1 picks the filament: Existing Filament (search yours, or 🔍 Advanced Search), Import Database, or New Manual Form.',
             'Step 2 is the filament\'s details: changing them changes the filament for every spool of it. Step 3 is the spools: how many, Location, weight (⚖️ Weigh from scale…) and price.',
-            'A Location that is a dryer box with slots, or a printer, asks which slot or toolhead first.',
-            'CREATE INVENTORY (SAVE CHANGES when editing) saves. After a create the window stays open for the next batch, and 🖨️ #42 queues that new spool\'s label. Cancel, ✕ or Esc asks first when something isn\'t saved.',
-            'When adding spools, scan a Prusament spool\'s QR into its Spool box under 📷 Per-spool Prusament scan in Step 3: that spool is created with the weights and date it reads. In an edit, such a scan isn\'t saved.',
+            "A Location that is a dryer box with slots, or a printer, asks which slot or toolhead first. A place's label scanned into Location picks that place.",
+            'CREATE INVENTORY (SAVE CHANGES when editing) saves. After a create the window stays open for the next batch, and 🖨️ #42 queues that new spool\'s label. Anything that would lose unsaved changes asks first: Cancel, ✕, Esc, or starting over.',
+            'When adding spools, scan a Prusament spool\'s QR into its Spool box under 📷 Per-spool Prusament scan in Step 3: that spool is created with the weights and date it reads.',
+            'When editing a spool, scan its QR into 📷 Link this spool to its Prusament QR: Save links the spool to it (its 📄 Product Link and blank Prusament details), unless another spool has that QR or it is a different product.',
+            "Its weights aren't saved there: Save and close, then scan the QR on the dashboard to check them. A QR scanned outside that box while editing asks first: link it to this spool, start an Add for a new one, or keep editing.",
         ],
         scopes: ['Wizard'],
     });
@@ -135,7 +138,8 @@
         match: { modal: 'weighOutModal' },
         lines: [
             'Weigh the spools in your scan buffer one after another: each has a box for its weight and a preview of what will be saved.',
-            'The buttons at the top say how a number is read. Gross: the scale reading with the spool on it; FCC takes off the empty spool\'s weight, and asks for it when it doesn\'t know it.',
+            "The buttons at the top say how a number is read. Gross: the scale reading with the spool on it; FCC takes off the empty spool's weight, and asks for it when it doesn't know it.",
+            "The empty weight you give is kept as that spool's own, so it isn't asked again. For a new spool FCC offers one, about the reading less its filament: it can read a little high.",
             'Net: the filament alone. Additive: grams added to what was used, like +25, or -10 to take some back. Set Used: the used weight itself.',
             'Type the weight and press Enter, or click 💾: the line goes away and the next box is ready. A weighed spool stays in your scan buffer.',
             'Auto-Archive 0g is on each time this opens: a spool weighed down to 0 g is archived and taken off its place. Turn it off to keep such a spool where it is.',
@@ -154,9 +158,24 @@
             'Pick a mode: Gross (the scale reading with the spool on it), Net (the filament alone), Additive (grams added to what was used, like +25 or -10) or Set Used (the used weight itself). The preview shows what is left before you save.',
             'Save Update, or Enter, saves it; Cancel, × or Esc closes without saving. Set as default makes the mode you are on the one it opens in next time.',
             'Auto Archive & Eject if Empty (0g) is on each time it opens: a spool saved at 0 g is archived and taken off its place.',
-            'In Gross, when the empty spool\'s weight isn\'t known, Save asks for it first. Skip there saves your number as the filament left (as Net does).',
+            "In Gross, when the empty spool's weight isn't known, Save asks for it first, and keeps the weight you give as this spool's own. For a new spool it offers one, about the reading less its filament: it can read a little high.",
+            'Skip: save as filament left keeps no empty weight: your number is saved as the filament left, as Net does.',
         ],
         scopes: ['Weigh window'],
+    });
+
+    // Group 63.1: a spool weighed back into stock after it left a toolhead.
+    help({
+        key: 'refill-place',
+        title: 'Where a refilled spool goes',
+        match: { overlay: 'fcc-refill-place' },
+        lines: [
+            "FCC asks this when you weigh a spool back above 0 g, or untick Archived, after it was archived off a toolhead: a spool on the scale is in your hand, so FCC doesn't put it back on the toolhead by itself.",
+            'Back on HEAD-1 (or the QR under it) puts it back on the toolhead it came off. It is greyed out, its QR dimmed, when another spool is on HEAD-1 now.',
+            "In ROOM-1 for now (or its QR) puts it loose in the room that toolhead stands in. Pick a place… opens Force Location's list of places.",
+            "Leave it Unassigned (or its QR), or Esc, moves nothing: scan it to where you put it later. Scanning a place's label while this is open puts the spool there.",
+            'A spool that came off a box, cart or shelf goes back there by itself, with no question.',
+        ],
     });
 
     help({
@@ -169,7 +188,7 @@
             'Just store it: the spool goes in the slot, and HEAD-1 is left as it was. Cancel: nothing moves.',
             'Enter stores it, or cancels when there is no Just store it. Scan the QR under a button to answer with it. Any other scan is ignored, and the question says so: scan it again once you have answered.',
             'If what the slot feeds changes while you decide, FCC asks again and names the new toolhead.',
-            'Some actions during a print (a move straight onto or off a printing toolhead, an Undo) ask a shorter question instead: Continue Anyway or Cancel. It opens on Cancel, so a stray Enter moves nothing, but other scans still go through while it is open.',
+            'Some actions during a print (a move straight onto or off a printing toolhead, an Undo) ask a shorter question instead: Continue Anyway or Cancel. It opens on Cancel, so a stray Enter moves nothing, and it holds off other scans too until it is answered.',
         ],
         scopes: ['Load / Store Question'],
     });

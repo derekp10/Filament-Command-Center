@@ -50,11 +50,13 @@ TABLE = {
         ("window.quickSwapDeposit = ", SENDS, 1, None),
     ],
     "inv_details.js": [
-        ("window.promptEditLocation = ", SENDS, 1, None),   # Force Location (add; force_unassign keeps its boolean)
+        # Force Location's move (add; force_unassign keeps its boolean), lifted out of
+        # window.promptEditLocation in Group 63.1 so the refill question shares it.
+        ("window.fccForceMove = ", SENDS, 1, None),
     ],
-    "inv_weigh_out.js": [
-        ("window.saveSpoolWeight = ", "exempt", 1, "action force_unassign (the auto-archive)"),
-    ],
+    # Group 63.4: saveSpoolWeight posts no force_unassign after an archive any
+    # more (the save takes the spool off its place itself), so inv_weigh_out.js
+    # has no door call.
     # Group 40.7: the wizard's Location is a move. Its first request goes to its
     # own route (edit / create, which carry the same contract); a question the
     # engine asked there is replayed on /api/smart_move.
@@ -111,8 +113,9 @@ def test_every_door_call_is_classified_and_counted():
 
 def test_the_canary_sees_every_door_call_site():
     """Guard the guard: a regex that stops matching would report green forever.
-    16 since Group 40.7 (the wizard's question replay and its force_unassign)."""
-    assert len(_calls()) == sum(r[2] for rows in TABLE.values() for r in rows) == 16
+    16 since Group 40.7 (the wizard's question replay and its force_unassign); 15 since
+    Group 63.4 (the weigh save's force_unassign after an archive is gone)."""
+    assert len(_calls()) == sum(r[2] for rows in TABLE.values() for r in rows) == 15
 
 
 def test_every_sending_door_carries_the_key_and_asks_through_the_dispatcher():

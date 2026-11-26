@@ -31,7 +31,9 @@ EXPECTED_ROUTES = [
     ("/api/cancel_deduct/candidates", "GET", "api_cancel_deduct_candidates"),  # Group 43.3 spool picker
     ("/api/cancel_deduct/confirm", "POST", "api_cancel_deduct_confirm"),
     ("/api/cancel_deduct/dismiss", "POST", "api_cancel_deduct_dismiss"),
+    ("/api/cancel_deduct/retry_fetch", "POST", "api_cancel_deduct_retry_fetch"),
     ("/api/cancel_deduct/pending", "GET", "api_cancel_deduct_pending"),
+    ("/api/cancel_deduct/recompute", "POST", "api_cancel_deduct_recompute"),  # Group 65.1 (1b)
     ("/api/config", "GET", "api_get_config"),
     ("/api/config", "PUT", "api_put_config"),
     ("/api/config/export", "GET", "api_config_export"),
@@ -87,11 +89,13 @@ EXPECTED_ROUTES = [
     ("/api/printer_map", "GET", "api_printer_map"),
     ("/api/printer_map", "PUT", "api_put_printer_map"),
     ("/api/printer_state/<path:toolhead_id>", "GET", "api_printer_state"),
+    ("/api/prusament/linked_spools", "GET", "api_prusament_linked_spools"),  # Group 66.3 (B)
     ("/api/quickswap", "POST", "api_quickswap"),
     ("/api/quickswap/return", "POST", "api_quickswap_return"),
     ("/api/search", "GET", "api_search_inventory"),
     ("/api/smart_move", "POST", "api_smart_move"),
     ("/api/spool/<int:sid>", "DELETE", "api_delete_spool"),
+    ("/api/spool/archive_takeoff", "POST", "api_spool_archive_takeoff"),
     ("/api/spool/prusament_apply_weights", "POST", "api_prusament_apply_weights"),
     ("/api/spool/update", "POST", "api_spool_update"),
     ("/api/spool_details", "GET", "api_spool_details"),

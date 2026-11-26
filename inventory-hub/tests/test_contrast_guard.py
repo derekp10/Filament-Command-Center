@@ -99,6 +99,130 @@ def test_quickswap_confirm_overlay_has_no_gray_on_gray_text(page: Page, open_man
     assert_contrast(overlay)
 
 
+@pytest.mark.usefixtures("require_server")
+def test_the_slot_pickers_cancel_qr_reads_while_it_loads_and_on_its_message(page: Page, base_url: str, assert_contrast):
+    """Group 62.7(c): the slot picker draws its 📷 CANCEL QR from the start, in the loading
+    view and on its "couldn't read" message too. Its read held in the page, then answered
+    as failed; nothing sent."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openSlotPicker === 'function' && typeof state !== 'undefined'")
+    page.evaluate("""() => { const real = window.fetch; window.__held = [];
+        window.fetch = (url, opts) => (String(url).includes('/api/placement_options')
+            ? new Promise((r) => window.__held.push(() => r(new Response(
+                JSON.stringify({ read_ok: false, read_error: 'Spoolman did not answer' }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } }))))
+            : real(url, opts));
+        window.openSlotPicker({ location: 'LR-MDB-1', spool: 57 }); }""")
+    picker = page.locator("#fcc-slot-picker")
+    expect(picker.locator("[data-sp-state='loading'] .fcc-qr-caption")).to_be_visible()
+    assert_contrast(picker)
+    assert "CANCEL" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(picker, min_ratio=100))
+    page.evaluate("() => window.__held.forEach((f) => f())")
+    expect(picker.locator("[data-sp-state='message'] .fcc-qr-caption")).to_be_visible()
+    assert_contrast(picker)
+    page.keyboard.press("Escape")
+    expect(picker).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_questions_held_off_scan_line_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 62.2: the printing yes / no and the Quick-Swap confirm hold off other scans
+    now, and say on themselves why a scan did nothing (toasts sit under them), in the
+    three-way's look. Each is drawn with nothing sent (every write answered in the
+    browser, the printer's answer a stub), a label scanned and held off, the line scored,
+    then Escape."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.confirmActivePrint === 'function'"
+                           " && typeof window.quickSwapTap === 'function' && typeof state !== 'undefined'")
+    page.evaluate("""() => window.confirmActivePrint({
+        activePrint: { toolhead: 'XL-3', printer_name: 'XL', state: 'PRINTING' },
+        msg: 'Moving #57 now will disrupt the print. Continue?', ids: { overlay: 'fcc-contrast-yes-no' } })""")
+    question = page.locator("#fcc-contrast-yes-no")
+    expect(question.locator(".fcc-apc-no")).to_be_visible()
+    page.evaluate("() => window.processScan('LOC:SHELF-8', 'barcode')")
+    expect(question.locator(".fcc-apc-status")).to_be_visible()
+    assert_contrast(question)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(question, min_ratio=100))
+    assert "Answer the question on screen first" in scored, scored
+    page.keyboard.press("Escape")
+    expect(question).to_have_count(0)
+
+    page.evaluate("""() => {
+        window.checkPrinterForHead = () => Promise.resolve({ active: true, known: true, state: 'PRINTING', printer_name: 'XL' });
+        const b = document.createElement('button');
+        Object.assign(b.dataset, { toolhead: 'XL-1', box: 'LR-MDB-1', slot: '1', spoolId: '57', spoolLabel: 'PLA Red' });
+        window.quickSwapTap(b); }""")
+    swap = page.locator("#fcc-quickswap-confirm-overlay")
+    expect(swap.locator(".fcc-confirm-qr-row")).to_be_visible(timeout=8000)
+    page.evaluate("() => window.processScan('LOC:SHELF-9', 'barcode')")
+    expect(swap.locator("#fcc-quickswap-confirm-status")).to_be_visible()
+    assert_contrast(swap)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(swap, min_ratio=100))
+    assert "Yes, swap or No, cancel" in scored, scored
+    page.keyboard.press("Escape")
+    expect(swap).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_delete_question_and_a_refused_deletes_reason_are_readable(page: Page, base_url: str, assert_contrast):
+    """Group 62.8 made the delete question a mountOverlay, and the review of Group 62 puts
+    a refused delete's reason on it (its toast is drawn under it). Each step is scored:
+    the warning, the typed box with its mismatch line, and the refusal. Nothing reaches
+    dev: every write is answered in the browser, the DELETE with {}, read as a refusal,
+    and the spool id is made up."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.mountOverlay === 'function'"
+                           " && !!document.getElementById('btn-spool-delete') && !!document.getElementById('detail-id')")
+    page.evaluate("() => { document.getElementById('detail-id').innerText = '424242';"
+                  " document.getElementById('btn-spool-delete').click(); }")
+    question = page.locator("#fcc-spool-delete-overlay")
+    confirm = question.locator("[data-fcc-delete-confirm]")
+    expect(confirm).to_be_visible()
+    assert_contrast(question)
+    confirm.click()                                          # Continue →
+    box = page.locator("#fcc-spool-delete-overlay-input")
+    expect(box).to_be_focused()
+    box.fill("1")
+    confirm.click()                                          # Delete forever: no match
+    err = page.locator("#fcc-spool-delete-overlay-err")
+    expect(err).to_contain_text("Doesn't match")
+    assert_contrast(question)
+    box.fill("424242")
+    confirm.click()
+    expect(err).to_contain_text("Delete failed")
+    assert_contrast(question)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(question, min_ratio=100))
+    assert "Delete failed" in scored, scored
+    page.keyboard.press("Escape")
+    expect(question).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_edit_filaments_close_question_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 62.8: Edit Filament's "Close without saving?" is a mountOverlay. Read-only
+    (the filament is read from dev, every write answered in the browser)."""
+    from test_edit_filament_close_question_62_8_e2e import QUESTION, _open_dirty
+    _open_dirty(page, base_url)
+    page.keyboard.press("Escape")
+    question = page.locator(QUESTION)
+    expect(question).to_be_visible()
+    assert_contrast(question)
+    page.keyboard.press("Escape")                            # Keep Editing
+    expect(question).to_have_count(0)
+
+
 # ---------------------------------------------------------------------------
 # Shortcuts overlay (? help)
 # ---------------------------------------------------------------------------
@@ -1113,7 +1237,7 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
     import conftest
     pending = []
     for i, reason in enumerate(["no_footer", "empty_footer", "no_download", None,
-                                "unreadable_moves", "unsampled"]):
+                                "unreadable_moves", "unsampled", "compute_failed"]):
         rec = {"printer_name": "ZZ Contrast XL", "job_id": f"u{i}", "filename": "/usb/RACCOON~1.BGC",
                "progress": 1.0, "total_grams": 0.0, "spools": [], "ambiguous": False,
                "kind": "progress_unknown", "usage_map": None}
@@ -1131,8 +1255,76 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
     for words in ("filament footer couldn't be read", "filament footer lists no filament",
                   "download or read the print's file", "replaced", "read the moves",
-                  "ended before FCC read its progress", "/usb/RACCOON~1.BGC", "Discard"):
+                  "ended before FCC read its progress", "deduct kept failing",
+                  "/usb/RACCOON~1.BGC", "Discard"):
         assert words in scored, (words, scored)
+    page.keyboard.press("Escape")
+
+
+def test_lost_contact_review_lines_are_readable(page: Page, base_url: str):
+    """Group 65.1 (1): a review whose end FCC saw only after it lost sight of the print
+    says so in a 📡 line under its file name (a ❓ card, a 🛑 card, and a "couldn't
+    measure" card restart recovery opened). Each line readable on its card. Made-up
+    reviews in this page only; nothing is written."""
+    import json as _json
+    import time as _time
+    import conftest
+    now = _time.time()
+    lost = {"progress": 0.3, "seen_at": now - 9600, "lost_at": now - 9480, "back_at": now, "back_state": "IDLE",
+            "why": "lost"}
+    row = {"sid": 9001, "toolhead": "ZZ-1", "position": 0, "grams": 12.4, "current_used": 100.0,
+           "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 887.6,
+           "display": "#9001 Contrast PLA", "color": "c0392b", "ambiguous": False}
+    base = {"printer_name": "ZZ Contrast XL", "filename": "/usb/LOST~1.BGC", "progress": 0.3,
+            "total_grams": 12.4, "kind": "partial"}
+    pending = [dict(base, job_id="l1", ambiguous=True, spools=[row], lost_contact=lost),
+               dict(base, job_id="l2", ambiguous=False, spools=[dict(row, sid=9002)],
+                    lost_contact=dict(lost, back_state="STOPPED")),
+               dict(base, job_id="l3", ambiguous=True, spools=[], total_grams=0.0, kind="progress_unknown",
+                    unmeasured_reason="unsampled", usage_map=None, lost_contact=dict(lost, why="restart"))]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="l3"] .fcc-cr-lost', timeout=15000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    offenders = [o for o in conftest.contrast_offenders(overlay)
+                 if "lost contact" in (o.get("text") or "") or "last saw this print" in (o.get("text") or "")]
+    assert offenders == [], offenders
+    # Proved scored (the guard keeps each text's start, so the lines are found by theirs).
+    scored = [o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100)]
+    assert sum("FCC lost contact with ZZ Contrast XL" in (t or "") for t in scored) == 2, scored
+    assert any("FCC last saw this print" in (t or "") for t in scored), scored
+    page.keyboard.press("Escape")
+
+
+def test_review_basis_controls_are_readable(page: Page, base_url: str):
+    """Group 65.1 (1b): a card whose download kept its figures offers Charge the whole
+    print and "How far it got: [ ] %" with Work it out, and says the basis it was worked
+    out at. Each readable on its card. A made-up review in this page only; nothing is
+    written."""
+    import json as _json
+    import conftest
+    figures = {"footer": {"0": 40.0}, "by_pct": {"0": [round(0.4 * i, 4) for i in range(101)]}}
+    row = {"sid": 9001, "toolhead": "ZZ-1", "position": 0, "grams": 24.8, "current_used": 100.0,
+           "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 875.2,
+           "display": "#9001 Contrast PLA", "color": "c0392b", "ambiguous": False}
+    pending = [{"printer_name": "ZZ Contrast XL", "job_id": "b1", "filename": "/usb/BASIS~1.BGC", "progress": 0.62,
+                "seen_progress": 0.3, "basis": 62, "rev": 1, "total_grams": 24.8, "kind": "partial",
+                "ambiguous": True, "spools": [row], "figures": figures}]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="b1"] .fcc-cr-basis', timeout=15000)
+    basis = page.locator('#fcc-cancel-review-overlay .fcc-cr-card[data-job="b1"]')
+    words = ("Charge the whole print", "How far it got", "Work it out", "Worked out at 62%")
+    assert [o for o in conftest.contrast_offenders(basis) if any(w in (o.get("text") or "") for w in words)] == []
+    scored = [o.get("text") or "" for o in conftest.contrast_offenders(basis, min_ratio=100)]
+    for w in words:
+        assert any(w in t for t in scored), (w, scored)
     page.keyboard.press("Escape")
 
 
@@ -1331,6 +1523,79 @@ def test_the_wizards_tare_from_the_filament_is_readable(page: Page, base_url: st
     conftest.close_wizard(page)
 
 
+def test_edit_spools_prusament_link_words_are_readable(page: Page, base_url: str):
+    """Group 66.3 (Derek's (B)): Edit Spool's "📷 Link this spool to its Prusament QR" box,
+    its row's badge (green when the QR links at Save, amber when it won't) and its note
+    line, on the wizard's dark ground. The spool, the owner check and the QR's page are
+    stubs, every write is answered in the browser, and nothing is saved. Scored from the
+    box (the guard scores descendants only), the words proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    qr = "https://prusament.com/spool/17705/abc123def0"
+    spool = {"id": 9101, "archived": False, "extra": {}, "initial_weight": 1000.0, "used_weight": 100.0,
+             "remaining_weight": 900.0, "spool_weight": 0.0, "location": "", "registered": "2026-02-11T04:07:24Z",
+             "filament": {"id": 9102, "name": "Galaxy Black", "material": "PLA", "color_hex": "111111",
+                          "weight": 1000.0, "spool_weight": 193.0, "extra": {},
+                          "vendor": {"id": 9, "name": "Prusament", "extra": {}}}}
+    template = {"name": "Prusament PLA Galaxy Black", "material": "PLA", "vendor": {"name": "Prusament"},
+                "color_name": "Galaxy Black", "weight": 1012.0, "weight_is_default": False, "spool_weight": 193.0,
+                "external_link": qr, "purchase_link": "", "extra": {"prusament_manufacturing_date": "2026-03-01",
+                                                                    "prusament_length_m": "336"}}
+    _read_only(page, extra_get={
+        "/api/spool_details": spool,
+        "/api/prusament/linked_spools": {"success": True, "spool_id": "17705", "spool_hash": "abc123def0", "spools": []},
+        "/api/external/search": {"success": True, "results": [template]},
+    })
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditWizard === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openEditWizard(9101); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool'"
+                           " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    row = page.locator("[data-spool-row-idx='0'] input")
+    box = page.locator("#wiz-spool-rows-box")
+    row.fill(qr)
+    row.press("Tab")
+    page.wait_for_function("() => wizardState.spoolRows[0].status === 'linked-new'", timeout=10_000)
+    assert conftest.contrast_offenders(box) == []
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(box, min_ratio=100))
+    assert "Links at Save" in scored and "Prusament says 1012 g" in scored, scored   # the walker cuts long text
+    # Amber: a link that isn't a Prusament spool's (no request needed).
+    row.fill("https://example.com/not-a-spool")
+    row.press("Tab")
+    page.wait_for_function("() => wizardState.spoolRows[0].status === 'refused'", timeout=10_000)
+    assert conftest.contrast_offenders(box) == []
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(box, min_ratio=100))
+    assert "Not a Prusament spool's link" in scored, scored
+    page.evaluate("() => { wizardState.isDirty = false; }")
+    conftest.close_wizard(page)
+
+
+def test_the_missing_tare_questions_offer_is_readable(page: Page, base_url: str):
+    """Group 63.9(a), Derek's option 2 (2026-11-19, the Group 63 review's round 4): a
+    new spool's offered empty weight is a "Use about 245 g" button beside its words,
+    on the missing-tare question's dark ground. Scored from the dialog (the guard
+    scores descendants only), both proved scored. Every write is answered in the
+    browser, and the question is cancelled: nothing is saved."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.promptMissingEmptyWeight === 'function'"
+                           " && typeof window.newSpoolTareOfferWords === 'function'", timeout=45_000)
+    page.evaluate("() => { window.promptMissingEmptyWeight({ prefill: 245,"
+                  " offer: window.newSpoolTareOfferWords(1245, 1000, 245) }); }")
+    expect(page.locator("#fcc-missing-empty-weight-overlay-use-offer")).to_be_visible()
+    dialog = page.locator("#fcc-missing-empty-weight-overlay [role=dialog]")
+    mine = ("Use about 245", "If this spool is new and full")   # the guard trims a text to ~80 characters
+    offenders = [o for o in conftest.contrast_offenders(dialog) if any(m in (o.get("text") or "") for m in mine)]
+    assert offenders == [], offenders
+    scored = [o.get("text") or "" for o in conftest.contrast_offenders(dialog, min_ratio=100)]
+    assert all(any(m in t for t in scored) for m in mine), scored
+    page.locator("#fcc-missing-empty-weight-overlay-cancel").click()
+
+
 def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
     """Group 54 review R5-1: the post-archive empty-weight prompt can carry a notice
     (the weigh page's "Spool #99 is archived but still at …", which the prompt
@@ -1356,6 +1621,65 @@ def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
     scored = [o.get("text") for o in conftest.contrast_offenders(dialog, min_ratio=100)]
     assert any("still at Shelf 1" in (t or "") for t in scored), scored
     page.locator("#fcc-archive-later").click()
+
+
+def test_the_empty_weight_prompts_add_ons_line_is_readable(page: Page, base_url: str):
+    """Group 65.3: both empty-spool prompts carry a line about clips, caps and edge
+    guards: the post-archive prompt's "Take off any clip, cap or edge guards before you
+    weigh it: …", and the missing-tare question's (a Gross reading with no empty weight)
+    "Weigh the empty spool as the full one was weighed, with any clip, cap or edge guards
+    off: …" (the group's first review reworded both, 41503f1f). Each line on its prompt's
+    dark ground, scored from the dialog and proved scored, by words within the first 80
+    characters the guard reports. A stub filament, every write answered in the browser,
+    nothing saved."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9004, "name": "Ocean Blue", "material": "PLA", "spool_weight": None,
+                "vendor": {"id": 9005, "name": "Example Brand", "empty_spool_weight": None}}
+    _read_only(page, extra_get={"/api/filament_details": filament})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.showArchiveEmptyWeightPrompt === 'function'"
+                           " && typeof window.promptMissingEmptyWeight === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    words = "Take off any clip, cap or edge guards before you weigh it"
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 9004, null); }")
+    expect(page.locator("#fcc-archive-empty-overlay #fcc-archive-empty-addons")).to_be_visible()
+    dialog = page.locator("#fcc-archive-empty-overlay [data-fcc-weight-keys]")
+    assert [o for o in conftest.contrast_offenders(dialog) if words in (o.get("text") or "")] == []
+    assert any(words in (o.get("text") or "") for o in conftest.contrast_offenders(dialog, min_ratio=100))
+    page.locator("#fcc-archive-later").click()
+    expect(page.locator("#fcc-archive-empty-overlay")).to_have_count(0)
+    # The missing-tare question (no Promise handed back: evaluate would wait on it).
+    page.evaluate("() => { window.promptMissingEmptyWeight({ vendor: 'Example Brand', material: 'PLA',"
+                  " color: 'Ocean Blue', allowSkip: true }); }")
+    expect(page.locator("#fcc-missing-empty-weight-overlay-addons")).to_be_visible()
+    question = page.locator("#fcc-missing-empty-weight-overlay [role=dialog]")
+    words = "Weigh the empty spool as the full one was weighed, with any clip, cap"
+    assert [o for o in conftest.contrast_offenders(question) if words in (o.get("text") or "")] == []
+    assert any(words in (o.get("text") or "") for o in conftest.contrast_offenders(question, min_ratio=100))
+    page.keyboard.press("Escape")
+
+
+def test_the_refill_question_is_readable(page: Page, base_url: str):
+    """Group 63.1: the question a refill after a toolhead asks (window.askRefillPlace):
+    its title, words, answers (Back on the head greyed out, its reason line in yellow)
+    and the scan line, on its dark ground. Made-up names; every write is answered in
+    the browser, and Leave it Unassigned closes it, so nothing is moved. Scored from
+    the panel (the guard scores descendants only), and the reason line is proved
+    scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.askRefillPlace === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.askRefillPlace(42, { place: 'HEAD-1', room: 'ROOM-1', held_by: [99] }); }")
+    panel = page.locator("#fcc-refill-place .fcc-refill-panel")
+    expect(panel).to_be_visible()
+    assert conftest.contrast_offenders(panel) == [], conftest.contrast_offenders(panel)
+    scored = [o.get("text") for o in conftest.contrast_offenders(panel, min_ratio=100)]
+    assert any("HEAD-1 holds #99 now" in (t or "") for t in scored), scored
+    page.locator("#fcc-refill-leave").click()
 
 
 @pytest.mark.usefixtures("require_server")
@@ -1539,7 +1863,7 @@ def test_print_end_review_notes_are_readable(page: Page, base_url: str, assert_c
     # Each element's text is scored by its first 80 characters (contrast_offenders).
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
     for said in ("had #42 when the print started", "is on HEAD-7 now", "isn't sure which spool printed",
-                 "isn't sure which spool it came from", "changed mid-print at position(s)"):
+                 "isn't sure which spool it came from", "changed mid-print on HEAD-5"):
         assert said in scored, (said, scored)
     page.keyboard.press("Escape")
 
@@ -1793,3 +2117,284 @@ def test_review_yes_naming_a_plain_line_is_readable(page: Page, base_url: str, a
     assert all(w >= 600 for _, w in drawn), drawn
     assert scored.split(" | ").count("T6 · HEAD-7") == 2, scored
     page.keyboard.press("Escape")
+
+
+def test_the_weighed_spool_note_on_a_review_card_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 64, Decision 1 (Derek, 2026-11-20: "both should be heavily noted in the
+    UI"): a spool weighed (or changed) after its print ended says so in a loud note
+    (`.fcc-cr-weighed`) on the uncharged-grams card's held line and on a review
+    row, its two looks (FCC knows the weighing came after the print: 0 g filled in;
+    it can't tell: the print's grams filled in). Made-up reviews in this page only;
+    nothing is written. The offline check of the notes is test_weighed_card_64_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    known = ("#200 on HEAD-1 was weighed on the Quick-Weigh at 14:05, after this print ended (at 13:50), "
+             "so the scale already counted its 12.40 g")
+    unsure = ("#300 on HEAD-2 changed weight after this print ended (at 13:50) (50.00 g used then, "
+              "54.00 g now), and FCC can't tell whether the scale counted this print's 3.60 g")
+    held = {"printer_name": "ZZ Contrast XL", "job_id": "w1#shortfall", "shortfall_of": "w1",
+            "filename": "/usb/F.BGC", "progress": 1.0, "total_grams": 16.0, "spools": [], "ambiguous": False,
+            "kind": "shortfall", "rev": 0, "heads_source": "print_end", "heads_words": words,
+            "unresolved_usage": {"0": 12.4, "1": 3.6}, "shortfall_prefill": {"0": 0.0, "1": 3.6},
+            "shortfall_causes": {
+                "0": {"why": "weighed", "sid": 200, "toolhead": "HEAD-1", "archived": False,
+                      "known_order": True, "words": known},
+                "1": {"why": "weighed", "sid": 300, "toolhead": "HEAD-2", "archived": False,
+                      "known_order": False, "words": unsure}},
+            "heads_at_end": [{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]},
+                             {"toolhead": "HEAD-2", "position": 1, "sid": 300, "sids": [300]}]}
+    row = {"sid": 200, "toolhead": "HEAD-1", "position": 0, "grams": 12.4, "current_used": 100.0,
+           "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 887.6,
+           "display": "ZZ Contrast spool 200", "color": "ff0000", "ambiguous": False,
+           "prefill": 0.0, "weighed": {"words": known, "known_order": True}}
+    partial = {"printer_name": "ZZ Contrast XL", "job_id": "w2", "filename": "/usb/G.BGC", "progress": 0.5,
+               "total_grams": 12.4, "spools": [row], "ambiguous": False, "kind": "partial",
+               "heads_source": "print_end", "heads_words": words,
+               "heads_at_end": [{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}]}
+    def _score(rec, wants):
+        page.unroute("**/api/cancel_deduct/pending*")
+        page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+            status=200, content_type="application/json", body=_json.dumps({"pending": [rec]})))
+        page.goto(base_url)
+        page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+        page.evaluate("() => window.openCancelReview()")
+        card = f'#fcc-cancel-review-overlay .fcc-cr-card[data-job="{rec["job_id"]}"]'
+        page.wait_for_selector(f"{card} .fcc-cr-weighed", timeout=15000)
+        assert page.locator(f"{card} .fcc-cr-weighed").count() == len(wants)
+        notes = page.locator(card)
+        assert_contrast(notes)
+        scored = " | ".join(o["text"] for o in conftest.contrast_offenders(notes, min_ratio=100))
+        for want in wants:
+            assert want in scored, (want, scored)
+        page.keyboard.press("Escape")
+
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body="{}"))
+    # (the report cuts each element's text, so each note is found by its start)
+    _score(held, ["Weighed after this print ended: 0 g filled in",
+                  "Changed weight after this print ended: check before you Apply"])
+    _score(partial, ["Weighed after this print ended: 0 g filled in"])
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_review_panels_outcome_line_and_held_card_head_are_readable(page: Page, base_url: str,
+                                                                          assert_contrast):
+    """Group 64 full review (PI1, WD1): a Confirm that takes its card away while
+    another keeps the 🛑 Review panel up says its outcome on the panel's own line
+    (`#fcc-cr-panel-notice`, the card banner's look), and an uncharged-grams card of
+    held lines heads itself with why they are held. Made-up reviews and answers in
+    this page only; nothing is written. The offline checks are in
+    test_weighed_card_64_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    known = ("#200 on HEAD-1 was weighed on the Quick-Weigh at 14:05, after this print ended (at 13:50), "
+             "so the scale already counted its 12.40 g")
+    row = {"sid": 200, "toolhead": "HEAD-1", "position": 0, "grams": 12.4, "current_used": 100.0,
+           "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 887.6,
+           "display": "ZZ Contrast spool 200", "color": "ff0000", "ambiguous": False,
+           "prefill": 0.0, "weighed": {"words": known, "known_order": True}}
+    partial = {"printer_name": "ZZ Contrast XL", "job_id": "o1", "filename": "/usb/G.BGC", "progress": 0.5,
+               "total_grams": 12.4, "spools": [row], "ambiguous": False, "kind": "partial",
+               "heads_source": "print_end", "heads_words": words,
+               "heads_at_end": [{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}]}
+    held = {"printer_name": "ZZ Contrast XL", "job_id": "o2#shortfall", "shortfall_of": "o2",
+            "filename": "/usb/F.BGC", "progress": 1.0, "total_grams": 12.4, "spools": [], "ambiguous": False,
+            "kind": "shortfall", "rev": 0, "heads_source": "print_end", "heads_words": words,
+            "unresolved_usage": {"0": 12.4}, "shortfall_prefill": {"0": 0.0},
+            "shortfall_causes": {"0": {"why": "weighed", "sid": 200, "toolhead": "HEAD-1", "archived": False,
+                                       "known_order": True, "words": known}},
+            "heads_at_end": [{"toolhead": "HEAD-1", "position": 0, "sid": 200, "sids": [200]}]}
+    answer = {"status": "confirmed", "applied": [], "errors": [], "shortfall_g": 0.0, "settled_unsure": False,
+              "left_weighed": [{"line": "0", "sid": 200, "grams": 12.4, "known_order": True}]}
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": [partial, held]})))
+    page.route("**/api/cancel_deduct/confirm*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps(answer)))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    card = '#fcc-cancel-review-overlay .fcc-cr-card[data-job="o1"]'
+    page.wait_for_selector(card, timeout=15000)
+    page.click(f"{card} .fcc-cr-confirm")
+    page.wait_for_function("() => { const n = document.getElementById('fcc-cr-panel-notice');"
+                           " return !!(n && n.style.display !== 'none' && n.textContent); }", timeout=15000)
+    dialog = page.locator("#fcc-cancel-review-overlay [role=dialog]")
+    assert_contrast(dialog)
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(dialog, min_ratio=100))
+    # (the report cuts each element's text, so each is found by its start)
+    for want in ("Left 12.4g uncharged on #200", "⚖️ ZZ Contrast XL — 12.4g held: #200 was weighed",
+                 "FCC held these grams instead of charging them"):
+        assert want in scored, (want, scored)
+    page.keyboard.press("Escape")
+
+
+def test_the_wizards_filament_tare_from_its_brand_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.7 (Derek's D2 (a)): Edit Spool of a spool whose filament has no empty
+    weight of its own shows its brand's 167 g in the filament's Spool Wt box, marked
+    "↩ from vendor" beside the label and in the closed Physical Specs summary ("167g tare
+    ↩ from vendor"), in the spool box's look. The spool is a stub, every write is answered
+    in the browser, and nothing is saved. Each root is scored from its parent (the guard
+    scores descendants only), and each mark is proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    vendor = {"id": 9003, "name": "Example Brand", "extra": {}, "empty_spool_weight": 167.0}
+    filament = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+                "extra": {}, "vendor": vendor}
+    spool = {"id": 9001, "filament": filament, "initial_weight": 1000.0, "used_weight": 100.0,
+             "remaining_weight": 900.0, "location": "", "extra": {}, "archived": False}
+    _read_only(page, extra_get={"/api/spool_details": spool,
+                                "/api/external/vendors": {"success": True, "vendors": [vendor]}})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditWizard === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openEditWizard(9001); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool'"
+                           " && document.getElementById('wiz-fil-empty_weight').value === '167'"
+                           " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    toggle = page.locator('button.fcc-wiz-section-toggle[data-bs-target="#wiz-fil-physical-panel"]')
+    expect(toggle.locator(".fcc-wiz-section-summary")).to_contain_text("167g tare ↩ from vendor")
+    # The toggle's ▾ is left out, as in the price case: a state glyph, older than 66.
+    offenders = [o for o in conftest.contrast_offenders(toggle)
+                 if "fcc-wiz-section-chevron" not in (o.get("className") or "")]
+    assert offenders == [], offenders
+    scored = [o.get("text") for o in conftest.contrast_offenders(toggle, min_ratio=100)]
+    assert "↩ from vendor" in scored, scored
+    page.evaluate("() => bootstrap.Collapse.getOrCreateInstance("
+                  "document.getElementById('wiz-fil-physical-panel'), { toggle: false }).show()")
+    badge = page.locator("#wiz-fil-empty-inherited-badge")
+    expect(badge).to_be_visible()
+    column = badge.locator("xpath=ancestor::div[contains(@class, 'col-md-3')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "wiz-fil-empty-inherited-badge"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the filament's badge was never scored"
+    conftest.close_wizard(page)
+
+
+def test_edit_filaments_tare_from_its_brand_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.7 (Derek's D2 (a)): Edit Filament of a filament with no empty weight of its
+    own shows its manufacturer's 167 g on the Specs tab, marked "↩ from vendor" beside the
+    label, in the wizard's badge look. The filament is handed to the window, its vendor
+    list is a stub and every write is answered in the browser, so nothing is saved. The
+    badge is scored from its column and proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    vendor = {"id": 9003, "name": "Example Brand", "extra": {}, "empty_spool_weight": 167.0}
+    _read_only(page, extra_get={"/api/vendors": {"success": True, "vendors": [vendor]}})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditFilamentForm === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    fil = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+           "extra": {}, "vendor": vendor}
+    page.evaluate("(f) => { window.openEditFilamentForm(f); }", fil)
+    conftest.wait_modal_settled(page, "editFilamentModal")
+    page.locator("#editfil-tab-specs-btn").click()
+    badge = page.locator("#editfil-spool-weight-inherited-badge")
+    expect(badge).to_be_visible()
+    assert page.locator("#editfil-spool-weight").input_value() == "167"
+    column = badge.locator("xpath=ancestor::div[contains(@class, 'col-6')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "editfil-spool-weight-inherited-badge"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the badge was never scored"
+    # Derek's walk pick (b), 2026-11-25: the amber "(vendor: N g)" note is hidden while the
+    # badge shows, and back once a figure is typed (nothing is saved): scored there, proved.
+    note = page.locator("#editfil-vendor-wt-hint")
+    expect(note).to_be_hidden()
+    page.locator("#editfil-spool-weight").fill("190")
+    expect(note).to_be_visible()
+    expect(note).to_have_text("(vendor: 167g)")
+    expect(badge).to_be_hidden()
+    assert_contrast(column)
+    assert any(o.get("id") == "editfil-vendor-wt-hint"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the note was never scored"
+
+
+def test_edit_filaments_unread_manufacturer_note_is_readable(page: Page, base_url: str, assert_contrast):
+    """Review round 2 of Group 66 (Q1-04): with the manufacturer list unread, a name Edit
+    Filament can't check is said under the Vendor box, in the "(vendor: N g)" hint's amber.
+    The filament is handed to the window, its vendor list answers that it couldn't be read,
+    and every write is answered in the browser, so nothing is saved. Scored from its
+    column, the note proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page, extra_get={"/api/vendors": {"success": False, "msg": "Spoolman didn't answer"}})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditFilamentForm === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    vendor = {"id": 9003, "name": "Example Brand", "extra": {}}
+    fil = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+           "extra": {}, "vendor": vendor}
+    page.evaluate("(f) => { window.openEditFilamentForm(f); }", fil)
+    conftest.wait_modal_settled(page, "editFilamentModal")
+    page.locator("#editfil-vendor-name").fill("Exmaple Brand")
+    note = page.locator("#editfil-vendor-unread-note")
+    expect(note).to_be_visible()
+    assert "Couldn't read the manufacturer list" in note.inner_text()
+    column = note.locator("xpath=ancestor::div[contains(@class, 'col-6')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "editfil-vendor-unread-note"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the note was never scored"
+
+
+def test_the_wizards_unsaved_changes_question_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.2 (review round 1, R3-09): the wizard's "Unsaved Changes" question, and the
+    line under its buttons that says a scan was held off while it is up, on its dark
+    ground. Every write is answered in the browser; the question is answered Keep Editing,
+    and nothing is saved. Scored from the overlay (the guard scores descendants only), the
+    line proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openWizardModal === 'function' && typeof window.processScan === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openWizardModal(); }")
+    conftest.wait_modal_settled(page, "wizardModal")
+    page.evaluate("() => { wizardState.isDirty = true; window.openWizardModal(); }")
+    page.wait_for_selector("#fcc-wiz-dirty-confirm")
+    page.evaluate("() => window.processScan('ID:57', 'barcode')")
+    flash = page.locator("#fcc-wiz-dirty-flash")
+    expect(flash).not_to_have_text("")
+    root = page.locator("#fcc-wiz-unsaved-changes")
+    assert_contrast(root)
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(root, min_ratio=100))
+    assert "Unsaved Changes" in scored and flash.inner_text()[:20] in scored, scored
+    page.locator("#fcc-wiz-dirty-cancel").click()
+    page.evaluate("() => { wizardState.isDirty = false; }")
+    conftest.close_wizard(page)
+
+
+def test_edit_spools_qr_question_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.2 (review round 1, R3-04): Edit Spool's "A Prusament QR was scanned"
+    question (Keep Editing / Start an Add / Link it), and its line saying a scan was held
+    off while it is up, on its dark ground. The spool is a stub, every write is answered
+    in the browser, and the question is answered Keep Editing: nothing is saved. Scored
+    from the overlay (the guard scores descendants only), the line proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+                "extra": {}, "vendor": {"id": 9003, "name": "Example Brand", "extra": {}}}
+    spool = {"id": 9001, "filament": filament, "initial_weight": 1000.0, "used_weight": 100.0,
+             "remaining_weight": 900.0, "location": "", "extra": {}, "archived": False}
+    _read_only(page, extra_get={"/api/spool_details": spool})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditWizard === 'function' && typeof window.processScan === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openEditWizard(9001); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool'"
+                           " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    page.evaluate("() => { window.wizardAskQrInEdit('https://prusament.com/spool/17705/abc123def0/'); }")
+    page.wait_for_selector("#fcc-wiz-qr-keep")
+    page.evaluate("() => window.processScan('ID:57', 'barcode')")
+    flash = page.locator("#fcc-wiz-qr-flash")
+    expect(flash).not_to_have_text("")
+    root = page.locator("#fcc-wiz-qr-in-edit")
+    assert_contrast(root)
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(root, min_ratio=100))
+    assert "A Prusament QR was scanned" in scored and flash.inner_text()[:20] in scored, scored
+    page.locator("#fcc-wiz-qr-keep").click()
+    page.evaluate("() => { wizardState.isDirty = false; }")
+    conftest.close_wizard(page)

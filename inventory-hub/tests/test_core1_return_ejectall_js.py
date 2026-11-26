@@ -89,6 +89,9 @@ const MODULE_PATHS = __MODULE_PATHS__;
 function prelude() {
   globalThis.window = globalThis;
   globalThis.self = globalThis;
+  // Group 62.3: a question's answers wait 700 ms for a click; a scenario presses them at
+  // once. A scenario about the arming deletes it.
+  globalThis.fccQuestionArmMs = 0;
   const rec = globalThis.__rec = { toasts: [], logs: [], fetches: [], overlays: [], safety: [], ejectAll: [] };
   globalThis.__overlayEls = [];
 
@@ -434,7 +437,7 @@ window.triggerEjectAll = (loc) => { __rec.ejectAll.push(loc); };
 // not loaded here); without it the lookup throws into the "Scan Error" catch.
 window.closeManage = () => {};
 window.__respond = (url) => url === '/api/identify_scan'
-  ? { body: { type: 'command', cmd: 'ejectall' } } : { body: {} };
+  ? { body: __ANSWER__ } : { body: {} };
 if (__OPEN__) document.getElementById('manageModal').classList.add('show');
 document.getElementById('manage-loc-id').value = __LOC__;
 processScan(__TEXT__, 'barcode');
@@ -442,14 +445,18 @@ await __settle(80);
 return { ejectAll: __rec.ejectAll, toasts: __rec.toasts, logs: __rec.logs, fetches: __rec.fetches };
 """
 
-# The exact client-side match, and the backend-answered route (identify_scan's
-# substring match returns cmd 'ejectall' for any text containing CMD:EJECTALL).
+# The exact client-side match, and the backend-answered route. The server's answer
+# is the real logic.resolve_scan's (identify_scan returns a command as resolved):
+# a stub that answered 'ejectall' for any text hid that the real ladder answered
+# 'eject', which turned Eject mode on (Group 62.1).
 SCAN_ROUTES = [pytest.param("CMD:EJECTALL", id="client-match"),
                pytest.param("label CMD:EJECTALL", id="backend-answered")]
 
 
 def _ejectall_scan(tmp_path, text: str, *, manager_open: bool, loc: str) -> dict:
+    import logic
     return run_js(tmp_path, ["inv_cmd.js"], (EJECTALL_SCAN_SCENARIO
+                                             .replace("__ANSWER__", json.dumps(logic.resolve_scan(text)))
                                              .replace("__OPEN__", json.dumps(manager_open))
                                              .replace("__LOC__", json.dumps(loc))
                                              .replace("__TEXT__", json.dumps(text))))

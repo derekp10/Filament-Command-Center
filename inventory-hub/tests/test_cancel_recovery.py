@@ -135,15 +135,47 @@ def test_recover_resume_same_job_restores_latch_no_fire():
     assert app_module._PRINT_TRACKER["XL"]["job_id"] == "J9"
 
 
-def test_recover_different_job_warns_and_latches_new_no_fire():
-    """now PRINTING with a DIFFERENT job → old outcome unknown → warn (manual),
-    latch the new job, don't deduct the old."""
-    dispatch, log = _recover_with(
-        {"XL": _entry(job_id="J9")}, "PRINTING",
-        cur_job={"job_id": "J10", "filename": "/usb/N.BGC", "progress": 0.1})
+def test_recover_different_job_reviews_the_old_one_and_latches_the_new():
+    """now PRINTING with a DIFFERENT job → the old one ended during the outage, and
+    FCC can't tell cancel from completion → the AMBIGUOUS REVIEW, as the live job
+    change routes its outgoing print (Group 64.3 (6); it was a WARNING telling Derek
+    to weigh the spool). Never the cancel deduct. The new job is latched."""
+    with patch.object(print_monitor, "_dispatch_ambiguous_edge") as amb:
+        dispatch, log = _recover_with(
+            {"XL": _entry(job_id="J9")}, "PRINTING",
+            cur_job={"job_id": "J10", "filename": "/usb/N.BGC", "progress": 0.1})
     dispatch.assert_not_called()
-    assert log.call_args.args[1] == "WARNING"
+    amb.assert_called_once()
+    assert amb.call_args.args[:4] == ("XL", "/usb/F.BGC", "J9", 0.4)
+    assert amb.call_args.kwargs["progress_unknown"] is False
+    assert amb.call_args.kwargs["heads_when"] == "restart"
+    assert log.call_args.args[1] == "WARNING" and "surfacing a review" in log.call_args.args[0]
     assert app_module._PRINT_TRACKER["XL"]["job_id"] == "J10"
+
+
+def test_recover_different_job_with_no_progress_sampled_asks_unmeasured():
+    """Group 64.3 (6): an old print FCC never read a progress for is the
+    "couldn't measure" review (progress_unknown), never a 0% partial."""
+    entry = _entry(job_id="J9")
+    entry.pop("progress")
+    with patch.object(print_monitor, "_dispatch_ambiguous_edge") as amb:
+        _recover_with({"XL": entry}, "PRINTING",
+                      cur_job={"job_id": "J10", "filename": "/usb/N.BGC", "progress": 0.1})
+    amb.assert_called_once()
+    assert amb.call_args.kwargs["progress_unknown"] is True
+
+
+def test_recover_different_job_that_fcc_already_holds_only_says_so():
+    """Group 64.3 (6): a print whose review is already waiting is never reviewed
+    twice: the line says where it is. Passes on 83aa20a by design (the hotfix's
+    words); pinned so the new review never opens a second one."""
+    import cancel_review_store
+    with patch.object(cancel_review_store, "has_pending", return_value=True), \
+            patch.object(print_monitor, "_dispatch_ambiguous_edge") as amb:
+        _, log = _recover_with({"XL": _entry(job_id="J9")}, "PRINTING",
+                               cur_job={"job_id": "J10", "filename": "/usb/N.BGC", "progress": 0.1})
+    amb.assert_not_called()
+    assert "waiting in 🛑 Review" in log.call_args.args[0]
 
 
 def test_recover_idle_after_inprogress_surfaces_ambiguous_review():

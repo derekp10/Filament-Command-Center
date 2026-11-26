@@ -1,9 +1,8 @@
 <div class="modal fade" id="spoolModal" tabindex="-1" data-bs-keyboard="false">
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content border-info" style="position:relative;">
-            <!-- Inline destructive-action overlay (Step 1 then Step 2). Not a
-                 nested Swal per CLAUDE.md project conventions. Hidden by default. -->
-            <div id="fcc-spool-delete-overlay" class="fcc-delete-overlay" style="display:none;"></div>
+            <!-- The delete question (two steps) is a mountOverlay since Group 62.8,
+                 mounted on the page as #fcc-spool-delete-overlay (inv_details.js). -->
             <div class="modal-header bg-dark border-bottom border-secondary">
                 <h5 class="modal-title text-info" id="modal-title">Spool Details</h5>
                 <!-- Group 55.3: this window's help (help_texts.js, "spool-window"). -->
@@ -112,8 +111,7 @@
 <div class="modal fade" id="filamentModal" tabindex="-1" data-bs-keyboard="false">
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content border-success" style="position:relative;">
-            <!-- Inline destructive-action overlay for filament cascade delete. -->
-            <div id="fcc-filament-delete-overlay" class="fcc-delete-overlay" style="display:none;"></div>
+            <!-- The delete question: a mountOverlay, #fcc-filament-delete-overlay (Group 62.8). -->
             <div class="modal-header bg-dark border-bottom border-success">
                 <h5 class="modal-title text-success">🧬 Filament Definition (Swatch)</h5>
                 <!-- Group 55.3: this window's help (help_texts.js, "filament-window"). -->
@@ -431,6 +429,9 @@
                                     <input type="hidden" id="editfil-vendor-id" value="">
                                     <div id="editfil-vendor-dropdown" class="editfil-combo-dropdown"></div>
                                 </div>
+                                <!-- Review round 2 of Group 66 (Q1-04): the list couldn't be read, so a
+                                     typed name FCC can't check may be made a new manufacturer at Save. -->
+                                <div id="editfil-vendor-unread-note" class="small mt-1" style="display:none; color:#ffc97a;"></div>
                             </div>
                         </div>
                         <!-- Original Color Name + Filament Attributes moved to Basic on
@@ -496,6 +497,13 @@
                                 <label class="form-label text-light small mb-1">
                                     Empty Spool Wt (g)
                                     <span id="editfil-vendor-wt-hint" class="small" style="color:#ffc97a;"></span>
+                                    <!-- Group 66.7 (Derek's D2 (a), 2026-11-24): the box shows the
+                                         manufacturer's weight, this filament having none of its own;
+                                         Save keeps it that way (the wizard's spool badge's look). -->
+                                    <span id="editfil-spool-weight-inherited-badge"
+                                        class="badge bg-info-subtle text-info-emphasis ms-1"
+                                        style="display: none; font-size: var(--fcc-fs-label); font-weight: normal;"
+                                        title="The manufacturer's empty weight: this filament has none of its own, and saving keeps it that way. Type a weight to give the filament its own.">↩ from <span id="editfil-spool-weight-inherited-source">vendor</span></span>
                                 </label>
                                 <div class="input-group">
                                     <input type="number" step="0.1" id="editfil-spool-weight" class="form-control bg-black text-white border-secondary" autocomplete="off">

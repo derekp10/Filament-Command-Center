@@ -230,9 +230,12 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 //     (the no). Nothing about printing is invented: a printing answer's body
 //     says so itself. Enter stores (Derek, 2026-10-14: a toolhead can't be
 //     loaded mid-print, and on the fed dialog too); with no store option it
-//     cancels, never loads. While it is open, other scans are held off
-//     (window._fccOpenMoveQuestion, read by processScan).
-// Both: one answer only (a double click, or a click racing a scan, moves
+//     cancels, never loads.
+// Both: while it is open, other scans are held off (window._fccOpenMoveQuestions,
+// read by processScan): its own QRs and a bare CMD:CANCEL answer it, and any other
+// scan is refused and said on its status line (Group 62.2: the yes / no held off
+// nothing, so a slot label scanned meanwhile started a second move behind it).
+// One answer only (a double click, or a click racing a scan, moves
 // once); a scan in flight owns its Enter, and so does a slower scanner's
 // buffered payload; Tab (and ←/→ in the three-way) cycles the buttons; Escape
 // cancels through mountOverlay; the QR row mirrors the buttons (CMD:CONFIRM /
@@ -258,11 +261,14 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // now): a line that fits is drawn as one row still, and one that doesn't keeps its
 // name whole and puts its `where` under it, nothing cut (a touch screen can't read a
 // line's title).
-// `armAfterMs` (Group 58 review; default 0, every other door as it was): the yes
-// button's CLICK does nothing until that long after the mount. The question can open
-// with its yes under the pointer, and the second click of a double click on the
-// button that asked it then answered a question nobody had read (a whole batch
-// parked). Enter and the QRs are no second click, so they don't wait.
+// `armAfterMs` (Group 58 review; every question since Group 62.3): the yes button's
+// CLICK, and the store's, does nothing until that long after the mount. The question
+// can open with its yes under the pointer, and the second click of a double click on
+// the button that asked it then answered a question nobody had read (a whole batch
+// parked). Left out, it is window.fccQuestionArmMs when a number (the test harnesses
+// set 0), else QUESTION_ARM_MS (700, Group 58's double-press figure); a door passes 0
+// only with a comment saying why. Cancel never waits, and Enter and the QRs are no
+// second click, so they don't wait either.
 // A list of every spool, as colour tiles (`tiles: true` on a section; Done's question,
 // Derek, 2026-11-03: "display the spools like we did in the audit window ... a vibrant
 // list of data where an out of place color might spark a memory"): its lines are
@@ -274,6 +280,105 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // is no scroller (fccFitQuestion's rule). Scrolling, the lists are a stop in the Tab
 // order that the arrow and page keys scroll, and Enter there does what the hint says.
 const _openMoveConfirms = {};
+
+// --- A QUESTION'S ANSWERS WAIT FOR A DOUBLE CLICK TO PASS (Group 62.3) ---
+// How long a question's answers that do something take no click after it opens: the
+// second click of a double click on the button that asked it lands within this (Group
+// 58's DOUBLE_PRESS_MS). questionArmMs(explicit): a door's own figure, else the test
+// harnesses' window.fccQuestionArmMs (0), read as each question opens, else 700.
+// armedClick(fn, ms): fn, called only once `ms` have passed since now, except for a click
+// the keyboard made (a Space or an Enter on the button, `detail` 0): that is no double
+// click's second press, as Group 58's shield reads it (the review of Group 62: a person's
+// Space on the answer the question opened on did nothing for 700 ms).
+const QUESTION_ARM_MS = 700;
+window.QUESTION_ARM_MS = QUESTION_ARM_MS;
+const questionArmMs = (explicit) => (typeof explicit === 'number' ? explicit
+    : (typeof window.fccQuestionArmMs === 'number' ? window.fccQuestionArmMs : QUESTION_ARM_MS));
+window.questionArmMs = questionArmMs;
+const armedClick = (fn, ms) => {
+    if (!(ms > 0)) return fn;
+    const armedAt = Date.now() + ms;
+    return (...args) => {
+        const e = args[0];
+        const byKeyboard = !!e && typeof e === 'object' && e.type === 'click' && e.detail === 0;
+        if (byKeyboard || Date.now() >= armedAt) return fn(...args);
+        return undefined;
+    };
+};
+window.armedClick = armedClick;
+
+// --- THE SECOND PRESS AFTER A WINDOW CLOSES UNDER THE POINTER (Group 62.3) ---
+// window.fccShieldNextPress(): called as a press closes the window it was on (the Print
+// Queue's 📄 Send), so the second press of that double click, which would land on
+// whatever lay behind the window, reaches nothing: its pointerdown, mousedown,
+// pointerup, mouseup, click and dblclick, as Group 58's _shieldPage does for the audit
+// (inv_cmd.js). Only while the press that did it is under QUESTION_ARM_MS old, only a
+// press within 16 px of it (40 for a finger or a pen), and a click from the keyboard
+// is no press; any other press ends the shield.
+(() => {
+    if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+    let last = null;      // the last primary press: { at, x, y, slop }
+    let shield = null;    // the press whose double click's second press reaches nothing
+    let eating = 0;
+    const isSecond = (first, e, now) => !!first && typeof e.clientX === 'number'
+        && now - first.at < QUESTION_ARM_MS
+        && Math.abs(e.clientX - first.x) <= first.slop && Math.abs(e.clientY - first.y) <= first.slop;
+    document.addEventListener('pointerdown', (e) => {
+        if (e.button > 0) return;
+        const now = Date.now();
+        const s = shield;
+        shield = null;            // one press: this one, or one elsewhere, ends it
+        eating = 0;
+        if (isSecond(s, e, now)) {
+            eating = now;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
+        last = { at: now, x: e.clientX, y: e.clientY, slop: e.pointerType === 'mouse' ? 16 : 40 };
+    }, true);
+    ['mousedown', 'pointerup', 'mouseup', 'click', 'dblclick'].forEach((type) => {
+        document.addEventListener(type, (e) => {
+            if (!eating || Date.now() - eating > 2000) return;
+            if (type === 'click' && !e.detail) return;      // a key's click: not this press
+            if (e.button > 0) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (type === 'dblclick') eating = 0;
+        }, true);
+    });
+    window.fccShieldNextPress = () => {
+        const now = Date.now();
+        if (last && now - last.at < QUESTION_ARM_MS) shield = Object.assign({}, last, { at: now });
+    };
+})();
+
+// --- A QUESTION HOLDS SCANS WHILE IT IS UP (Group 66) ---
+// processScan brings every scan to the open question on top (window._fccOpenMoveQuestion,
+// the registry Group 40.3 made for the move questions): the question's own
+// `route(text, source)` may take it, a bare CMD:CANCEL calls its `cancel()` (its safe
+// answer), and anything else is refused, said in a toast and on the question's `flash`
+// line, so a scan never acts behind a question nobody has answered. `question`:
+// {title, element, hint, cancel, flash, route?}. Returns release(), which the question
+// calls as it closes (a second call does nothing). A question that is a mountOverlay
+// (its `element` the overlay's root) is released when the overlay closes by any path
+// too, its host window's close included (fcc:overlay-closed).
+window.fccHoldScans = (question) => {
+    window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
+    window._fccOpenMoveQuestion = question;
+    let released = false;
+    const release = () => {
+        if (released) return;
+        released = true;
+        document.removeEventListener('fcc:overlay-closed', onClosed);
+        const open = (window._fccOpenMoveQuestions || []).filter((q) => q !== question);
+        window._fccOpenMoveQuestions = open;
+        window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+    };
+    const onClosed = (e) => { if (e && e.detail && e.detail.element === question.element) release(); };
+    document.addEventListener('fcc:overlay-closed', onClosed);
+    return release;
+};
 
 // --- A SPOOL AS A COLOUR TILE (Group 58; Derek, 2026-11-03) ---
 // The audit panel's look for a spool in a list nobody presses: Done's question and the
@@ -390,7 +495,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                                printing = null, noLoad = false, hint = '',
                                cancelLabel = '', cancelVerb = '', loadVerb = '',
                                loadCaption = '', cancelCaption = '', sections = null,
-                               armAfterMs = 0, keepWhole = false, help = null } = {}) => {
+                               armAfterMs = null, keepWhole = false, help = null } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -459,9 +564,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     // three-way opens on its safe answer: Continue Anyway takes a deliberate
     // Tab or click.
     const extras = `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : noVerb} · Esc ${noVerb}</div>`;
-    const status = threeWay
-        ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
-        : '';
+    // Why a scan did nothing, said on the question itself: the toast layer (z 11000)
+    // sits under it. Both forms hold scans off (Group 62.2).
+    const status = `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`;
     const content = `
         <div class="fcc-apc-panel${tiled ? ' fcc-apc-tiled' : ''}" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;${helpKey ? ' position:relative;' : ''}">${helpBtn}
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;${helpKey ? ' padding:0 2.5rem;' : ''}">${header}</div>
@@ -477,12 +582,14 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     let question = null;
     let statusTimer = null;
     let superseded = null;
+    let keysOff = null;
     const cleanup = () => {
         if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
         if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
         if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
+        if (keysOff) { keysOff(); keysOff = null; }
         if (question) {
-            // Scans are held off while ANY three-way is open (Group 40.3 fix
+            // Scans are held off while ANY question is open (Group 40.3 fix
             // check, W3): answering the newer of two let a scan start a move
             // behind the older one.
             const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
@@ -519,6 +626,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         host: host || undefined,
         initialFocus: hasStore ? '.fcc-apc-store' : '.fcc-apc-no',
         onEscape: no,
+        // own-tab: onKeys below cycles Tab (and ← / →) in the question's own order: its
+        // buttons, and the tiles' lists only while they scroll, never its ? button.
+        trapTab: false,
     });
     _openMoveConfirms[overlayId] = superseded;
     const ov = handle.element;
@@ -531,9 +641,11 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         && handle.panel.classList.contains('fcc-apc-lists-scroll'));
     // What Enter does on the lists, as anywhere but a button: the hint says so there too.
     const otherVerb = hasStore ? 'stores it' : noVerb;
-    const armedAt = Date.now() + armAfterMs;
-    if (yesBtn) yesBtn.onclick = armAfterMs > 0 ? () => { if (Date.now() >= armedAt) yes(); } : yes;
-    if (storeBtn) storeBtn.onclick = store;
+    // The yes and the store take no click until a double click on the button that
+    // asked has passed (Group 62.3); Cancel takes one at once.
+    const armMs = questionArmMs(armAfterMs);
+    if (yesBtn) yesBtn.onclick = armedClick(yes, armMs);
+    if (storeBtn) storeBtn.onclick = armedClick(store, armMs);
     if (noBtn) noBtn.onclick = no;
     // The hint says what Enter does on the button that has the focus (Group 50
     // review: "Enter cancels" stayed up with the focus on Continue Anyway).
@@ -547,6 +659,13 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                     : (listsEl && e.target === listsEl ? otherVerb : '')));
             if (does) hintEl.textContent = `Enter ${does} · Esc ${noVerb}`;
         }, true);
+        // The focus leaving the question (a click on its words, or the ⌨️ list opening
+        // over it): Enter then does what it does on no button, and the hint says so
+        // (Group 62.4: it went on saying "Enter continues").
+        ov.addEventListener('focusout', (e) => {
+            if (e.relatedTarget && ov.contains(e.relatedTarget)) return;
+            hintEl.textContent = `Enter ${otherVerb} · Esc ${noVerb}`;
+        });
     }
     // mountOverlay removes the DOM when the host closes; the answer must close
     // too, or its QR session stays armed and a late CMD:CONFIRM still moves.
@@ -560,7 +679,14 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         };
     }
     const helpEl = helpKey ? ov.querySelector('.fcc-apc-help') : null;
-    ov.addEventListener('keydown', (e) => {
+    // Heard on the document while the question is on top and the ⌨️ list is down
+    // (Group 62.4). On its own overlay they went dead after a click on its words or its
+    // background, which moves the focus to the page, while the hint still said what
+    // Enter does; only Escape (mountOverlay's) and the mouse answered it, and Tab
+    // walked the page behind it (Done's question too).
+    const onKeys = (e) => {
+        if (window.isTopOverlay && !window.isTopOverlay(ov)) return;
+        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
         if (e.key === 'Enter') {
             // A scan in flight owns this Enter: it terminates the scan (a
             // "Scan to Cancel" QR must never perform the CONFIRM). So does a
@@ -590,14 +716,18 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                 else no();
                 return;
             }
-            if (ae === yesBtn) { e.preventDefault(); e.stopPropagation(); clearScanBuffer(); yes(); }
-            else if (ae === noBtn) { e.preventDefault(); e.stopPropagation(); clearScanBuffer(); no(); }
+            // The yes / no: Continue Anyway only on its own button. Anywhere else
+            // (Cancel, or no button after a click away) Enter cancels, as the hint says.
+            e.preventDefault(); e.stopPropagation(); clearScanBuffer();
+            if (yesBtn && ae === yesBtn) yes();
+            else no();
             return;
         }
         const arrow = threeWay && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
-        if (e.key === 'Tab' || arrow) {
+        if ((e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) || arrow) {
             // Tab reaches the tiles' lists while they scroll (their arrow and page keys
-            // scroll them); ← and → go between the buttons.
+            // scroll them); ← and → go between the buttons. From anywhere outside
+            // them, Tab comes back to the first (Shift+Tab, the last).
             const order = ((e.key === 'Tab' && listsScroll()) ? [listsEl] : []).concat([yesBtn, storeBtn, noBtn].filter(Boolean));
             const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
             const idx = order.indexOf(document.activeElement);
@@ -606,7 +736,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
             e.preventDefault(); e.stopPropagation();
             order[next].focus();
         }
-    }, true);
+    };
+    document.addEventListener('keydown', onKeys, true);
+    keysOff = () => document.removeEventListener('keydown', onKeys, true);
     if (window.attachConfirmQRs) {
         // Under the buttons, each QR centred under its own button (Derek,
         // 2026-10-22; `alignTo`, the buttons' row, else the dialog PANEL as
@@ -633,17 +765,21 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     // Fitted to the screen: box ids whole where they fit, and a question
     // taller than the window scrolls inside itself.
     fccFitQuestion(handle.panel);
-    if (threeWay) {
+    {
         // The question on screen: processScan holds off every other scan until
         // it is answered (a second slot label used to start a second move
         // behind the dialog). The status line says why a scan did nothing:
-        // the toast layer (z 11000) sits under this dialog.
+        // the toast layer (z 11000) sits under this dialog. The yes / no too
+        // (Group 62.2): it held off nothing, and a bare CMD:CANCEL reached no
+        // handler (with the audit panel hidden it went on and ended the audit).
         // What a held-off scan is told (processScan): the buttons on screen
         // (Group 40 review, BD-6: a question with no store said "Just store it").
-        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', cancelLabel || 'Cancel']
-            .filter(Boolean);
+        const said = threeWay
+            ? [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', cancelLabel || 'Cancel']
+                .filter(Boolean)
+            : ['Continue Anyway', 'Cancel'];
         question = {
-            title,
+            title: threeWay ? title : `${first.printer_name || 'A printer'} is ${first.state || 'PRINTING'}`,
             hint: hint || `Answer the question on screen first: ${said.slice(0, -1).join(', ')}`
                 + `${said.length > 2 ? ',' : ''} or ${said[said.length - 1]}`,
             // processScan drops a hold-off whose dialog is no longer on the page.
@@ -969,11 +1105,40 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 //                         a burst scanner's stall inside one sends it whole. A
 //                         held key's repeats are a person's: a scanner never
 //                         sends one ("Shelf 1111" was sent as spool #111).
-const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false }) => {
+//   snapshot(el)       -> (Group 66.4) optional: called before a key that could
+//                         start a scan lands (a run's first key, one after a
+//                         pause, a burst's first key; once a key at most), and
+//                         handed on for the scan's first key. A label's keys
+//                         land in the box before its Enter proves it a scan, and
+//                         run the page's listeners: a page that keeps state from
+//                         them (the wizard's touched sets, its sums) puts it all
+//                         back from this.
+//   onScan(txt, el, info) -> info = { source, snapshot }: 'barcode' at scanner
+//                         pace, else 'keyboard' (the default path's rule), and the
+//                         snapshot above (undefined without one).
+//   keep(txt, el)      -> (66.4) optional: true lets the Enter reach the box with
+//                         the text in it (a web address in a box that takes one).
+//   restoreEvent       -> (66.4) default true: the put-back text tells the box's
+//                         listeners with an `input` (the location editor's rely on
+//                         it); false for a caller that puts its state back itself.
+// The Enter a scan used, and a CR LF scanner's second, are the scan's: their
+// keyup never reaches the box either (66.4: the wizard's weight boxes work out
+// their sums on keyup, and blanked the Scale box after the put-back). A caller
+// with no isScanPayload gets the page's rule (looksLikeScanPayload), and one
+// with no match matches nothing (the cross-check's C10: a burst threw inside
+// the listener, the scan was lost and its Enter reached the box).
+const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false, snapshot = null,
+    keep = null, restoreEvent = true }) => {
+    if (typeof match !== 'function') match = () => false;
+    if (typeof isScanPayload !== 'function') {
+        isScanPayload = (txt) => (typeof window.looksLikeScanPayload === 'function'
+            ? window.looksLikeScanPayload(txt) : /[:/]/.test(txt));
+    }
     let buf = '';
     let startedAt = 0;
     let lastAt = 0;
     let preScanValue = '';   // what the user had typed BEFORE the burst began
+    let preScanSnap;         // the snapshot taken as that burst began (66.4)
     // `labels`: the keys typed into the box since it last changed any other
     // way, each with the box's text and selection before it.
     const RESET_MS = 2000;          // the accumulator's: keys further apart are two inputs
@@ -1031,17 +1196,37 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
         const fast = keys.length - j + (now - keys[keys.length - 1].t <= DIGITS_BURST_MS ? 1 : 0);
         return fast >= 3 ? j : -1;
     };
+    // A scan sent on from the box is a scan's Enter, as the accumulator marks its own
+    // (the review of Group 62): it skips keys typed into a box, so a scanner set to end
+    // with CR LF had its second Enter read as a person's (enterIsAScan's 100 ms rule).
+    // That second Enter, right behind a scan this capture sent on, is the scan's, and the
+    // capture takes it (the second review: it reached the box's own Enter handler, which
+    // saved, searched or pressed there unless it asked enterIsAScan).
+    const SECOND_ENTER_MS = 100;
+    let sentAt = 0;
+    // Group 66.4: the keyup of each Enter this capture took is the scan's too.
+    let keyupsToEat = 0;
+    let keyupsSince = 0;
+    const eatKeyup = (now) => { keyupsToEat += 1; keyupsSince = now; };
+    const stampScanEnter = (now) => {
+        sentAt = now;
+        eatKeyup(now);
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        if (st) st.lastScanEnterAt = now;
+    };
     const sendFrom = (e, el, keys, k, now) => {
         e.preventDefault();
         e.stopImmediatePropagation();
+        stampScanEnter(now);
         const first = keys[k];
         el.value = first.before;
         try { if (first.s0 != null) el.setSelectionRange(first.s0, first.s1); } catch (_) { /* no caret */ }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+        if (restoreEvent) el.dispatchEvent(new Event('input', { bubbles: true }));
         run = null;
         const text = keys.slice(k).map((x) => x.k).join('');
-        if (onScan) onScan(text, el);
-        else if (window.processScan) window.processScan(text, now - first.t < BURST_MS ? 'barcode' : 'keyboard');
+        const source = now - first.t < BURST_MS ? 'barcode' : 'keyboard';
+        if (onScan) onScan(text, el, { source, snapshot: first.snap });
+        else if (window.processScan) window.processScan(text, source);
     };
     document.addEventListener('keydown', (e) => {
         const el = e.target;
@@ -1049,11 +1234,18 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
         const now = Date.now();
 
         if (e.key === 'Enter') {
+            if (sentAt && now - sentAt < SECOND_ENTER_MS) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                eatKeyup(now);
+                return;
+            }
             const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
             const looksScanned = fast && isScanPayload(buf);
             const payload = buf;
             const restore = preScanValue;
-            buf = ''; startedAt = 0; preScanValue = '';
+            const restoreSnap = preScanSnap;
+            buf = ''; startedAt = 0; preScanValue = ''; preScanSnap = undefined;
             if (labels) {
                 const keys = inStep(el, now) ? run.keys : null;
                 run = null;
@@ -1064,30 +1256,54 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
                     k = keys.length - payload.length;
                 }
                 if (k < 0 && keys && !looksScanned) k = digitsFrom(keys, now);
-                if (k >= 0) { sendFrom(e, el, keys, k, now); return; }
+                if (k >= 0) {
+                    // A box that takes this text keeps it, its Enter and all (66.4).
+                    if (keep && keep(keys.slice(k).map((x) => x.k).join(''), el)) return;
+                    sendFrom(e, el, keys, k, now);
+                    return;
+                }
             }
             if (!looksScanned) return;   // a real entry — let the field's own handler run
+            if (keep && keep(payload, el)) return;
             e.preventDefault();
             e.stopImmediatePropagation();
+            stampScanEnter(now);
             // RESTORE what the user had typed, don't blank the field. The
             // scanner's characters were appended to their in-progress value
             // (this handler doesn't preventDefault on character keys), so
             // clearing outright silently destroyed an un-submitted entry.
             el.value = restore;
-            if (onScan) onScan(payload, el);
+            if (onScan) onScan(payload, el, { source: 'barcode', snapshot: restoreSnap });
             else if (window.processScan) window.processScan(payload, 'barcode');
             return;
         }
 
+        // The caller's snapshot (66.4), taken at most once a key and only where a scan
+        // can start: a labels run's first key or one after a pause (every label, burst
+        // and digits run starts so), and a burst's first key.
+        let snapTaken = false;
+        let keySnap;
+        const snapNow = () => {
+            if (!snapTaken) {
+                snapTaken = true;
+                if (typeof snapshot === 'function') {
+                    try { keySnap = snapshot(el); } catch (_) { keySnap = undefined; }
+                }
+            }
+            return keySnap;
+        };
         if (labels) {
             if (e.isComposing || e.repeat || e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)) {
                 run = null;
                 // A held key's repeats: a person's, never a scanner's burst.
-                if (e.repeat) { buf = ''; startedAt = 0; preScanValue = ''; return; }
+                if (e.repeat) { buf = ''; startedAt = 0; preScanValue = ''; preScanSnap = undefined; return; }
             } else if (e.key.length === 1) {
                 if (!inStep(el, now)) run = { el, keys: [] };
                 const [s0, s1] = caretOf(el);
-                run.keys.push({ k: e.key, t: now, before: el.value || '', s0, s1 });
+                const prevKey = run.keys[run.keys.length - 1];
+                const canStart = !prevKey || now - prevKey.t > DIGITS_BURST_MS;
+                run.keys.push({ k: e.key, t: now, before: el.value || '', s0, s1,
+                    snap: canStart ? snapNow() : undefined });
             }
         }
         if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
@@ -1097,10 +1313,18 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
             buf = '';
             startedAt = now;
             preScanValue = el.value || '';
+            preScanSnap = snapNow();
         }
         buf += e.key;
         lastAt = now;
     }, true);   // capture: must beat the field's own Enter handler
+    document.addEventListener('keyup', (e) => {
+        if (e.key !== 'Enter' || keyupsToEat <= 0) return;
+        if (Date.now() - keyupsSince > RESET_MS) { keyupsToEat = 0; return; }
+        keyupsToEat -= 1;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }, true);
 };
 window.installFieldScanCapture = installFieldScanCapture;
 
@@ -1200,6 +1424,12 @@ const installWeightScanCapture = ({ match, onScan }) => {
     let label = null;       // { text, restore, startAt, lastAt } once a ':' or '/' proved one
     let handedOff = null;   // { text, startAt, lastAt }: a label this capture put back in the scan buffer
     let heldAt = 0, heldFrom = 0, heldRun = 0;   // the keys a dialog holds (fccWeightHold): the last one's time, its run
+    // When this capture last sent a scan on. A scanner set to end with CR LF sends a second
+    // Enter right behind it (enterIsAScan's 100 ms), which is the scan's too: it reached the
+    // box's own Enter, which saved the reading typed before the scan (the second review of
+    // Group 62: in Gross, "64" read as an empty spool, archived with Auto Archive on).
+    const SECOND_ENTER_MS = 100;
+    let sentAt = 0;
     const scanState = () => ((typeof state !== 'undefined') ? state : window.state) || null;
     const scanBuf = () => { const st = scanState(); return st && typeof st.scanBuffer === 'string' ? st.scanBuffer : ''; };
     const reset = () => { keys = []; label = null; };
@@ -1242,6 +1472,9 @@ const installWeightScanCapture = ({ match, onScan }) => {
     const send = (e, el, text, restore, startAt, lastAt) => {
         e.preventDefault();
         e.stopImmediatePropagation();
+        sentAt = Date.now();
+        const st = scanState();
+        if (st) st.lastScanEnterAt = sentAt;    // as the accumulator marks a scan's Enter
         putBack(el, restore);
         if (onScan) onScan(text, el);
         else if (window.processScan) window.processScan(text, lastAt - startAt < BURST_MS ? 'barcode' : 'keyboard');
@@ -1283,6 +1516,10 @@ const installWeightScanCapture = ({ match, onScan }) => {
         if (e.key.length !== 1 || !WEIGHT_TYPED.test(e.key) || e.ctrlKey || e.altKey || e.metaKey) return null;
         if (!t.closest || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable
             || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return null;
+        // A dialog drawn inside the weight window (Force Location's list, opened over
+        // the weigh-out list from the refill question: Group 63 review, K03) keeps
+        // its own keys: a digit typed on its buttons is no reading for a spool.
+        if (t.closest('.swal2-container')) return null;
         if (scanBuf()) return null;                  // a scan's key: one is arriving
         const scope = t.closest('[data-fcc-weight-keys]');
         if (!scope) return null;
@@ -1314,6 +1551,7 @@ const installWeightScanCapture = ({ match, onScan }) => {
     const unholdLast = (e, t) => {
         if (e.ctrlKey || e.altKey || e.metaKey || !t.closest || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
             || t.isContentEditable || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return false;
+        if (t.closest('.swal2-container')) return false;    // a dialog of its own (see ownBox)
         const scope = t.closest('[data-fcc-weight-keys]');
         return !!(scope && typeof scope.fccWeightUnhold === 'function' && scope.fccWeightUnhold(1));
     };
@@ -1352,6 +1590,13 @@ const installWeightScanCapture = ({ match, onScan }) => {
         if (e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)
             || (e.repeat && e.key !== 'Enter')) { reset(); handedOff = null; return; }
         if (e.key === 'Enter') {
+            if (sentAt && now - sentAt < SECOND_ENTER_MS) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                reset();
+                handedOff = null;
+                return;
+            }
             let found = null;
             if (label && now - label.lastAt <= RESET_MS) {
                 found = label;
@@ -1422,6 +1667,15 @@ const installWeightScanCapture = ({ match, onScan }) => {
         if (lettersLeft && window.clearScanBuffer) window.clearScanBuffer();
         putBack(el, label.restore);
     }, true);   // capture: before the box's own Enter handler and its window's keys
+    // Group 65 fix review 4 (CY3): whether this capture holds a label's keys still arriving:
+    // one proved by its ':' or '/', or letters typed in a weight box (a label's prefix, a
+    // scanner stalled after "ID"), within the accumulator's 2 s. A 🛑 card's redraw waits
+    // for it (cancel_review.js keysQuiet), or the label's last keys went to the fresh card.
+    window.fccWeightKeysHeld = () => {
+        const now = Date.now();
+        if (label && now - label.lastAt <= RESET_MS) return true;
+        return keys.some((x) => LETTER.test(x.k) && now - x.t <= RESET_MS);
+    };
     document.addEventListener('focusout', (e) => {
         if (e.target !== box || !label || Date.now() - label.lastAt > RESET_MS) return;
         // The focus left mid-label (to anything, a box a redraw put in its
@@ -1481,6 +1735,40 @@ window.fccIsLabel = (text) => WHOLE_LABEL.test(String(text == null ? '' : text))
 // scanning a card confirmed a label in an audit and, outside one, took a flagged spool
 // off the 🏷️ Backlog with no label printed. A label FCC prints keeps ID: (labels_csv.py).
 window.fccSpoolCardQr = (id) => `SPL:${id}`;
+
+// --- A FILAMENT'S ATTRIBUTE TAGS, BY THE SERVER'S ONE RULE (Group 66.6) ---
+// spoolman_api._parse_filament_attrs_value, mirrored exactly (pinned against it by
+// tests/test_filament_attrs_one_reading_66_6.py): a list is its text items, each as it
+// is, never split; a JSON string holding a list is that list; any other string is a
+// comma list (each piece trimmed, blanks and repeats dropped), so an old record's
+// "Silk, Matte" is Silk and Matte; a JSON number is one tag, its text as written; JSON
+// true / false / null, an object or any other value is no tag. It takes the wire form
+// (/api/filaments) and FCC's parsed one (the details and spool reads) alike. Read only
+// while code runs (the load-order canary): no top-level name of its own.
+window.fccFilamentAttrs = (raw) => {
+    const splitText = (text) => {
+        const out = [];
+        for (const piece of String(text).split(',')) {
+            const tag = piece.trim();
+            if (tag && !out.includes(tag)) out.push(tag);
+        }
+        return out;
+    };
+    const textItems = (list) => list.filter((x) => typeof x === 'string');
+    if (raw == null || raw === '') return [];
+    if (Array.isArray(raw)) return textItems(raw);
+    if (typeof raw !== 'string') return [];
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch (_) { return splitText(raw); }
+    if (Array.isArray(parsed)) return textItems(parsed);
+    if (typeof parsed === 'string') {
+        let inner = null;
+        try { inner = JSON.parse(parsed); } catch (_) { inner = null; }
+        return Array.isArray(inner) ? textItems(inner) : splitText(parsed);
+    }
+    if (typeof parsed === 'number') return splitText(raw);
+    return [];
+};
 
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
@@ -1952,7 +2240,8 @@ let _fccConfirmSeq = 0;
  *     2026-10-21): 'warning' (amber, btn-warning), 'info' (cyan, btn-info),
  *     'secondary' (grey, btn-secondary), 'light' (btn-outline-light), 'dark'
  *     (btn-dark), 'danger', 'purple' (btn-purple, global.css: "No box" in
- *     "Record it as coming from…"). Defaults: confirm = theme, store 'info',
+ *     "Record it as coming from…"), 'success' (btn-success: the refill
+ *     question's "Back on <head>"). Defaults: confirm = theme, store 'info',
  *     cancel 'secondary'. Pass the tone of the button each QR mirrors.
  *   alignTo: optional (Derek, 2026-10-22: "align under the button they
  *     correspond to"): the element holding the buttons the QRs stand for,
@@ -1978,6 +2267,9 @@ let _fccConfirmSeq = 0;
 // (#a98eda, 6:1 on the dialog).
 const QR_TONES = {
     warning:   { border: '#ffc107', caption: '#ffc107', bg: '#1a1608' },
+    // Bootstrap's btn-success (the refill question's "Back on <head>", Group 63
+    // review); its caption a lighter green of the same family, 7:1 on the dialog.
+    success:   { border: '#198754', caption: '#75d69c', bg: '#0b1a12' },
     info:      { border: '#4fa2c9', caption: '#8fd3f0', bg: '#0d1a20' },
     secondary: { border: '#6c757d', caption: '#adb5bd', bg: '#0f1014' },
     light:     { border: '#dee2e6', caption: '#dee2e6', bg: '#0f1014' },
@@ -2832,11 +3124,30 @@ const _readLastSeenTime = () => {
 const _writeLastSeenTime = (t) => {
     try { localStorage.setItem(LOG_PILL_KEY, t || ''); } catch (_) { /* private mode */ }
 };
+// Group 62.7(d): the entry's `ts` (epoch ms, strictly increasing; state.py) sorts across
+// midnight, which 'HH:MM:SS' compared as text didn't: a line after midnight never raised
+// the pill. An entry with no `ts` (an older FCC) keeps the text compare; with no seen
+// `ts` stored yet (a browser that last saw an older FCC), every entry reads as unseen,
+// once, until the list is opened.
+const LOG_PILL_TS_KEY = 'fcc.logPill.lastSeenTs';
+const _readLastSeenTs = () => {
+    try {
+        const v = localStorage.getItem(LOG_PILL_TS_KEY);
+        const n = v == null || v === '' ? NaN : Number(v);
+        return Number.isFinite(n) ? n : null;
+    } catch (_) { return null; }
+};
+const _writeLastSeenTs = (ts) => {
+    try { localStorage.setItem(LOG_PILL_TS_KEY, String(ts)); } catch (_) { /* private mode */ }
+};
 const _updateLogPill = (logs) => {
     const pill = document.getElementById('fcc-log-pill');
     if (!pill) return;
     const lastSeen = _readLastSeenTime();
-    const unseen = (logs || []).filter(l => (l.time || '') > lastSeen);
+    const lastSeenTs = _readLastSeenTs();
+    const unseen = (logs || []).filter(l => (typeof l.ts === 'number'
+        ? (lastSeenTs == null || l.ts > lastSeenTs)
+        : (l.time || '') > lastSeen));
     if (unseen.length === 0) {
         pill.style.display = 'none';
         return;
@@ -2867,7 +3178,14 @@ window.openLogPillOverlay = () => {
     // panel sits above any modal stack. Closing marks every entry as seen.
     fetch('/api/logs').then(r => r.json()).then(d => {
         const logs = (d && d.logs) || [];
-        if (logs.length) _writeLastSeenTime(logs[0].time || '');
+        if (logs.length) {
+            _writeLastSeenTime(logs[0].time || '');
+            // The newest stamp, wherever its line sits (the review of Group 62: two lines
+            // logged at once could reach the list out of order, and the newer one then
+            // read as new right after the list was read).
+            const stamps = logs.map((l) => l.ts).filter((t) => typeof t === 'number');
+            if (stamps.length) _writeLastSeenTs(Math.max(...stamps));
+        }
         // Contrast note: avoid Bootstrap's `text-muted` (#6c757d) — it
         // hits ~1.4:1 against the dark overlay bg and reads as gray-on-gray.
         // Use explicit rgba(255,255,255,0.7) for low-emphasis text instead.

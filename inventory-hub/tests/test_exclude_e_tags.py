@@ -74,9 +74,9 @@ def _footer(mms, grams):
 # excluded), gets back the 8 mm the park pulled (excluded), primes 0.7, flushes
 # 2.0 (counted, as the slicer counts a flush), retracts and de-retracts 0.7, and
 # prints 3 mm: T0 5 mm, T1 5.7 mm, the slicer's own count. (The park's 0.8 mm
-# retract on T0 is left out: a retract the file never recovers is the one place
-# the walk's net sum and the slicer's count differ, by that retract, before and
-# after this fix, so it would only blur what these tests check.)
+# retract on T0 is left out: a retract the file never takes back was where the
+# walk's net sum and the slicer's count differed, until Group 64.5 counted it as
+# the slicer does, so it would only blur what these tests check.)
 _PICKUP = (
     "M83\nT0 S1 L0 D0\n"
     "G1X10Y10E5\n"
@@ -233,9 +233,11 @@ def test_a_pick_up_walk_lands_on_its_footer_so_no_warning_is_logged(logs):
 def test_the_flexi_fox_capture_walks_to_its_footer_and_its_2pct_cancel_charges_the_share(
         logs, path, footer, early_want):
     """The real 2.5.14-profile file (its footer is the slicer's): every tool walks
-    to its footer within 1% (it was 2.5x to 3.1x; what is left is each tool's last
-    retract, which the file never recovers), and a cancel at the printer's 2%
-    charges 0.13 g, not 0.05 g."""
+    to its footer's millimetres within 0.01 mm (it was 2.5x to 3.1x before this
+    hotfix, then ~0.8 mm under until Group 64.5 counted each tool's last retract,
+    which the file never takes back, and read the ;FLUSH tags, as the slicer does:
+    the re-sliced file's T1 was 0.046 mm under for a pull-back inside a flush), and a
+    cancel at the printer's 2% charges 0.13 g, not 0.05 g."""
     if not os.path.isfile(path):
         pytest.skip("the flexi-fox captures are git-ignored (only on Derek's PC)")
     with open(path, "rb") as fh:
@@ -244,8 +246,11 @@ def test_the_flexi_fox_capture_walks_to_its_footer_and_its_2pct_cancel_charges_t
     at_2pct = bgcode_decode.progress_to_decoded_fraction(dec, 0.02)
     measured = prusalink_api.measure_filament_usage(g, [at_2pct, 1.0])
     assert measured["footer"] == footer
-    for t, want in measured["footer"].items():
-        assert abs(measured["whole"][t] - want) <= 0.01 * want, (t, measured["whole"])
+    foot_mm = prusalink_api._parse_weights_from_match(prusalink_api._GCODE_MM_RE.search(g))
+    _cuts, (walked_mm, _saw) = prusalink_api._walk_extrusion(g, [], 0)
+    assert set(walked_mm) == set(foot_mm), (walked_mm, foot_mm)
+    for t, want in foot_mm.items():
+        assert walked_mm[t] == pytest.approx(want, abs=0.01), (t, walked_mm, foot_mm)
     assert measured["partials"][1] == measured["footer"]
     early = measured["partials"][0]
     assert set(early) == set(early_want), early              # T2 hadn't printed yet

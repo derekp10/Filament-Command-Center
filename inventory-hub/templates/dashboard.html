@@ -185,10 +185,11 @@
         </div>
     </div>
 
-    <!-- L184 — Activity Log "N new" corner pill. Hidden until either
-         (a) at least one new entry has arrived AND the dashboard log
-             panel isn't currently visible (covered by a modal), or
-         (b) the user has unread entries from a prior session.
+    <!-- L184 — Activity Log "N new" corner pill. It counts the entries newer
+         than the newest one seen when its list was last opened (each entry's
+         `ts`, so it counts across midnight, Group 62.7d; localStorage
+         fcc.logPill.lastSeenTs), whether or not Live Activity is on screen,
+         and hides when there are none, or after its list is opened.
          Clicking pops a compact log overlay above any modal stack via
          window.mountOverlay (z-index 20000). The pill itself sits at
          z-index 1080 — above Bootstrap modals' default 1055 but below

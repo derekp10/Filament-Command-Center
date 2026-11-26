@@ -154,6 +154,7 @@ import startup_migrations  # noqa: E402
 from startup_migrations import MAX_LOCATIONS_BACKUPS, _prune_locations_backups  # noqa: E402
 startup_migrations.run_startup_migrations()
 startup_migrations.resurface_pending_cancel_reviews()
+startup_migrations.resurface_pending_archive_takeoffs()
 startup_migrations.resurface_pending_attr_migrations()
 
 # [ALEX FIX] Suppress Werkzeug Console Spam (Fixes Infinite Log Growth)
@@ -231,6 +232,8 @@ from routes_inventory import (  # noqa: E402,F401
 # Group 49.2a: the Low-stock list's route (re-exported like the rest above),
 # and its "Excluded" mark (2026-10-20).
 from routes_inventory import api_stock_report, api_filament_stock_exclusion  # noqa: E402,F401
+# Group 63.2: the Activity Log line's "Take it off" for a spool a weigh archived in place.
+from routes_inventory import api_spool_archive_takeoff  # noqa: E402,F401
 
 # L316 step 6: the scan pipeline (identify_scan dispatcher, buffer/clear,
 # manage_contents, update_filament + edit-log formatter) and the Prusament
@@ -240,7 +243,8 @@ from routes_scan import (  # noqa: E402,F401
     api_manage_contents, api_bulk_move, api_bulk_move_session_action, _pm_norm,
     _PM_TEMP_LABELS, _PM_WEIGHT_TOL,
     _pm_num, _pm_first_pos, _compute_prusament_spool_weight_diff,
-    _handle_prusament_url_scan, api_identify_scan, api_buffer_clear, api_audit_park,
+    _handle_prusament_url_scan, _prusament_needles, _spools_linked_to, api_prusament_linked_spools,
+    api_identify_scan, api_buffer_clear, api_audit_park,
     api_audit_report, api_audit_found, api_audit_needs_label, api_audit_needs_label_undo,
 )
 
@@ -293,7 +297,8 @@ from print_deduct import (  # noqa: E402,F401
     deduct_cancelled_print, deduct_completed_print, _route_completion_to_review,
     _resolve_usage_to_spools, _stash_unresolved_review, _enqueue_cancel_fetch,
     _create_pending_cancel_review, api_cancel_deduct_pending, api_cancel_deduct_candidates,
-    _confirm_no_spool_review, api_cancel_deduct_confirm, api_cancel_deduct_dismiss,
+    api_cancel_deduct_confirm, api_cancel_deduct_dismiss, api_cancel_deduct_retry_fetch,
+    api_cancel_deduct_recompute,
 )
 
 

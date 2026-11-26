@@ -21,8 +21,9 @@ Pinned: a person's Enter on a button or a link presses it once; a scan's Enter
 person left goes with their press; a held Enter presses once, answers no dialog
 opened under it, and does nothing more in a text box, while a text area still
 types its new lines; Enter presses nothing behind the overlay on top, while a
-scan read earlier still waits to go out, in a window fading out, under its own
-inline overlay (data-fcc-cover) or in a gating dialog not yet on screen. Derek's
+scan read earlier still waits to go out, in a window fading out, or in a gating
+dialog not yet on screen (the delete flow's question, a cover inside its window
+with data-fcc-cover until Group 62.8, is a mountOverlay now: the overlay rule). Derek's
 answers (2026-10-29): the printing yes / no opens on Cancel; the settings
 import opens on Cancel and backing out says nothing was imported. With them:
 the tag remove and purge ask in an overlay that opens on Cancel (the browser's
@@ -63,8 +64,6 @@ body { margin: 0; font-family: sans-serif; }
 <div id="someModal" class="modal show" style="display:block"><div class="modal-content">
   <button id="in-modal" onclick="window.__hit('inModal')">In the window</button>
   <button id="btn-spool-delete">Delete</button><span id="detail-id" style="display:none">57</span>
-  <div id="fcc-spool-delete-overlay" style="display:none"></div>
-  <div id="cover" data-fcc-cover="1" style="display:none"><button id="in-cover" onclick="window.__hit('inCover')">In the cover</button></div>
 </div></div>
 <div id="confirmModal" class="modal show" style="display:block"><div class="modal-content">
   <button id="confirm-yes" onclick="window.__hit('confirmYes')">YES</button>
@@ -286,23 +285,6 @@ def test_enter_presses_nothing_in_a_window_fading_out(page50):
     page.evaluate("() => document.getElementById('someModal').classList.remove('show')")   # its fade-out
     page.keyboard.press("Enter")
     assert _hits(page) == {"inModal": 1}
-
-
-def test_enter_presses_nothing_under_a_windows_own_inline_overlay(page50):
-    """The delete flow's overlay covers its window but traps no Tab: while it
-    shows, only its own buttons answer Enter; once it is hidden (its window's
-    close hides it without its close()), the window's buttons do again."""
-    page = page50
-    page.evaluate("() => { document.getElementById('cover').style.display = 'block'; }")
-    _focus(page, "#in-modal")
-    page.keyboard.press("Enter")
-    _focus(page, "#in-cover")
-    page.keyboard.press("Enter")
-    assert _hits(page) == {"inCover": 1}
-    page.evaluate("() => { document.getElementById('cover').style.display = 'none'; }")
-    _focus(page, "#in-modal")
-    page.keyboard.press("Enter")
-    assert _hits(page) == {"inCover": 1, "inModal": 1}
 
 
 def test_enter_presses_nothing_in_a_gating_dialog_until_it_is_on_screen(page50):
@@ -749,18 +731,21 @@ def test_a_double_press_on_the_manufacturer_save_saves_once(page50):
     assert len([f for f in page.evaluate("window.__fetches") if "/api/vendors" in f["url"]]) == 1
 
 
-def test_the_real_delete_overlay_covers_its_window(page50):
-    """_renderDeleteOverlay sets data-fcc-cover, which the test above stands in
-    for: while it shows, Enter presses no button of the window behind it."""
+def test_the_real_delete_question_is_on_top_of_its_window(page50):
+    """PIN UPDATED DELIBERATELY (Group 62.8): the delete question is a mountOverlay now,
+    no longer a cover inside its window (data-fcc-cover, a rule only it used). While it
+    shows, Enter presses no button of the window behind it (the overlay rule); once it is
+    cancelled, the window's buttons answer again."""
     page = page50
     _load_details(page)
     page.evaluate("() => document.getElementById('btn-spool-delete').click()")
-    page.wait_for_function("() => document.getElementById('fcc-spool-delete-overlay').dataset.fccCover === '1'")
+    page.wait_for_function("() => { const o = document.getElementById('fcc-spool-delete-overlay');"
+                           " return !!o && o.dataset.overlayMount === '1'; }")
     _focus(page, "#in-modal")
     page.keyboard.press("Enter")
     assert _hits(page) == {}
-    page.evaluate("() => document.querySelector('[data-fcc-delete-cancel]').click()")
-    assert page.evaluate("() => document.getElementById('fcc-spool-delete-overlay').dataset.fccCover") is None
+    page.evaluate("() => document.querySelector('#fcc-spool-delete-overlay [data-fcc-delete-cancel]').click()")
+    assert page.evaluate("() => document.getElementById('fcc-spool-delete-overlay')") is None
     _focus(page, "#in-modal")
     page.keyboard.press("Enter")
     assert _hits(page) == {"inModal": 1}

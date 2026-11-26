@@ -118,11 +118,22 @@ def wizard(isolated_page):
     return page
 
 
-def _open_edit(page, filament_extra):
+def _discard_changes(page):
+    """Since Group 66.2 an open over unsaved changes asks first: the person presses
+    Discard & Start Over, and the new session starts (wizardReset)."""
+    page.wait_for_selector("#fcc-wiz-dirty-confirm")
+    session = page.evaluate("() => wizardState.session")
+    page.locator("#fcc-wiz-dirty-confirm").click()
+    page.wait_for_function("(s) => wizardState.session > s", arg=session)
+
+
+def _open_edit(page, filament_extra, over_changes=False):
     page.evaluate("(d) => { window.__answers['/api/spool_details'] = d; }", _spool_details(filament_extra))
     # Not awaited: openEditWizard holds no answer the test needs, and the states
     # are waited on below.
     page.evaluate("() => { window.openEditWizard(57); }")
+    if over_changes:
+        _discard_changes(page)
     page.wait_for_function("() => wizardState.mode === 'edit_spool' && wizardState.selectedFilamentId === 7"
                            " && !!document.getElementById('wiz_fil_ef_needs_label_print')"
                            " && document.getElementById('wiz-fil-color_name').value === 'Red'"
@@ -221,7 +232,7 @@ def test_the_next_wizard_session_forgets_a_touch(wizard):
     _open_edit(wizard, {})
     wizard.locator(BOX).check()
     assert _touched(wizard) == ["fil:needs_label_print"]
-    _open_edit(wizard, {})
+    _open_edit(wizard, {}, over_changes=True)      # the tick is unsaved: Discard (Group 66.2)
     assert _touched(wizard) == []
     extra = _save(wizard, EDIT)["filament_data"]["extra"]
     assert "needs_label_print" not in extra, extra

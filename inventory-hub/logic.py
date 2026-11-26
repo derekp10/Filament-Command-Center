@@ -12,6 +12,7 @@ import config_loader
 import spoolman_api
 import locations_db
 import stock_report
+import archive_takeoff  # Group 63.2: a stuck spool's take-off, tried before a move onto its place
 
 
 def _active_print_info_for_location(location_str, printer_map=None):
@@ -463,13 +464,9 @@ def stale_fed_refusal(data, result):
 
 
 def _norm_slot(slot):
-    """A slot as one comparable string: quotes and blanks stripped, 'None' /
-    'null' read as no slot, and a number without leading zeros ('01' -> '1').
-    Slots arrive as JSON ints, quoted Spoolman extras and scan text."""
-    s = str(slot if slot is not None else '').strip().strip('"').strip()
-    if s in ('None', 'null'):
-        return ''
-    return str(int(s)) if s.isdigit() else s
+    """A slot as one comparable string (locations_db.norm_slot, its home since
+    Group 63: spoolman_api's refill edge reads it too)."""
+    return locations_db.norm_slot(slot)
 
 
 def _slot_binding(box_row, slot):
@@ -547,22 +544,10 @@ def box_slot_claims(box_row, box_id, in_box, moving_ids):
         slot a deployed spool came from (the one slot rule, 42.2);
       - `own_slot`: the slot a moving spool sits in directly, else `ghost_slot`;
       - `ghost_slot`: the slot a moving spool was deployed from, which it still
-        holds physically (putting it back there from its head is an unload)."""
-    box = str(box_id or '').strip().strip('"').upper()
-    moving = {str(s) for s in (moving_ids or ())}
-    items = list(in_box or [])
-    others = [item for item in items if str(item.get('id')) not in moving]
-    claims: typing.Dict[str, typing.List[typing.Any]] = {}
-    for item in others:
-        s = _norm_slot(locations_db.effective_slot(box_row, item.get('slot', ''), occupants=len(others)))
-        if s:
-            claims.setdefault(s, []).append(item.get('id'))
-    own_slot = next((_norm_slot(item.get('slot', '')) for item in items
-                     if str(item.get('id')) in moving and not item.get('is_ghost')
-                     and str(item.get('location') or '').strip().strip('"').upper() == box), None)
-    ghost_slot = next((_norm_slot(item.get('slot', '')) for item in items
-                       if str(item.get('id')) in moving and item.get('is_ghost')), None)
-    return claims, (own_slot or ghost_slot), ghost_slot
+        holds physically (putting it back there from its head is an unload).
+    Its home is locations_db.box_slot_claims since Group 63 (spoolman_api's refill
+    edge reads it too); this name delegates, so the rule is one."""
+    return locations_db.box_slot_claims(box_row, box_id, in_box, moving_ids)
 
 
 def slot_would_prompt(box_row, slot, moving_from, printer_map, loc_info_map, residents_of):
@@ -1006,13 +991,18 @@ def resolve_scan(text):
         }
 
     # 2. COMMAND HANDLING
+    # Substring-matched, so a command whose text holds another's is tested
+    # before it (Group 62.1): CMD:EJECTALL came after CMD:EJECT, and every
+    # EJECTALL text the page's exact match missed (a key left in front of the
+    # scan) came back as `eject`, which turned Eject mode on, and the next spool
+    # scanned was ejected. tests/test_scan_ladder_62_1.py keeps the order.
     if "CMD:" in upper_text:
         if "CMD:UNDO" in upper_text: return {'type': 'command', 'cmd': 'undo'}
         if "CMD:CLEAR" in upper_text: return {'type': 'command', 'cmd': 'clear'}
-        if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'} 
+        if "CMD:EJECTALL" in upper_text: return {'type': 'command', 'cmd': 'ejectall'}
+        if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'}
         if "CMD:CONFIRM" in upper_text: return {'type': 'command', 'cmd': 'confirm'}
-        if "CMD:EJECTALL" in upper_text: return {'type': 'command', 'cmd': 'ejectall'} 
-        
+
         # NAV
         if "CMD:CYCLE" in upper_text: return {'type': 'command', 'cmd': 'next'}
         if "CMD:NEXT" in upper_text: return {'type': 'command', 'cmd': 'next'}
@@ -1223,26 +1213,10 @@ def _holds_one_spool(loc_id, printer_map, loc_info_map):
     2026-09-29). A multi-head Printer row (XL, RCOI) is not a deploy slot and
     holds any number of spools: a LOC:XL scan files them on XL itself.
     _is_single_occupancy counts every Printer row, on purpose, for trails and
-    eject destinations; Undo's occupancy check uses this rule (Group 42 review)."""
-    lid = str(loc_id or '').strip().strip('"').upper()
-    if not lid:
-        return False
-    if lid in (printer_map or {}):
-        return True
-    row = (loc_info_map or {}).get(lid)
-    if not isinstance(row, dict):
-        return False
-    if row.get('Type') in locations_db.TOOLHEAD_TYPES:
-        return True
-    if str(row.get('Type', '')).strip() != 'Printer':
-        return False
-    own_heads = [str(t.get('location_id', '')).strip().upper()
-                 for t in (row.get('toolheads') or []) if isinstance(t, dict)]
-    try:
-        one_slot = int(str(row.get('Max Spools', '0')).strip() or '0') <= 1
-    except (TypeError, ValueError):
-        one_slot = True
-    return one_slot and not any(h and h != lid for h in own_heads)
+    eject destinations; Undo's occupancy check uses this rule (Group 42 review).
+    Its home is locations_db.head_holds_one_spool since Group 63 (the refill edge
+    asks after a head by it); this name delegates."""
+    return locations_db.head_holds_one_spool(loc_id, printer_map, loc_info_map)
 
 
 def _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map):
@@ -1363,11 +1337,9 @@ def _is_dryer_box_row(row):
 def _place_capacity(row):
     """How many spools a place holds by its Max Spools: Bulk Move's capacity rule
     (D3), whose 0 for a blank or unreadable value is no cap (a Room, a shelf, a cart).
-    An audit's Done reads a place that holds one from it too (_audit_holds_one)."""
-    try:
-        return int(str((row or {}).get('Max Spools', '0')).strip() or '0')
-    except (TypeError, ValueError):
-        return 0
+    An audit's Done reads a place that holds one from it too (_audit_holds_one).
+    Its home is locations_db.place_capacity since Group 63; this name delegates."""
+    return locations_db.place_capacity(row)
 
 
 def _pre_box_plain(note, loc_info_map):
@@ -1564,16 +1536,10 @@ def _known_room_of(loc_id, loc_list):
     resolve_room returns the TOP-LEVEL ancestor, which for a printer that is not
     nested in a room is the printer itself (XL-1 -> XL), and for an id with no
     row is a prefix guess, so only an actual Type "Room" row counts.
+    Its home is locations_db.known_room_of since Group 63 (a refilled spool that
+    left a toolhead is offered its room); this name delegates.
     """
-    lid = str(loc_id or '').strip().upper()
-    if not lid:
-        return ""
-    room = locations_db.resolve_room(lid, loc_list=loc_list) or ""
-    if not room or room == lid or room in locations_db.PSEUDO_ROOM_PREFIXES:
-        return ""
-    row = next((r for r in (loc_list or [])
-                if str(r.get('LocationID', '')).strip().upper() == room), None)
-    return room if row and row.get('Type') == 'Room' else ""
+    return locations_db.known_room_of(loc_id, loc_list)
 
 
 # Group 41.1 / 41.9 — the views Eject All refuses, decided from locations.json
@@ -1798,14 +1764,24 @@ def release_box_after_direct_write(sid, pre, post):
     off its head released nothing and its single-slot box stayed attached there.
     Call after such a write landed; `pre` / `post` are the spool before and after
     (the archive edge releases inside update_spool, and a second release finds
-    nothing to do). Returns the released box id, or None; never raises."""
+    nothing to do). Returns the released box id, or None; never raises.
+
+    Group 63 review, round 2 (K24 on the real doors): a spool that was archived
+    BEFORE the write wasn't what ran on that head (63.2's stuck spool, hidden
+    there), so its box lets go only while no other spool runs on that head from it
+    (spoolman_api._box_runs_another: the next spool from the same PolyDryer, loaded
+    since, keeps the attachment)."""
     try:
         before = str((pre or {}).get('location') or '').strip().strip('"').upper()
         after = str((post or {}).get('location') or '').strip().strip('"').upper()
         if not before or before == after:
             return None
-        return _release_single_slot_box(sid, before, (pre or {}).get('extra') or {},
-                                        locations_db.get_active_printer_map())
+        pre_extra = (pre or {}).get('extra') or {}
+        if (pre or {}).get('archived'):
+            box = str(pre_extra.get('physical_source') or '').strip().strip('"').upper()
+            if box and box != before and spoolman_api._box_runs_another(box, before, sid):
+                return None
+        return _release_single_slot_box(sid, before, pre_extra, locations_db.get_active_printer_map())
     except Exception as e:
         state.logger.warning(f"single-slot box release after a direct edit of #{sid} skipped: {e}")
         return None
@@ -1923,6 +1899,12 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             _pa.begin_probe_cache()
         except Exception:
             _pa = None
+        # Group 63.2 (Derek, 2026-11-18: "if by the time that a new spool is being
+        # assigned to the location with a unupdated archiveds spool, we try again to
+        # perform the update"): a spool a weigh archived at this place that FCC
+        # couldn't take off is tried again first, so the move doesn't land beside it
+        # unseen. Never raises; a Spoolman that refuses it would refuse the move too.
+        archive_takeoff.retry_at(target)
     try:
         return _perform_smart_move_impl(
             target, raw_spools, target_slot=target_slot, origin=origin,
@@ -3306,6 +3288,13 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             auto_deploy_skipped[str(sid)] = f"only the last spool placed in slot {target_slot} feeds {th}"
         to_deploy = placed[-1:]
         if to_deploy:
+            # Group 63 review (K17 / K25): the head this chain loads gets Derek's
+            # hook too (perform_smart_move runs it only for the outer move, whose
+            # target is the box): a slot-label scan or a deposit into a bound slot
+            # is the usual way a spool reaches a head. Never raises.
+            # (The records with no place were tried by the outer move a moment
+            # ago: review round 2, two take-off PATCHes and two counted tries.)
+            archive_takeoff.retry_at(th, placeless=False)
             chain_origin = f'auto_deploy_from_{origin or "smart_move"}'
             outer_sink = getattr(_chain_undo_sink, 'records', None)
             _chain_undo_sink.records = []
@@ -4970,9 +4959,7 @@ def _undo_filed(record, printer_map, rows):
             state.add_log_entry(_audit_esc(f"❌ Undo: not putting Spool #{sid} back "
                                            f"{_undo_filed_place(snap, printer_map)} — {why}"), "ERROR", "ff4444")
             continue
-        merged = dict(rec.get('extra') or {})
-        for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
-            merged[k] = (snap.get('extras') or {}).get(k, '')
+        merged = _undo_extras(rec, snap.get('extras') or {})
         try:
             landed, raised = _move_write(sid, str(snap.get('location') or '').strip(), merged), None
         except Exception as e:
@@ -5195,6 +5182,23 @@ def undo_confirm_answer(record, confirmed_heads=None):
             "active_prints": active, "msg": msg}
 
 
+def _undo_extras(cur, snap):
+    """The extras Undo writes back for one spool: the snapshot's
+    SYSTEM_MANAGED_EXTRAS over the record's own (`cur`, read just before), so a key
+    the move added is cleared and one it changed comes back. Except the archive
+    note of a spool in stock now (Group 63.1, Claude's call 3): a move that took it
+    out of the archive (a load onto a head) used its note up, and Undo leaves it in
+    stock, so writing the old note back would send a later refill to an older
+    place. That key keeps what the record holds."""
+    merged = dict((cur or {}).get('extra') or {})
+    in_stock = not (cur or {}).get('archived')
+    for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
+        if k == 'fcc_pre_archive_location' and in_stock:
+            continue
+        merged[k] = (snap or {}).get(k, '')
+    return merged
+
+
 def perform_undo(expected_id=None):
     """Reverse the last move. Group 41.4: honest about what it did. Only the
     restores that land are reported (and logged) as undone; a rejected or
@@ -5390,10 +5394,7 @@ def perform_undo(expected_id=None):
             if not only_if_at:
                 cur = spoolman_api.get_spool(sid) or {}
             was_at[str(sid)] = str(cur.get('location') or '').strip().strip('"').upper()
-            merged = dict(cur.get('extra') or {})
-            for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
-                merged[k] = snap.get(k, '')
-            payload["extra"] = merged
+            payload["extra"] = _undo_extras(cur, snap)
         why = _blocked(sid, loc)
         if only_if_at and _unread(loc, why):
             _retry_later(sid, loc, why)
@@ -5450,10 +5451,7 @@ def perform_undo(expected_id=None):
             snap = ejection_extras.get(str(ejected_sid))
         if snap is not None:
             cur = spoolman_api.get_spool(ejected_sid) or {}
-            merged = dict(cur.get('extra') or {})
-            for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
-                merged[k] = snap.get(k, '')
-            eject_payload["extra"] = merged
+            eject_payload["extra"] = _undo_extras(cur, snap)
         if spoolman_api.update_spool(ejected_sid, eject_payload):
             restored_ejections.append(ejected_sid)
             for _box in ejection_released.get(str(ejected_sid)) or ():
@@ -5491,9 +5489,7 @@ def perform_undo(expected_id=None):
                                 "ERROR", "ff4444")
             continue
         d_cur = spoolman_api.get_spool(d_sid) or {}
-        d_merged = dict(d_cur.get('extra') or {})
-        for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
-            d_merged[k] = d_snap.get(k, '')
+        d_merged = _undo_extras(d_cur, d_snap)
         if spoolman_api.update_spool(d_sid, {"location": d_box, "extra": d_merged}):
             restored_displaced.append(int(d_sid) if str(d_sid).isdigit() else d_sid)
         else:
@@ -6712,9 +6708,9 @@ def _audit_stay_why(rec, place, printer_map, loc_info_map):
 def _audit_holds_one(place, loc_info_map):
     """A place that holds one spool: a single-slot dryer box (locations_db's 20.2 rule,
     whose "0" counts too) or a row whose Max Spools is 1 (Bulk Move's capacity rule,
-    _place_capacity). Heads and Printer rows are asked about before this."""
-    row = (loc_info_map or {}).get(place)
-    return locations_db._is_single_slot_dryer_box(row) or _place_capacity(row) == 1
+    _place_capacity). Heads and Printer rows are asked about before this. The rule is
+    locations_db.holds_one_spool_place since Group 63 (the refill edge reads it too)."""
+    return locations_db.holds_one_spool_place((loc_info_map or {}).get(place))
 
 
 def _audit_one_spool_why(place, holders=(), found=1):

@@ -390,8 +390,11 @@ def test_enqueue_default_kind_is_cancel(stores_tmp):
 
 def test_recover_finished_fires_completion_when_flag_on():
     entry = {"state": "PRINTING", "job_id": "J-9", "filename": "done.gcode", "progress": 0.9}
+    # Group 65 fix review (WT1): charged only when a job read names the latched print.
     with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value=_state("FINISHED")), \
+         patch.object(app_module.prusalink_api, "get_printer_job",
+                      return_value={"job_id": "J-9", "filename": "done.gcode", "progress": 1.0}), \
          patch.object(print_monitor, "_dispatch_completion_edge") as disp:
         acted = app_module._recover_one_print_latch("XL", entry, "http://fb")
     assert acted is True

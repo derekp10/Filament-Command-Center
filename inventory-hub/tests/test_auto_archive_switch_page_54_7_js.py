@@ -16,7 +16,9 @@ own switch, never the other window's: the switch, not the per-save verdict, so
 with it on the server's rule still decides when the page's arithmetic disagrees.
 With the switch off and a save that leaves 0 g by the page's own reading, the
 success toast says the spool was kept in stock. With the switch on, nothing
-changes: `archived: true` and the force-unassign after it, as before.
+changes: `archived: true`, as before. (Groups 63.2 / 63.4: the page posts no
+force-unassign after it any more; the save takes the spool off its place itself.
+PIN UPDATED DELIBERATELY: `_check` asserted that second request.)
 
 Runs the REAL overlay_mount.js, inv_core.js, ui_builder.js, weight_utils.js,
 weight_entry.js, inv_details.js, inv_cmd.js and inv_weigh_out.js, the weigh-out
@@ -122,7 +124,7 @@ def _check(page, *, switch_on, empties, body_key="used_weight", value=750):
     assert body["updates"][body_key] == value, body
     archives = switch_on and empties
     assert ("archived" in body["updates"]) is archives, body
-    assert _unassigned(page) == ([57] if archives else []), _unassigned(page)
+    assert _unassigned(page) == [], _unassigned(page)   # 63.4: never a second request
     assert _success_toasts(page) == [KEPT if (not switch_on and empties) else PLAIN], _success_toasts(page)
     assert page.evaluate("() => window.__errors") == []
 
@@ -261,8 +263,9 @@ def test_a_save_that_waits_for_its_details_sends_the_switch_as_it_was_at_enter(w
     archived and taken off its shelf against what was asked (the toast said only
     "Updated Spool #57"). On at Enter and turned off: #57, asked to be archived,
     was kept in stock. Now the switch is read at Enter: off sends `auto_archive:
-    false`, no `archived` and no force-unassign, and says it was kept in stock; on
-    sends `auto_archive: true`, `archived: true` and the force-unassign."""
+    false` and no `archived`, and says it was kept in stock; on sends `auto_archive:
+    true` and `archived: true` (no force-unassign after it since Groups 63.2 /
+    63.4: the save takes the spool off its place itself)."""
     page = weigh
     _enter_then_click_the_switch(page, on_at_enter=on_at_enter, fail_details=fail_details)
     if fail_details:

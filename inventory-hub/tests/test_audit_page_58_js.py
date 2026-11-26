@@ -69,6 +69,7 @@ window.__extra = (url) => {
 window.openLocationsModal = () => { __rec.opened = (__rec.opened || []).concat('locations'); };
 window.openWeighOutModal = () => { __rec.opened = (__rec.opened || []).concat('weigh'); };
 window.printLabel = (id) => { __rec.opened = (__rec.opened || []).concat('print:' + id); };
+const __realTriggerEjectAll = window.triggerEjectAll;   // inv_loc_mgr.js's, where the test loads it
 window.triggerEjectAll = (loc) => { __rec.opened = (__rec.opened || []).concat('ejectall:' + loc); };
 const __realEjectSpool = window.ejectSpool;       // inv_loc_mgr.js's, where the test loads it
 window.ejectSpool = (id) => { __rec.opened = (__rec.opened || []).concat('eject:' + id); };
