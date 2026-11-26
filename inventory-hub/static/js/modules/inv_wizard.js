@@ -6302,9 +6302,30 @@ const _spoolRowClearBtnHtml = (row) => {
 // Review round 1 of Group 66 (R4-04, R3-08): ✕ empties the box as well. Its text stayed, so
 // the box's next blur (a Tab through the form) ran the whole scan, or link, again.
 window.wizardClearSpoolRow = (idx) => {
+    const row = wizardState.spoolRows[idx];
     const input = document.querySelector(`[data-spool-row-idx="${idx}"] input[type='url']`);
-    if (input) input.value = '';
-    window.wizardScanSpoolRow(idx, '');
+    // Review round 3 of Group 66 (R3-05): in Edit Spool, a refusal over a link waiting for Save
+    // left that link (round 1's R5-01), and this ✕ dropped it too, unsaid. It clears only the
+    // refused QR: the row goes back to the waiting link; a second ✕ clears that.
+    if (row && wizardState.mode === 'edit_spool' && row.status === 'refused' && row.linkValue && row.linkedText) {
+        row.linkToken = (row.linkToken || 0) + 1;      // nothing of the refused QR's lands now
+        row.url = row.linkedText;
+        if (input) input.value = row.linkedText;
+        row.status = 'linked-new';
+        row.errorMsg = 'Links at Save';
+        row.linkNote = row.linkedNote || '';
+        window.wizardRenderSpoolRowBadge(idx);
+        window.wizardRenderLinkNote();
+        window.wizardUpdateSubmitGate();
+    } else {
+        if (input) input.value = '';
+        window.wizardScanSpoolRow(idx, '');
+    }
+    // R3-07: the row's box takes the keyboard ("clear this row and retry"): in a batch of blind
+    // scans the next QR went the dashboard's way, and asked "Unsaved Changes", instead of
+    // going into the row just cleared.
+    const box = document.querySelector(`[data-spool-row-idx="${idx}"] input[type='url']`);
+    if (box && typeof box.focus === 'function') box.focus();
 };
 
 const _spoolRowSummaryHtml = () => {
@@ -6560,6 +6581,8 @@ const _wizUndoLink = (row) => {
     }
     row.linkFills = [];
     row.linkValue = '';
+    row.linkedText = '';
+    row.linkedNote = '';
 };
 
 // Does the QR's product disagree with the spool's filament? Words when it clearly does.
@@ -6597,6 +6620,8 @@ window.wizardSettleLinkRow = () => {
     if (!row || row.status !== 'linked-new') return;
     row.linkFills = [];
     row.linkValue = '';
+    row.linkedText = '';
+    row.linkedNote = '';
     row.status = 'linked';
     row.errorMsg = 'Linked to this QR';
     row.linkNote = '';
@@ -6623,7 +6648,12 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
     const done = (status, msg, note) => {
         row.status = status;
         row.errorMsg = msg || '';
-        row.linkNote = note || '';
+        // Review round 3 of Group 66 (R3-05): a refusal over a link waiting for Save leaves that
+        // link, and says so; its ✕ goes back to it (wizardClearSpoolRow).
+        const waiting = status === 'refused' && row.linkValue && row.linkedText;
+        row.linkNote = waiting
+            ? `${note ? `${note} ` : ''}The QR scanned before this one still links at Save: ✕ goes back to it.`
+            : (note || '');
         window.wizardRenderSpoolRowBadge(idx);
         window.wizardRenderLinkNote();
         window.wizardUpdateSubmitGate();
@@ -6725,8 +6755,10 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
     if (o.initial_weight !== undefined) bits.push(`${o.initial_weight} g of filament`);
     if (o.spool_weight !== undefined) bits.push(`${o.spool_weight} g empty`);
     const weights = bits.length ? `Prusament says ${bits.join(', ')}. ` : '';
-    return done('linked-new', 'Links at Save',
-        `${weights}To use its weights, Save and close the wizard, then scan this QR on the dashboard: FCC checks them against the spool first.`);
+    const linkNote = `${weights}To use its weights, Save and close the wizard, then scan this QR on the dashboard: FCC checks them against the spool first.`;
+    row.linkedText = url;          // what a refusal's ✕ goes back to (R3-05)
+    row.linkedNote = linkNote;
+    return done('linked-new', 'Links at Save', linkNote);
 };
 
 // --- A NEW PRUSAMENT SPOOL'S QR WHILE THE WIZARD IS OPEN (Group 66.2) ---

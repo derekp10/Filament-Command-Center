@@ -285,6 +285,11 @@ const SearchEngine = {
     },
 
     async executeSearch(silent = false) {
+        // Only the newest search paints (review round 3 of Group 66, scan-journal R3-03): a
+        // scanner stalling inside a label let the debounce search for its first keys, 66.4
+        // put the box back empty, and that search's late answer painted under the empty box.
+        // Numbered here, before the empty box's own state, which is a search's answer too.
+        const seq = this.searchSeq = (this.searchSeq || 0) + 1;
         const query = document.getElementById('global-search-query').value.trim();
         const material = document.getElementById('global-search-material').value;
         const colorHex = document.getElementById('global-search-color-hex').value.trim();
@@ -331,6 +336,7 @@ const SearchEngine = {
 
             const response = await fetch(`/api/search?${params.toString()}`);
             const data = await response.json();
+            if (seq !== this.searchSeq) return;     // a newer search started meanwhile
 
             // The server's words and an error's are text, never markup (Group 66.8).
             const esc = window.escHtml || ((s) => String(s == null ? '' : s)
@@ -342,6 +348,7 @@ const SearchEngine = {
 
             this.renderResults(data.results);
         } catch (e) {
+            if (seq !== this.searchSeq) return;
             const esc = window.escHtml || ((s) => String(s == null ? '' : s)
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
             resBox.innerHTML = `<div class="text-danger p-3">Connection error: ${esc(e.message)}</div>`;

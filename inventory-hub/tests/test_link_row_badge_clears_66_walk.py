@@ -41,11 +41,12 @@ def test_edit_spools_refusal_badge_empties_the_box(wizard):  # noqa: F811
     assert wizard.locator(BADGE).count() == 0
 
 
-def test_a_refusal_over_a_link_clears_the_link_as_the_x_does(wizard):  # noqa: F811
+def test_a_refusal_over_a_link_goes_back_to_the_link(wizard):  # noqa: F811
     """A different product's QR scanned over a link waiting for Save is refused, and the
-    earlier link stays (round 1's R5-01). The badge's click then clears the row as ✕ does:
-    the box empty and the boxes the link filled put back. RED: the box kept the refused
-    QR's text."""
+    earlier link stays (round 1's R5-01). The badge's click then clears only the refused
+    QR, as its ✕ does: the box shows the earlier QR again, waiting for Save (review round
+    3, R3-05; tests/test_review3_link_row_66.py has the rest). RED on a93605bf: the box kept
+    the refused QR's text."""
     from test_prusament_link_page_66_3 import TEMPLATE
     _open(wizard)
     _scan(wizard)
@@ -57,9 +58,9 @@ def test_a_refusal_over_a_link_clears_the_link_as_the_x_does(wizard):  # noqa: F
     assert _value(wizard, "#wiz-spool-product_url") != ""        # the earlier link stays
     wizard.locator(BADGE).click()
     wizard.wait_for_timeout(60)
-    assert _value(wizard, ROW) == ""
-    assert _row(wizard)["status"] == "empty"
-    assert _value(wizard, "#wiz-spool-product_url") == ""        # as ✕ puts it back
+    assert _value(wizard, ROW).lower() == "https://prusament.com/spool/17705/abc123def0"
+    assert _row(wizard)["status"] == "linked-new"
+    assert _value(wizard, "#wiz-spool-product_url") != ""        # still waiting for Save
 
 
 def test_the_adds_failed_scan_badge_empties_the_box(wizard):  # noqa: F811
