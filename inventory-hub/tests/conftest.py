@@ -882,7 +882,7 @@ def close_wizard(page, timeout: int = 5_000) -> None:
         const m = bootstrap.Modal.getInstance(document.getElementById('wizardModal'));
         if (m) {
             // wizardState is script-scoped, not on window: reference it by name.
-            try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}
+            try { wizardState.isDirty = false; } catch (_) {}
             m.hide();
         }
     """)

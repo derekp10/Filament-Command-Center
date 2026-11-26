@@ -1523,6 +1523,55 @@ def test_the_wizards_tare_from_the_filament_is_readable(page: Page, base_url: st
     conftest.close_wizard(page)
 
 
+def test_edit_spools_prusament_link_words_are_readable(page: Page, base_url: str):
+    """Group 66.3 (Derek's (B)): Edit Spool's "📷 Link this spool to its Prusament QR" box,
+    its row's badge (green when the QR links at Save, amber when it won't) and its note
+    line, on the wizard's dark ground. The spool, the owner check and the QR's page are
+    stubs, every write is answered in the browser, and nothing is saved. Scored from the
+    box (the guard scores descendants only), the words proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    qr = "https://prusament.com/spool/17705/abc123def0"
+    spool = {"id": 9101, "archived": False, "extra": {}, "initial_weight": 1000.0, "used_weight": 100.0,
+             "remaining_weight": 900.0, "spool_weight": 0.0, "location": "", "registered": "2026-02-11T04:07:24Z",
+             "filament": {"id": 9102, "name": "Galaxy Black", "material": "PLA", "color_hex": "111111",
+                          "weight": 1000.0, "spool_weight": 193.0, "extra": {},
+                          "vendor": {"id": 9, "name": "Prusament", "extra": {}}}}
+    template = {"name": "Prusament PLA Galaxy Black", "material": "PLA", "vendor": {"name": "Prusament"},
+                "color_name": "Galaxy Black", "weight": 1012.0, "weight_is_default": False, "spool_weight": 193.0,
+                "external_link": qr, "purchase_link": "", "extra": {"prusament_manufacturing_date": "2026-03-01",
+                                                                    "prusament_length_m": "336"}}
+    _read_only(page, extra_get={
+        "/api/spool_details": spool,
+        "/api/prusament/linked_spools": {"success": True, "spool_id": "17705", "spool_hash": "abc123def0", "spools": []},
+        "/api/external/search": {"success": True, "results": [template]},
+    })
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditWizard === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openEditWizard(9101); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool'"
+                           " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    row = page.locator("[data-spool-row-idx='0'] input")
+    box = page.locator("#wiz-spool-rows-box")
+    row.fill(qr)
+    row.press("Tab")
+    page.wait_for_function("() => wizardState.spoolRows[0].status === 'linked-new'", timeout=10_000)
+    assert conftest.contrast_offenders(box) == []
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(box, min_ratio=100))
+    assert "Links at Save" in scored and "Prusament says 1012 g" in scored, scored   # the walker cuts long text
+    # Amber: a link that isn't a Prusament spool's (no request needed).
+    row.fill("https://example.com/not-a-spool")
+    row.press("Tab")
+    page.wait_for_function("() => wizardState.spoolRows[0].status === 'refused'", timeout=10_000)
+    assert conftest.contrast_offenders(box) == []
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(box, min_ratio=100))
+    assert "Not a Prusament spool's link" in scored, scored
+    page.evaluate("() => { wizardState.isDirty = false; }")
+    conftest.close_wizard(page)
+
+
 def test_the_missing_tare_questions_offer_is_readable(page: Page, base_url: str):
     """Group 63.9(a), Derek's option 2 (2026-11-19, the Group 63 review's round 4): a
     new spool's offered empty weight is a "Use about 245 g" button beside its words,
@@ -2179,3 +2228,173 @@ def test_the_review_panels_outcome_line_and_held_card_head_are_readable(page: Pa
                  "FCC held these grams instead of charging them"):
         assert want in scored, (want, scored)
     page.keyboard.press("Escape")
+
+
+def test_the_wizards_filament_tare_from_its_brand_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.7 (Derek's D2 (a)): Edit Spool of a spool whose filament has no empty
+    weight of its own shows its brand's 167 g in the filament's Spool Wt box, marked
+    "↩ from vendor" beside the label and in the closed Physical Specs summary ("167g tare
+    ↩ from vendor"), in the spool box's look. The spool is a stub, every write is answered
+    in the browser, and nothing is saved. Each root is scored from its parent (the guard
+    scores descendants only), and each mark is proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    vendor = {"id": 9003, "name": "Example Brand", "extra": {}, "empty_spool_weight": 167.0}
+    filament = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+                "extra": {}, "vendor": vendor}
+    spool = {"id": 9001, "filament": filament, "initial_weight": 1000.0, "used_weight": 100.0,
+             "remaining_weight": 900.0, "location": "", "extra": {}, "archived": False}
+    _read_only(page, extra_get={"/api/spool_details": spool,
+                                "/api/external/vendors": {"success": True, "vendors": [vendor]}})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditWizard === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openEditWizard(9001); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool'"
+                           " && document.getElementById('wiz-fil-empty_weight').value === '167'"
+                           " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    toggle = page.locator('button.fcc-wiz-section-toggle[data-bs-target="#wiz-fil-physical-panel"]')
+    expect(toggle.locator(".fcc-wiz-section-summary")).to_contain_text("167g tare ↩ from vendor")
+    # The toggle's ▾ is left out, as in the price case: a state glyph, older than 66.
+    offenders = [o for o in conftest.contrast_offenders(toggle)
+                 if "fcc-wiz-section-chevron" not in (o.get("className") or "")]
+    assert offenders == [], offenders
+    scored = [o.get("text") for o in conftest.contrast_offenders(toggle, min_ratio=100)]
+    assert "↩ from vendor" in scored, scored
+    page.evaluate("() => bootstrap.Collapse.getOrCreateInstance("
+                  "document.getElementById('wiz-fil-physical-panel'), { toggle: false }).show()")
+    badge = page.locator("#wiz-fil-empty-inherited-badge")
+    expect(badge).to_be_visible()
+    column = badge.locator("xpath=ancestor::div[contains(@class, 'col-md-3')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "wiz-fil-empty-inherited-badge"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the filament's badge was never scored"
+    conftest.close_wizard(page)
+
+
+def test_edit_filaments_tare_from_its_brand_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.7 (Derek's D2 (a)): Edit Filament of a filament with no empty weight of its
+    own shows its manufacturer's 167 g on the Specs tab, marked "↩ from vendor" beside the
+    label, in the wizard's badge look. The filament is handed to the window, its vendor
+    list is a stub and every write is answered in the browser, so nothing is saved. The
+    badge is scored from its column and proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    vendor = {"id": 9003, "name": "Example Brand", "extra": {}, "empty_spool_weight": 167.0}
+    _read_only(page, extra_get={"/api/vendors": {"success": True, "vendors": [vendor]}})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditFilamentForm === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    fil = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+           "extra": {}, "vendor": vendor}
+    page.evaluate("(f) => { window.openEditFilamentForm(f); }", fil)
+    conftest.wait_modal_settled(page, "editFilamentModal")
+    page.locator("#editfil-tab-specs-btn").click()
+    badge = page.locator("#editfil-spool-weight-inherited-badge")
+    expect(badge).to_be_visible()
+    assert page.locator("#editfil-spool-weight").input_value() == "167"
+    column = badge.locator("xpath=ancestor::div[contains(@class, 'col-6')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "editfil-spool-weight-inherited-badge"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the badge was never scored"
+    # Derek's walk pick (b), 2026-11-25: the amber "(vendor: N g)" note is hidden while the
+    # badge shows, and back once a figure is typed (nothing is saved): scored there, proved.
+    note = page.locator("#editfil-vendor-wt-hint")
+    expect(note).to_be_hidden()
+    page.locator("#editfil-spool-weight").fill("190")
+    expect(note).to_be_visible()
+    expect(note).to_have_text("(vendor: 167g)")
+    expect(badge).to_be_hidden()
+    assert_contrast(column)
+    assert any(o.get("id") == "editfil-vendor-wt-hint"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the note was never scored"
+
+
+def test_edit_filaments_unread_manufacturer_note_is_readable(page: Page, base_url: str, assert_contrast):
+    """Review round 2 of Group 66 (Q1-04): with the manufacturer list unread, a name Edit
+    Filament can't check is said under the Vendor box, in the "(vendor: N g)" hint's amber.
+    The filament is handed to the window, its vendor list answers that it couldn't be read,
+    and every write is answered in the browser, so nothing is saved. Scored from its
+    column, the note proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page, extra_get={"/api/vendors": {"success": False, "msg": "Spoolman didn't answer"}})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditFilamentForm === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    vendor = {"id": 9003, "name": "Example Brand", "extra": {}}
+    fil = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+           "extra": {}, "vendor": vendor}
+    page.evaluate("(f) => { window.openEditFilamentForm(f); }", fil)
+    conftest.wait_modal_settled(page, "editFilamentModal")
+    page.locator("#editfil-vendor-name").fill("Exmaple Brand")
+    note = page.locator("#editfil-vendor-unread-note")
+    expect(note).to_be_visible()
+    assert "Couldn't read the manufacturer list" in note.inner_text()
+    column = note.locator("xpath=ancestor::div[contains(@class, 'col-6')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "editfil-vendor-unread-note"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the note was never scored"
+
+
+def test_the_wizards_unsaved_changes_question_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.2 (review round 1, R3-09): the wizard's "Unsaved Changes" question, and the
+    line under its buttons that says a scan was held off while it is up, on its dark
+    ground. Every write is answered in the browser; the question is answered Keep Editing,
+    and nothing is saved. Scored from the overlay (the guard scores descendants only), the
+    line proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openWizardModal === 'function' && typeof window.processScan === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openWizardModal(); }")
+    conftest.wait_modal_settled(page, "wizardModal")
+    page.evaluate("() => { wizardState.isDirty = true; window.openWizardModal(); }")
+    page.wait_for_selector("#fcc-wiz-dirty-confirm")
+    page.evaluate("() => window.processScan('ID:57', 'barcode')")
+    flash = page.locator("#fcc-wiz-dirty-flash")
+    expect(flash).not_to_have_text("")
+    root = page.locator("#fcc-wiz-unsaved-changes")
+    assert_contrast(root)
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(root, min_ratio=100))
+    assert "Unsaved Changes" in scored and flash.inner_text()[:20] in scored, scored
+    page.locator("#fcc-wiz-dirty-cancel").click()
+    page.evaluate("() => { wizardState.isDirty = false; }")
+    conftest.close_wizard(page)
+
+
+def test_edit_spools_qr_question_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.2 (review round 1, R3-04): Edit Spool's "A Prusament QR was scanned"
+    question (Keep Editing / Start an Add / Link it), and its line saying a scan was held
+    off while it is up, on its dark ground. The spool is a stub, every write is answered
+    in the browser, and the question is answered Keep Editing: nothing is saved. Scored
+    from the overlay (the guard scores descendants only), the line proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+                "extra": {}, "vendor": {"id": 9003, "name": "Example Brand", "extra": {}}}
+    spool = {"id": 9001, "filament": filament, "initial_weight": 1000.0, "used_weight": 100.0,
+             "remaining_weight": 900.0, "location": "", "extra": {}, "archived": False}
+    _read_only(page, extra_get={"/api/spool_details": spool})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openEditWizard === 'function' && typeof window.processScan === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openEditWizard(9001); }")
+    page.wait_for_function("() => wizardState.mode === 'edit_spool'"
+                           " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    page.evaluate("() => { window.wizardAskQrInEdit('https://prusament.com/spool/17705/abc123def0/'); }")
+    page.wait_for_selector("#fcc-wiz-qr-keep")
+    page.evaluate("() => window.processScan('ID:57', 'barcode')")
+    flash = page.locator("#fcc-wiz-qr-flash")
+    expect(flash).not_to_have_text("")
+    root = page.locator("#fcc-wiz-qr-in-edit")
+    assert_contrast(root)
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(root, min_ratio=100))
+    assert "A Prusament QR was scanned" in scored and flash.inner_text()[:20] in scored, scored
+    page.locator("#fcc-wiz-qr-keep").click()
+    page.evaluate("() => { wizardState.isDirty = false; }")
+    conftest.close_wizard(page)

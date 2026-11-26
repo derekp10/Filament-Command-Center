@@ -724,7 +724,9 @@ def test_clear_button_visible_on_error(page: Page):
 def test_error_badge_is_clickable_with_clear_handler(page: Page):
     """The red error badge doubles as a clear affordance for blind-scanning
     workflows where the user may not aim for the small × button. Tapping
-    the badge fires wizardScanSpoolRow(idx, '') just like the × button."""
+    the badge clears the row just as the × button does: wizardClearSpoolRow
+    empties the box, then runs the row's check with no link (Group 66's
+    picture walk: the badge ran only the check, and the box kept its text)."""
     _open_wizard_no_fetches(page)
     state = page.evaluate("""() => {
         document.getElementById('wiz-spool-qty').value = 1;
@@ -742,7 +744,7 @@ def test_error_badge_is_clickable_with_clear_handler(page: Page):
         };
     }""")
     assert state['hasOnclick'] is True
-    assert state['onclickContains'] and 'wizardScanSpoolRow' in state['onclickContains']
+    assert state['onclickContains'] and 'wizardClearSpoolRow' in state['onclickContains']
     assert state['cursor'] == 'pointer'
     assert state['role'] == 'button'
 

@@ -11,22 +11,14 @@ const unquoteExtra = (v) => {
     return s;
 };
 
-// Parse a Spoolman `filament_attributes` extra (JSON array, JSON-quoted
-// string, or bare string) into a clean array of trimmed non-empty strings.
-// Mirrors the parsing in _editfilOpenModal so the read-only detail modals and
-// the Edit Filament form agree on shape.
-const parseFilamentAttributes = (raw) => {
-    if (raw == null || raw === '') return [];
-    try {
-        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        if (Array.isArray(parsed)) return parsed.map(String).map(s => s.trim()).filter(Boolean);
-        if (parsed) return [String(parsed).trim()].filter(Boolean);
-    } catch (_) {
-        const fallback = String(raw).replace(/^"|"$/g, '').trim();
-        if (fallback) return [fallback];
-    }
-    return [];
-};
+// A Spoolman `filament_attributes` extra as the tags a person sees: the server's
+// one reading (window.fccFilamentAttrs, Group 66.6: an old "Silk, Matte" is Silk and
+// Matte, never one tag), each trimmed of spaces and stray quotes, blanks dropped, as
+// spoolman_api.filament_attribute_list cleans them for search and Low stock. The
+// read-only detail windows and Edit Filament's chips and baseline all read it here.
+const parseFilamentAttributes = (raw) => window.fccFilamentAttrs(raw)
+    .map((s) => s.trim().replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, '').trim())
+    .filter(Boolean);
 
 // Populate a read-only attribute chip row (shared by the Spool Details and
 // Filament Details modals). Hides the wrapping row entirely when there are no
@@ -2298,6 +2290,10 @@ const _askArchiveEmptyWeight = async (spoolId, filamentId, prefillWeight = null,
                 const vd = await vr.json();
                 if (vr.ok && vd && vd.success) {
                     showToast(`Saved ${n}g on Filament #${fil.id} and as ${vendorName}'s default.`, 'success');
+                    // Group 66.1: every open window hears of the vendor's new weight.
+                    document.dispatchEvent(new CustomEvent('vendor:updated', { detail: {
+                        id: String(vendorId),
+                        vendor: vd.vendor || Object.assign({}, fil.vendor || {}, { empty_spool_weight: n }) } }));
                 } else {
                     showToast(`Filament saved; ${vendorName} default failed: ${(vd && (vd.error || vd.msg)) || 'error'}`, 'warning', 7000);
                 }
@@ -2375,25 +2371,77 @@ const _editfilOpenModal = (fil) => {
     const currentNozzleMax = unquoteExtra(rawExtra.nozzle_temp_max);
     const currentBedMax = unquoteExtra(rawExtra.bed_temp_max);
     const currentSlicerProfile = unquoteExtra(rawExtra.slicer_profile);
-    let currentAttributes = [];
-    const rawAttrs = rawExtra.filament_attributes;
-    if (rawAttrs != null && rawAttrs !== '') {
-        try {
-            const parsed = typeof rawAttrs === 'string' ? JSON.parse(rawAttrs) : rawAttrs;
-            if (Array.isArray(parsed)) {
-                currentAttributes = parsed.map(String).map(s => s.trim()).filter(Boolean);
-            } else if (parsed) {
-                currentAttributes = [String(parsed)];
-            }
-        } catch (_) {
-            const fallback = String(rawAttrs).replace(/^"|"$/g, '').trim();
-            if (fallback) currentAttributes = [fallback];
-        }
-    }
+    // Group 66.6: the chips and Save's baseline read the value one way (an old
+    // "Silk, Matte" is Silk and Matte: it was one chip here and [] in the baseline,
+    // so every Save sent ["Silk, Matte"], which Spoolman refuses).
+    const currentAttributes = parseFilamentAttributes(rawExtra.filament_attributes);
+    // A stored value that isn't the multi-choice list (an old record's text), which
+    // Spoolman refuses with any other extra Save sends back (see the mend at Save).
+    // Review round 1 of Group 66 (R1-03): an old empty text value ('') and a list holding a
+    // non-text item are mended too (Spoolman 0.27 refuses both with any extra a Save sends).
+    const storedAttrsNotAList = rawExtra.filament_attributes != null
+        && (!Array.isArray(rawExtra.filament_attributes)
+            || rawExtra.filament_attributes.some((x) => typeof x !== 'string'));
 
     const modalEl = document.getElementById('editFilamentModal');
     if (!modalEl) { showToast('Edit Filament modal missing', 'error'); return; }
     const bsModal = bootstrap.Modal.getOrCreateInstance(modalEl);
+
+    // --- This open's session (Group 66.8): what the form held when it opened ---
+    // Every input, textarea and select in the window, and the attribute chips. The Import
+    // from External panel's own controls (its source, query, results and row ticks) hold
+    // no filament data, so a search typed there is no edit; Apply Selected writes into
+    // the real boxes, which count. A checkbox counts by its tick (its value is "on" either
+    // way). The baseline is taken right before the window shows, once every box is
+    // filled; a value code sets afterwards goes through codeSet, so it is no edit.
+    const readForm = () => {
+        const m = new Map();
+        // A colour row's ids carry a counter that grows with each row added, so a row added
+        // and removed again read as an unsaved change (review round 1 of Group 66, R2-03):
+        // the rows are keyed by their place.
+        const colourSeen = { picker: 0, hex: 0 };
+        modalEl.querySelectorAll('input, textarea, select').forEach((el, i) => {
+            if (el.closest('#editfil-import-panel')) return;
+            const v = (el.type === 'checkbox' || el.type === 'radio') ? String(el.checked) : el.value;
+            const cm = /^editfil-color-(picker|hex)-\d+$/.exec(el.id || '');
+            m.set(cm ? `colour-${cm[1]}-${colourSeen[cm[1]]++}` : (el.id || el.name || `#${i}`), v);
+        });
+        m.set('chips', attrSelected.join(','));
+        return m;
+    };
+    let baseline = new Map();
+    const session = {
+        closing: false,
+        isDirty: () => {
+            const now = readForm();
+            for (const k of new Set([...baseline.keys(), ...now.keys()])) {
+                if (baseline.get(k) !== now.get(k)) return true;
+            }
+            return false;
+        },
+        // A value code sets is no edit: the baseline follows it, but only where the box
+        // still showed its baseline value (a box the person changed stays changed).
+        codeSet: (fn) => {
+            const before = readForm();
+            try {
+                return fn();
+            } finally {
+                const after = readForm();
+                for (const k of new Set([...before.keys(), ...after.keys()])) {
+                    if (after.get(k) === before.get(k) || baseline.get(k) !== before.get(k)) continue;
+                    if (after.has(k)) baseline.set(k, after.get(k)); else baseline.delete(k);
+                }
+            }
+        },
+        // A close that asks nothing (Save, Close Anyway). The flag is set and cleared
+        // around Bootstrap's synchronous hide(), which fires hide.bs.modal inside it, so a
+        // hide Bootstrap drops (the window still fading in) never leaves it set for the
+        // person's next close.
+        closeUnasked: () => {
+            session.closing = true;
+            try { bsModal.hide(); } finally { session.closing = false; }
+        },
+    };
 
     // --- Populate fields ---
     const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val == null ? '' : val; };
@@ -2426,13 +2474,24 @@ const _editfilOpenModal = (fil) => {
         rawSaveBtn.dataset.mode = isCreate ? 'create' : 'edit';
     }
 
-    // Vendor empty_spool_weight hint (shown as small muted text next to the label).
-    const vendorWt = fil.vendor && fil.vendor.empty_spool_weight
-        ? Number(fil.vendor.empty_spool_weight) : null;
+    // What comes from the vendor the box holds (Group 66.1): the "(vendor: N g)" hint, the
+    // box's placeholder, and the <EmptyWeightField> binding's vendor (Use Vendor, and a
+    // box that only shows what it inherits). Drawn at the open, and again whenever the
+    // vendor the box holds changes or is saved: it was drawn once, from the filament as it
+    // opened, so a weight saved in the vendor editor (or a vendor picked) never reached it.
+    // The hint is drawn only while the box doesn't show that weight as its inheritance: the
+    // binding below hides it while its "↩ from vendor" badge shows (Derek's walk pick (b),
+    // 2026-11-25: the two said the same thing side by side).
     const vendorWtHint = document.getElementById('editfil-vendor-wt-hint');
-    if (vendorWtHint) vendorWtHint.innerText = vendorWt ? `(vendor: ${vendorWt}g)` : '';
     const spoolWtEl = document.getElementById('editfil-spool-weight');
-    if (spoolWtEl) spoolWtEl.placeholder = vendorWt ? String(vendorWt) : '';
+    let emptyField = null;   // the binding below
+    const drawVendorWeight = (v) => {
+        const w = v && v.empty_spool_weight ? Number(v.empty_spool_weight) : null;
+        if (vendorWtHint) vendorWtHint.innerText = w ? `(vendor: ${w}g)` : '';
+        if (spoolWtEl) spoolWtEl.placeholder = w ? String(w) : '';
+        if (emptyField) emptyField.setVendor(v || null);
+    };
+    drawVendorWeight(fil.vendor || null);
 
     // Reset any prior error banner + default-tab selection.
     const errEl = document.getElementById('editfil-error');
@@ -2623,12 +2682,24 @@ const _editfilOpenModal = (fil) => {
     //     onInput: () => void,                          // called on any keystroke
     //     newHintText: (typed) => 'Press Enter to add "<typed>"' | null
     //   }
-    const bindComboDropdown = (opts) => {
-        const input = document.getElementById(opts.inputId);
-        const dropdown = document.getElementById(opts.dropdownId);
+    // Group 66.1: bound ONCE per box. The window is reused, and each open added its four
+    // listeners again, each closing over that open's list: after a second open one
+    // ArrowDown moved the highlight twice, and a keyboard pick ran the FIRST open's onSelect
+    // against the first open's list (a vendor created since read as new, and Save made it
+    // again). Now the box keeps one set of listeners, which read the latest open's opts.
+    // `preferValue()`: with no row highlighted, Enter picks the row of that value when the
+    // list shows it (the vendor the box holds, under a name two vendors share), else the first.
+    // `onFocus()`: called as the box takes the focus (review round 2 of Group 66, Q1-05).
+    const bindComboDropdown = (newOpts) => {
+        const input = document.getElementById(newOpts.inputId);
+        const dropdown = document.getElementById(newOpts.dropdownId);
         if (!input || !dropdown) return;
+        if (input.__fccEditfilCombo) { input.__fccEditfilCombo.opts = newOpts; return; }
+        const combo = { opts: newOpts };
+        input.__fccEditfilCombo = combo;
 
         const render = () => {
+            const opts = combo.opts;
             const qs = (input.value || '').toLowerCase();
             const items = opts.getItems() || [];
             const filtered = qs
@@ -2654,15 +2725,22 @@ const _editfilOpenModal = (fil) => {
                 };
             });
         };
-        input.addEventListener('focus', render);
+        input.addEventListener('focus', () => {
+            if (combo.opts.onFocus) combo.opts.onFocus();
+            render();
+        });
         input.addEventListener('input', () => {
             render();
-            if (opts.onInput) opts.onInput();
+            if (combo.opts.onInput) combo.opts.onInput();
         });
+        // Closed 150 ms after the box loses the keyboard (a press on a row lands first), unless
+        // the box has it back by then (review round 3 of Group 66: Tab away and straight back
+        // closed the list under the person's typing, and Enter picked nothing).
         input.addEventListener('blur', () => {
-            setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+            setTimeout(() => { if (document.activeElement !== input) dropdown.style.display = 'none'; }, 150);
         });
         input.addEventListener('keydown', (e) => {
+            const opts = combo.opts;
             const visible = dropdown.style.display !== 'none';
             if (e.key === 'Escape' && visible) {
                 // Swallow Escape when the dropdown is open so it closes the
@@ -2688,7 +2766,10 @@ const _editfilOpenModal = (fil) => {
                 items[idx].scrollIntoView({ block: 'nearest' });
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                const target = items.find(el => el.classList.contains('active')) || items[0];
+                const prefer = typeof opts.preferValue === 'function' ? String(opts.preferValue() || '') : '';
+                const target = items.find(el => el.classList.contains('active'))
+                    || (prefer && items.find(el => el.dataset.value === prefer))
+                    || items[0];
                 if (target && target.dataset.value !== undefined) {
                     input.value = target.dataset.label;
                     if (opts.onSelect) opts.onSelect({ value: target.dataset.value, label: target.dataset.label });
@@ -2724,14 +2805,42 @@ const _editfilOpenModal = (fil) => {
             return `+ Add "${t}" as a new material`;
         },
     });
+    // Each late read below draws only while this open is still the open one (review round 1
+    // of Group 66, R2-01): the window is reused, and a read of an earlier open that landed
+    // after the next open drew into it (the first filament's slicer profile in the second's
+    // form, sent by its Save; its manufacturer box moved by the first open's look-up).
     fetch('/api/materials').then(r => r.json()).then(d => {
-        if (!d || !d.success) return;
+        if (_editfilSession !== session || !d || !d.success) return;
         materialCache = Array.isArray(d.materials) ? d.materials : [];
         refreshMaterialBadge();
     }).catch(() => {});
 
     // --- Vendor combobox + hidden id + "+ NEW" badge ---
+    // Group 66.1: the box keeps the vendor it holds BY ITS ID while its text is that vendor's
+    // name (it looked the text up by name, first in list order, so a filament on Derek's
+    // Sunlu #35 moved onto Sunlu #4 at any Save); a name is looked up only for typed text,
+    // the filament's own vendor first, else the lowest id; "+ NEW" only once the list was
+    // read (a list FCC couldn't read is no "no such vendor"). The filament's own vendor is a
+    // known record even when the list lacks it. Names compare as the server does
+    // (spoolman_api.vendor_name_key: trimmed, inner spaces made one, any case).
     let vendorCache = [];
+    let vendorsRead = false;
+    let vendorReadSeq = 0;      // the newest list read wins
+    // Review round 2 of Group 66 (Q1-03): the read whose list was last taken. An older read
+    // is dropped only when a newer one was taken: a re-read that failed (after a vendor
+    // save) dropped the open's good list, and the dropdown offered one vendor.
+    let vendorTakenSeq = 0;
+    // Q1-04: a read failed and none was taken, so FCC can't check a typed name.
+    let vendorReadFailed = false;
+    // Q1-05: the vendor the box held when it took the focus (typing blanks the held id).
+    let vendorHeldAtFocus = '';
+    // Review round 3 of Group 66 (weights-vendor R3-03): each record a vendor save put in the
+    // list, with the newest read sent before that save. A list from a read sent by then holds
+    // the vendor as it was before the save (or not at all, for one made with ➕), so the saved
+    // record is laid over it: a late older list, taken once a newer read failed (Q1-03),
+    // never puts the old weight back.
+    const vendorSavedOver = new Map();   // id -> { record, seq }
+    const vendorKey = (s) => String(s == null ? '' : s).split(/\s+/).filter(Boolean).join(' ').toLowerCase();
     const vendorNameEl = document.getElementById('editfil-vendor-name');
     const vendorIdEl = document.getElementById('editfil-vendor-id');
     const vendorNewBadge = document.getElementById('editfil-vendor-new-badge');
@@ -2739,6 +2848,14 @@ const _editfilOpenModal = (fil) => {
     // Group 6.2: ✏️ pencil opens the Vendor Edit modal stacked over this one.
     // Visible only when an EXISTING vendor is selected (mirrors vendorInfoPill).
     const vendorEditBtn = document.getElementById('editfil-vendor-edit-btn');
+    const vendorUnreadNote = document.getElementById('editfil-vendor-unread-note');
+    const showUnreadNote = (on) => {
+        if (!vendorUnreadNote) return;
+        vendorUnreadNote.textContent = on
+            ? "Couldn't read the manufacturer list to check this name: Save uses the manufacturer Spoolman has by this name, or makes a new one."
+            : '';
+        vendorUnreadNote.style.display = on ? '' : 'none';
+    };
     const refreshVendorBadge = () => {
         const typed = (vendorNameEl.value || '').trim();
         if (!typed) {
@@ -2746,12 +2863,28 @@ const _editfilOpenModal = (fil) => {
             vendorNewBadge.style.display = 'none';
             if (vendorInfoPill) vendorInfoPill.style.display = 'none';
             if (vendorEditBtn) vendorEditBtn.style.display = 'none';
+            showUnreadNote(false);
+            // No vendor (Generic): nothing comes from one (review round 2 of Group 66, Q1-01).
+            // The box, its "↩ from vendor", the hint and Use Vendor kept the old vendor's
+            // weight, and Save left it out: the filament had no vendor and no weight of its
+            // own, while the window showed the old vendor's.
+            drawVendorWeight(null);
             return;
         }
-        const match = vendorCache.find(v => (v.name || '').toLowerCase() === typed.toLowerCase());
+        const own = fil.vendor && fil.vendor.id != null ? fil.vendor : null;
+        const candidates = vendorCache.slice();
+        if (own && !candidates.some(v => String(v.id) === String(own.id))) candidates.push(own);
+        const held = vendorIdEl.value;
+        let match = held ? candidates.find(v => String(v.id) === held && vendorKey(v.name) === vendorKey(typed)) : null;
+        if (!match) {
+            const hits = candidates.filter(v => vendorKey(v.name) === vendorKey(typed));
+            match = (own && hits.find(v => String(v.id) === String(own.id)))
+                || hits.reduce((low, v) => (!low || Number(v.id) < Number(low.id) ? v : low), null);
+        }
         if (match) {
             vendorIdEl.value = String(match.id);
             vendorNewBadge.style.display = 'none';
+            showUnreadNote(false);
             if (vendorEditBtn) vendorEditBtn.style.display = 'inline-block';
             // Surface the vendor's data so the user knows what Spoolman has on
             // file. Empty-spool weight is the most useful; extras (if any)
@@ -2774,11 +2907,19 @@ const _editfilOpenModal = (fil) => {
                 vendorInfoPill.title = [tooltip, ...extraLines].join('\n');
                 vendorInfoPill.style.display = 'inline-block';
             }
+            drawVendorWeight(match);
         } else {
             vendorIdEl.value = '';
-            vendorNewBadge.style.display = 'inline-block';
+            // Unread, FCC can't tell a new name from a known one: no "+ NEW" (the grounding's
+            // C1). Review round 2 of Group 66: nothing comes from a vendor FCC doesn't know
+            // (Q1-02: the old vendor's weight stayed under the typed name, and Use Vendor
+            // saved it as the filament's own on the new one), and a failed read says Save
+            // may make a manufacturer of the name (Q1-04: a typo made one with no sign).
+            vendorNewBadge.style.display = vendorsRead ? 'inline-block' : 'none';
             if (vendorInfoPill) vendorInfoPill.style.display = 'none';
             if (vendorEditBtn) vendorEditBtn.style.display = 'none';
+            showUnreadNote(!vendorsRead && vendorReadFailed);
+            drawVendorWeight(null);
         }
     };
     bindComboDropdown({
@@ -2794,18 +2935,68 @@ const _editfilOpenModal = (fil) => {
             refreshVendorBadge();
         },
         onInput: () => refreshVendorBadge(),
+        // The vendor the box holds; once typing has blanked it, the one it held when it took
+        // the focus, else the filament's own (review round 2 of Group 66, Q1-05: "Sun" +
+        // Enter under Derek's two Sunlus took the lowest id, and Save moved the filament).
+        onFocus: () => { vendorHeldAtFocus = vendorIdEl.value; },
+        preferValue: () => vendorIdEl.value || vendorHeldAtFocus
+            || (fil.vendor && fil.vendor.id != null ? String(fil.vendor.id) : ''),
         newHintText: (typed) => {
             const t = (typed || '').trim();
-            if (!t) return null;
-            if (vendorCache.some(v => (v.name || '').toLowerCase() === t.toLowerCase())) return null;
+            if (!t || !vendorsRead) return null;
+            if (vendorCache.some(v => vendorKey(v.name) === vendorKey(t))) return null;
             return `+ Create vendor "${t}"`;
         },
     });
-    fetch('/api/vendors').then(r => r.json()).then(d => {
-        if (!d || !d.success) return;
-        vendorCache = d.vendors || [];
-        refreshVendorBadge();
-    }).catch(() => {});
+    // The vendor list, read at the open and again after a vendor is saved: an older read's
+    // list is never taken over a newer one's; one FCC couldn't read leaves the list (and
+    // the vendor held) as they were.
+    // Code, not the person (Group 66.8): a box it redraws is no edit.
+    const readVendors = () => {
+        const seq = ++vendorReadSeq;
+        const failed = () => {
+            if (_editfilSession !== session || vendorsRead) return;
+            vendorReadFailed = true;
+            session.codeSet(() => refreshVendorBadge());
+        };
+        return fetch('/api/vendors').then(r => r.json()).then(d => {
+            if (_editfilSession !== session) return;
+            if (!d || !d.success || !Array.isArray(d.vendors)) { failed(); return; }
+            if (seq < vendorTakenSeq) return;       // a newer read's list was taken
+            vendorTakenSeq = seq;
+            session.codeSet(() => {
+                vendorCache = d.vendors.map((x) => {
+                    const s = x && x.id != null ? vendorSavedOver.get(String(x.id)) : null;
+                    return s && seq <= s.seq ? s.record : x;
+                });
+                vendorSavedOver.forEach((s, id) => {
+                    if (seq <= s.seq && !vendorCache.some((x) => x && String(x.id) === id)) vendorCache.push(s.record);
+                });
+                vendorsRead = true;
+                vendorReadFailed = false;
+                refreshVendorBadge();
+            });
+        }).catch(() => failed());
+    };
+    // Drawn at the open from the filament's own manufacturer (review round 1 of Group 66,
+    // R1-01): a list read that failed left the last open's pill, another vendor's weight.
+    refreshVendorBadge();
+    readVendors();
+    // A vendor saved (or created) over the window: the list takes its record at once, the
+    // name box its new name when it holds that vendor, and what comes from it is redrawn;
+    // then the list is read again. Through codeSet: a redraw by code is no edit.
+    session.onVendorSaved = (v) => {
+        if (!v || v.id == null) return;
+        vendorSavedOver.set(String(v.id), { record: v, seq: vendorReadSeq });
+        session.codeSet(() => {
+            const i = vendorCache.findIndex(x => String(x.id) === String(v.id));
+            if (i >= 0) vendorCache[i] = v; else vendorCache.push(v);
+            if (fil.vendor && String(fil.vendor.id) === String(v.id)) fil.vendor = Object.assign({}, fil.vendor, v);
+            if (vendorIdEl.value === String(v.id) && v.name) vendorNameEl.value = v.name;
+            refreshVendorBadge();
+        });
+        readVendors();
+    };
 
     // --- Empty-Spool-Wt: bind <EmptyWeightField> on the Specs tab ---
     // Phase 2 (Group 12): the input + copy-vendor affordance is now owned by
@@ -2814,11 +3005,17 @@ const _editfilOpenModal = (fil) => {
     // semantics) and routes the "⇩ Copy Vendor Weight" click through the
     // component's `copyVendorBtn` handle. Idempotent — re-opening this modal
     // replaces prior listeners cleanly.
+    // Group 66.7: with its "↩ from vendor" badge (Derek's D2 (a)), and kept as emptyField:
+    // Save leaves out a weight the box only inherits, and the vendor's redraw reaches it.
     if (typeof window.bindEmptyWeightField === 'function' && spoolWtEl) {
         const field = window.bindEmptyWeightField({
             input: spoolWtEl,
             copyVendorBtn: document.getElementById('editfil-copy-vendor-wt'),
+            badge: document.getElementById('editfil-spool-weight-inherited-badge'),
+            sourceLabel: document.getElementById('editfil-spool-weight-inherited-source'),
+            hint: vendorWtHint,
         });
+        emptyField = field;
         if (field) {
             field.setFromCascade({
                 spoolWt: fil.spool_weight,
@@ -2970,7 +3167,7 @@ const _editfilOpenModal = (fil) => {
 
     // Load known attribute choices (and slicer profile choices) from Spoolman's field schema.
     fetch('/api/external/fields').then(r => r.json()).then(d => {
-        if (!d || !d.success) return;
+        if (_editfilSession !== session || !d || !d.success) return;
         const filamentFields = (d.fields && d.fields.filament) || [];
         const attrField = filamentFields.find(f => f.key === 'filament_attributes');
         if (attrField && Array.isArray(attrField.choices)) {
@@ -2983,7 +3180,8 @@ const _editfilOpenModal = (fil) => {
         const slicerField = filamentFields.find(f => f.key === 'slicer_profile');
         if (slicerField && Array.isArray(slicerField.choices)) {
             slicerChoices = slicerField.choices.slice();
-            renderSlicerSelect();
+            // Code redraws the list (Group 66.8): no edit of the form.
+            session.codeSet(() => renderSlicerSelect());
         }
     }).catch(() => {});
     renderAttrChips();
@@ -3078,6 +3276,14 @@ const _editfilOpenModal = (fil) => {
         // committing it as a chip, commit it now so it's not silently lost.
         if (attrInput && attrInput.value && attrInput.value.trim()) {
             addAttrChip(attrInput.value);
+            // Refused ("Did you mean ...?"), it stays in its box, and the Save stops here
+            // (review round 1 of Group 66, R2-05): it went on to "No changes to save", closed
+            // the window, and the typed tag was gone.
+            if (attrInput.value.trim()) {
+                showErr(`The tag "${attrInput.value.trim()}" wasn't added: pick it from the list, change it, or clear it, then Save.`,
+                    'editfil-tab-basic-btn');
+                return;
+            }
         }
         const attrsArr = attrSelected.slice();
         const newNozzleMax = val('editfil-nozzle-max');
@@ -3102,14 +3308,8 @@ const _editfilOpenModal = (fil) => {
         if (slicerSelect && slicerSelect.value === '__new__' && newSlicerProfile && !slicerChoices.includes(newSlicerProfile)) {
             slicerPendingNew = newSlicerProfile;
         }
-        const prevAttrsArr = (() => {
-            try {
-                const p = typeof rawExtra.filament_attributes === 'string'
-                    ? JSON.parse(rawExtra.filament_attributes)
-                    : rawExtra.filament_attributes;
-                return Array.isArray(p) ? p.map(String).map(s => s.trim()).filter(Boolean) : [];
-            } catch (_) { return []; }
-        })();
+        // Group 66.6: the chips' own reading, so an untouched old value is no change.
+        const prevAttrsArr = currentAttributes.slice();
         if (JSON.stringify(attrsArr) !== JSON.stringify(prevAttrsArr)) {
             dirtyExtras.filament_attributes = attrsArr;
         }
@@ -3147,6 +3347,9 @@ const _editfilOpenModal = (fil) => {
                 else if (v !== '' && v != null) cleanExtras[k] = `"${String(v)}"`;
             }
             payload = { ...data };
+            // Group 66.7 (the grounding's C15): a new filament inherits its vendor's weight;
+            // the box shows it (a picked vendor draws it), and the create leaves it out.
+            if (emptyField && emptyField.inherited()) delete payload.spool_weight;
             if (Object.keys(cleanExtras).length > 0) payload.extra = cleanExtras;
         } else {
             const same = (a, b) => {
@@ -3206,7 +3409,15 @@ const _editfilOpenModal = (fil) => {
                 if (wasMulti) changed.multi_color_hexes = '';
                 if (oldDir) changed.multi_color_direction = null;
             }
-            if (!same(data.spool_weight, fil.spool_weight)) changed.spool_weight = data.spool_weight;
+            // Group 66.7: the box is sent only when the person changed it (their typing,
+            // Use Vendor, an Import panel Apply, an own value emptied: null). A weight it
+            // only inherits (the vendor's) was written as the filament's own at EVERY Save,
+            // whatever was edited; and a filament storing 0 with no vendor weight showed an
+            // empty box, so every Save wrote null over the 0.
+            const wtByPerson = !emptyField || emptyField.isTouched();
+            if (wtByPerson && !same(data.spool_weight, fil.spool_weight)) {
+                changed.spool_weight = data.spool_weight;
+            }
             if (!same(data.density, fil.density)) changed.density = data.density;
             if (!same(data.diameter, fil.diameter)) changed.diameter = data.diameter;
             if (!same(data.weight, fil.weight)) changed.weight = data.weight;
@@ -3234,17 +3445,30 @@ const _editfilOpenModal = (fil) => {
                         mergedExtra[k] = `"${String(v)}"`;
                     }
                 }
+                // Group 66.6, the mend: an old record's attribute text goes back with
+                // every extra this Save sends (the copy above; update_filament merges the
+                // stored extras in too), and Spoolman 0.27 refuses the whole write for
+                // it. So it goes as the list the chips show, the shape the wizard's Edit
+                // Spool Save already writes. Outside dirtyExtras on purpose: the tags
+                // didn't change, so no label is flagged for a reprint.
+                if (storedAttrsNotAList && !('filament_attributes' in dirtyExtras)) {
+                    mergedExtra.filament_attributes = JSON.stringify(attrsArr);
+                }
                 changed.extra = mergedExtra;
             }
             payload = changed;
             if (Object.keys(payload).length === 0 && !pendingNewVendorName) {
                 showToast('No changes to save.', 'info');
-                bsModal.hide();
+                session.closeUnasked();   // Group 66.8: Save closes without the question
                 return;
             }
         }
 
         saveBtn.disabled = true;
+        // Review round 1 of Group 66 (R2-02): the window stays while its Save is on its way
+        // (the close guard below reads this): Cancel, ✕ or a click outside asked "Close
+        // without saving?", and the edit landed after Close Anyway had closed the window.
+        session.saving = true;
         try {
             // Register newly-typed filament_attribute tags with Spoolman's schema
             // so future modals show them in the dropdown. Fire-and-forget;
@@ -3266,6 +3490,10 @@ const _editfilOpenModal = (fil) => {
                 slicerPendingNew = null;
             }
 
+            // Group 66.1: a name another vendor has is refused by the server (409, with the
+            // vendor it names): Save uses that vendor, and its toast says so.
+            let usedExisting = null;
+            let madeVendor = null;     // review round 2 of Group 66 (Q1-04): said in the toast
             if (pendingNewVendorName) {
                 const vr = await fetch('/api/vendors', {
                     method: 'POST',
@@ -3275,6 +3503,18 @@ const _editfilOpenModal = (fil) => {
                 const vd = await vr.json();
                 if (vd && vd.success && vd.vendor && vd.vendor.id != null) {
                     payload.vendor_id = Number(vd.vendor.id);
+                    madeVendor = vd.vendor;
+                } else if (vr.status === 409 && vd && vd.existing && vd.existing.id != null) {
+                    usedExisting = vd.existing;
+                    payload.vendor_id = Number(vd.existing.id);
+                    if (!isCreate && fil.vendor && String(fil.vendor.id) === String(vd.existing.id)) {
+                        delete payload.vendor_id;
+                        if (Object.keys(payload).length === 0) {
+                            showToast(`No changes to save: ${vd.existing.name} (#${vd.existing.id}) is this filament's manufacturer already.`, 'info', 4000);
+                            session.closeUnasked();
+                            return;
+                        }
+                    }
                 } else {
                     showErr(`Couldn't create vendor "${pendingNewVendorName}": ${(vd && vd.msg) || 'unknown'}`, 'editfil-tab-basic-btn');
                     return;
@@ -3291,12 +3531,19 @@ const _editfilOpenModal = (fil) => {
             const d = await r.json();
             if (d && d.success) {
                 const newId = (d.filament && d.filament.id) || (isCreate ? '?' : fil.id);
-                showToast(isCreate ? `Filament #${newId} created.` : `Filament #${fil.id} updated.`, 'success');
+                const done = isCreate ? `Filament #${newId} created` : `Filament #${fil.id} updated`;
+                if (usedExisting) {
+                    showToast(`${done}; used the existing manufacturer ${usedExisting.name} (#${usedExisting.id}).`, 'success', 7000);
+                } else if (madeVendor) {
+                    showToast(`${done}; made the new manufacturer ${madeVendor.name || pendingNewVendorName} (#${madeVendor.id}).`, 'success', 7000);
+                } else {
+                    showToast(`${done}.`, 'success');
+                }
                 // A field the edit cleared that Spoolman still holds (2026-10-21).
                 if (d.warning) showToast(d.warning, 'warning', 7000);
                 if (window.refreshFilamentSpools) window.refreshFilamentSpools();
                 if (isCreate && window.fetchLocations) window.fetchLocations();
-                bsModal.hide();
+                session.closeUnasked();   // Group 66.8: Save closes without the question
                 // 23.3 — if this edit changed a field that PRINTS on the filament
                 // swatch label, the physical sample is now stale. Nudge a reprint
                 // (only when the label was previously CONFIRMED). Uses payload/
@@ -3311,55 +3558,48 @@ const _editfilOpenModal = (fil) => {
         } catch (e) {
             showErr(`${isCreate ? 'Create' : 'Update'} error: ${e.message || e}`);
         } finally {
+            session.saving = false;
             saveBtn.disabled = false;
         }
     };
 
-    // --- Escape-with-unsaved-changes guard ---
-    // Tracks whether the user has modified ANY input since open. Compared to
-    // a DOM snapshot at show-time so arbitrary input changes (text + hex +
-    // chips + color rows) all mark the form dirty. Escape pops a small
-    // confirm overlay instead of dismissing the modal outright.
-    const snapshotFormState = () => {
-        // Hash every input/textarea/select value + the chip set + color rows.
-        const parts = [];
-        modalEl.querySelectorAll('input, textarea, select').forEach(el => {
-            parts.push(`${el.id || el.name}=${el.value}`);
-        });
-        parts.push('chips=' + attrSelected.join(','));
-        return parts.join('|');
-    };
-    let baselineState = '';
-    // A capture-phase keydown listener on the modal, so it sees Escape before
-    // Bootstrap's built-in dismiss handler (on the same element, registered first).
-    // When the form is dirty, it swallows the Escape and asks. Group 62.8: it was a
-    // bubble listener, so Bootstrap's dismiss ran first and closed the window, and
-    // the question was drawn inside a window already gone; stopImmediatePropagation
-    // also stops Bootstrap's listener when the Escape is the window's own (the
-    // location manager hands it one with the focus on the page, Group 62.4).
-    const escGuardHandler = (e) => {
-        if (e.key !== 'Escape') return;
-        // A combobox / chip dropdown open in the form answers its own Escape (it
-        // closes the list only, and stops propagation): its field's handler runs
-        // after this one now, so the guard steps aside while a list shows. Each
-        // list hides on its field's blur, so only the focused field's can show.
-        const listOpen = Array.from(modalEl.querySelectorAll('[id^="editfil-"][id$="-dropdown"]'))
-            .some((d) => d.style.display !== 'none' && d.getClientRects().length > 0);
-        if (listOpen) return;
-        if (snapshotFormState() === baselineState) return; // Clean — let Bootstrap close.
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        _editfilShowEscapeConfirm(bsModal);
-    };
-    modalEl.addEventListener('keydown', escGuardHandler, true);
-    // Re-snapshot when the modal finishes opening (after we populate fields).
-    modalEl.addEventListener('shown.bs.modal', () => { baselineState = snapshotFormState(); }, { once: true });
-    modalEl.addEventListener('hidden.bs.modal', () => {
-        modalEl.removeEventListener('keydown', escGuardHandler, true);
-    }, { once: true });
+    // --- Ask before closing unsaved, every way out (Group 66.8) ---
+    // The baseline is what every box holds now, filled and before the window shows; the
+    // late reads go through codeSet. The window's hide.bs.modal guard (below,
+    // _editfilSession) asks while the form differs from it, for Cancel, ✕, a click
+    // outside and Escape alike: Escape reaches Bootstrap's own keydown listener, which
+    // hides the window. The Escape-only guard this replaces asked for Escape alone, and
+    // stepped aside while a list was drawn, which a vendor saved from inside the window
+    // left drawn: its next Escape closed the changed form unasked. A list's own Escape
+    // closes only the list (its box stops the key), so Bootstrap never hears it.
+    baseline = readForm();
+    _editfilSession = session;
 
     bsModal.show();
 };
+
+// --- EDIT FILAMENT ASKS BEFORE IT CLOSES UNSAVED (Group 66.8) ---
+// One guard on the window's hide.bs.modal, which every close goes through. It is on the
+// document and reads the event's target, so the vendor editor (a sibling window drawn
+// over Edit Filament) never counts. _editfilSession is the open Edit Filament's
+// (_editfilOpenModal sets it at each open; a late hidden.bs.modal of an earlier close
+// never clears a newer one). A close it lets through: a form unchanged since it opened,
+// or one of its own closes that ask nothing (Save, Close Anyway: session.closing).
+let _editfilSession = null;
+document.addEventListener('hide.bs.modal', (e) => {
+    if (!e.target || e.target.id !== 'editFilamentModal') return;
+    const s = _editfilSession;
+    if (s && s.saving && !s.closing) {
+        // Its Save is on its way: the window stays, and closes itself once the Save lands.
+        e.preventDefault();
+        showToast('This filament is saving: the window closes once it is saved.', 'warning', 7000);
+        return;
+    }
+    if (!s || s.closing || !s.isDirty()) return;
+    e.preventDefault();
+    // Its question's Close Anyway closes through the session, so it never asks again.
+    _editfilShowEscapeConfirm({ hide: () => s.closeUnasked() });
+});
 
 // "Close without saving?" for Edit Filament. Group 62.8: a mountOverlay; it was drawn
 // inside the window (position:absolute) with a document key listener and a Tab trap of
@@ -3368,24 +3608,47 @@ const _editfilOpenModal = (fil) => {
 // (scripts.html) answer its keys: a person's Enter presses the focused button, a scan's
 // Enter presses nothing (the scan goes to the scan path and the question stays for a
 // person, Group 61), and a Space inside a scan presses nothing.
+// Group 66.8: it asks on every way out now (the window's hide.bs.modal guard above), so a
+// click can open it with its answers under the pointer:
+//   - Close Anyway loses the edits, so it takes no mouse click until a double click has
+//     passed (62.3, window.armedClick); a keyboard's click, Enter and Escape never wait.
+//   - Both answers close the question with the pointer over the window (and Close
+//     Anyway the window, over the one under it), so each shields the next press: the
+//     second press of a double click reaches nothing behind (window.fccShieldNextPress).
+//   - While it is up it holds scans (window.fccHoldScans): a scan said nothing and acted
+//     behind it (a Prusament QR opened the wizard under it). A bare CMD:CANCEL keeps
+//     editing; any other scan is refused, said on its own line.
 const _editfilShowEscapeConfirm = (bsModal) => {
     const modalEl = document.getElementById('editFilamentModal');
     if (!modalEl) return;
     // One at a time: a mashed Escape doesn't stack them.
     if (window.getOverlay && window.getOverlay('editfil-esc-confirm')) return;
     let handle = null;
+    let release = null;
+    // Where the keyboard was (review round 1 of Group 66, R2-04): keeping on editing gives it
+    // back there; it was left on the page, and the next keys typed went nowhere.
+    const returnTo = document.activeElement;
     const cleanup = () => {
+        if (release) { release(); release = null; }
         if (!handle) return;
         const h = handle;
         handle = null;
         h.cleanup();
     };
+    const keep = () => {
+        cleanup();
+        if (returnTo && returnTo !== document.body && returnTo.isConnected && modalEl.contains(returnTo)
+                && modalEl.classList.contains('show')) {
+            try { returnTo.focus({ preventScroll: true }); } catch (_) { /* gone */ }
+        }
+    };
+    const shield = () => { if (window.fccShieldNextPress) window.fccShieldNextPress(); };
     handle = window.mountOverlay({
         id: 'editfil-esc-confirm',
         tier: 'standard',
         host: modalEl,
         initialFocus: '#editfil-esc-no',
-        onEscape: cleanup,
+        onEscape: keep,
         content: `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px;
                         max-width:min(26.25rem, calc(100vw - 16px)); box-sizing:border-box; text-align:center;">
@@ -3395,11 +3658,25 @@ const _editfilShowEscapeConfirm = (bsModal) => {
                     <button type="button" id="editfil-esc-yes" class="btn btn-danger btn-sm" style="min-width:120px;">Close Anyway</button>
                     <button type="button" id="editfil-esc-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Keep Editing</button>
                 </div>
+                <div id="editfil-esc-flash" role="alert"
+                     style="color:#ffc107; font-size:var(--fcc-fs-small); margin-top:10px;"></div>
             </div>`,
     });
     const ov = handle.element;
-    ov.querySelector('#editfil-esc-no').onclick = cleanup;
-    ov.querySelector('#editfil-esc-yes').onclick = () => { cleanup(); bsModal.hide(); };
+    const flash = (msg) => { const f = ov.querySelector('#editfil-esc-flash'); if (f) f.textContent = msg; };
+    const arm = window.armedClick || ((fn) => fn);
+    const armMs = window.questionArmMs ? window.questionArmMs() : 0;
+    ov.querySelector('#editfil-esc-no').onclick = () => { keep(); shield(); };
+    ov.querySelector('#editfil-esc-yes').onclick = arm(() => { cleanup(); shield(); bsModal.hide(); }, armMs);
+    if (window.fccHoldScans) {
+        release = window.fccHoldScans({
+            title: 'Close without saving?',
+            element: ov,
+            hint: 'Answer the question on screen first: Keep Editing, or Close Anyway',
+            cancel: () => keep(),
+            flash,
+        });
+    }
 };
 
 // 23.3 — Filament label-invalidation reprint nudge.
@@ -4313,21 +4590,27 @@ document.addEventListener('vendor:updated', (e) => {
     const brandEl = document.getElementById('fil-detail-vendor');
     if (brandEl && brandEl.dataset.vendorId === String(vid) && v) {
         brandEl.innerText = v.name || brandEl.innerText;
-    }
-
-    // Edit Filament modal — only act when it's actually open, otherwise we'd
-    // touch stale DOM left over from a previous edit session.
-    const editModal = document.getElementById('editFilamentModal');
-    if (editModal && editModal.classList.contains('show') && v) {
-        const nameInput = document.getElementById('editfil-vendor-name');
-        const idInput = document.getElementById('editfil-vendor-id');
-        if (nameInput && idInput && idInput.value === String(vid)) {
-            nameInput.value = v.name || nameInput.value;
-            // Fire input event so bindComboDropdown's onInput handler
-            // re-runs refreshVendorBadge → re-renders the info pill.
-            nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+        // Group 66.1: the filament window reads its filament again, quietly, so what comes
+        // from the vendor (its "↩ vendor" empty weight, the backfill offer) is current.
+        const filModal = document.getElementById('filamentModal');
+        const fid = (document.getElementById('fil-detail-id') || {}).innerText;
+        if (filModal && filModal.classList.contains('show') && fid && typeof openFilamentDetails === 'function') {
+            if (typeof state !== 'undefined') { state.lastFilamentInfoHash = null; state.lastFilamentSpoolsHash = null; }
+            openFilamentDetails(fid, true);
         }
     }
+    _editfilVendorSaved(v);
+});
+
+// Group 66.1: a vendor saved or created reaches an open Edit Filament (its session redraws
+// what comes from the vendor, as code; _editfilOpenModal sets session.onVendorSaved).
+const _editfilVendorSaved = (v) => {
+    const editModal = document.getElementById('editFilamentModal');
+    if (!v || !editModal || !editModal.classList.contains('show')) return;
+    if (_editfilSession && typeof _editfilSession.onVendorSaved === 'function') _editfilSession.onVendorSaved(v);
+};
+document.addEventListener('vendor:created', (e) => {
+    _editfilVendorSaved(e && e.detail ? e.detail.vendor : null);
 });
 
 
@@ -4639,6 +4922,9 @@ document.addEventListener('vendor:updated', (e) => {
                 if (val == null) val = '';
             }
             inputEl.value = String(val);
+            // Group 66.7: an applied weight is the person's choice (the empty-weight box
+            // then counts it as theirs, even when it equals the vendor's figure).
+            if (key === 'spool_weight') inputEl.dispatchEvent(new Event('input', { bubbles: true }));
             applied++;
         });
         showToast(`Applied ${applied} field${applied === 1 ? '' : 's'}. Click Save to persist.`, 'success', 4000);

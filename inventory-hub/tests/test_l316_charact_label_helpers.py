@@ -130,9 +130,13 @@ def test_get_smart_type_native_list_attrs_quote_stripped():
 
 
 def test_get_smart_type_bad_json_swallowed():
-    """A non-JSON attrs string must not raise — JSONDecodeError is swallowed
-    and the material alone is returned."""
-    assert app_module.get_smart_type('PLA', {'filament_attributes': 'not-json'}) == 'PLA'
+    """PIN UPDATED DELIBERATELY (Group 66.6): a non-JSON attrs string is an old
+    record's comma list, read by the server's one rule
+    (spoolman_api._parse_filament_attrs_value, Group 54.3), so the label shows its
+    tags, as the cards, search and Low stock do: 'Silk, Matte' is 'Silk Matte PLA'.
+    It used to be swallowed (the material alone). It still never raises."""
+    assert app_module.get_smart_type('PLA', {'filament_attributes': 'not-json'}) == 'not-json PLA'
+    assert app_module.get_smart_type('PLA', {'filament_attributes': 'Silk, Matte'}) == 'Silk Matte PLA'
 
 
 def test_get_smart_type_non_list_json_guard():

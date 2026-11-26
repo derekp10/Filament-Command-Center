@@ -107,6 +107,28 @@ const refreshAllRowPreviews = () => {
     });
 };
 
+// A manufacturer saved while the list holds its spools (review round 2 of Group 66, Q1-06):
+// the post-archive prompt's "also the brand's default" sets a brand's empty weight, and the
+// list's other spools of that brand kept the weight they were read with (none), so a Gross
+// reading asked for it again. Each cached spool of that brand takes its record now.
+document.addEventListener('vendor:updated', (e) => {
+    const v = e && e.detail ? e.detail.vendor : null;
+    if (!v || v.id == null) return;
+    let changed = false;
+    weighOutDetailsCache.forEach((entry) => {
+        const was = entry && entry.cascade ? entry.cascade.vendor : null;
+        if (!was || was.id == null || String(was.id) !== String(v.id)) return;
+        entry.cascade = Object.assign({}, entry.cascade, { vendor: Object.assign({}, was, v) });
+        // A tare typed into the missing-tare question is the spool's own (Group 63.7): the
+        // brand's new figure never replaces it (review round 3 of Group 66, R3-01: a save
+        // refused and made again sent the typed tare beside a used weight worked out from
+        // the brand's).
+        if (entry.tareTyped == null) entry.empty = window.resolveEmptySpoolWeightSource(entry.cascade).value;
+        changed = true;
+    });
+    if (changed) refreshAllRowPreviews();
+});
+
 const setWeighOutMode = (mode) => {
     if (!['gross', 'net', 'additive', 'set_used'].includes(mode)) return;
     window.weighOutMode = mode;
@@ -1091,6 +1113,8 @@ window.saveWeighOutRow = async (idStr) => {
             // Group 63.7: the spool's own now (the question says so), saved with
             // the reading below, so its next weigh doesn't ask again.
             details.tareTyped = Number(tare);
+            // And in its cascade, which outranks the brand there too (review round 3, R3-01).
+            details.cascade = Object.assign({}, details.cascade || {}, { spoolWt: Number(tare) });
             weighOutDetailsCache.set(id, details);
             r = computeRowResult(id, raw, mode);
             if (!r || r.error || r.requires_empty) {

@@ -1158,19 +1158,30 @@ def _close_question(page):
     return page.evaluate("() => ({ open: !!document.getElementById('editfil-esc-confirm'), hides: window.__hides })")
 
 
+def _close_flash(page):
+    return page.evaluate("() => { const f = document.getElementById('editfil-esc-flash'); return f ? f.textContent : null; }")
+
+
 @pytest.mark.parametrize("focus", ["#editfil-esc-yes", "#editfil-esc-no"])
 @pytest.mark.parametrize("ms", [1, 26, 150])
 def test_a_scan_never_answers_close_without_saving(page61, focus, ms):
     """RED on ca1a701: with Close Anyway focused the scan closed the filament
     editor unsaved; with Keep Editing it closed the question; either way the
-    scan stayed in the scan buffer."""
+    scan stayed in the scan buffer.
+
+    PIN UPDATED DELIBERATELY (Group 66, the grounding's C16): the question holds scans
+    while it is up (window.fccHoldScans), as the move questions and the pickers do, so
+    the scan is refused on it, quoted on its own line, and no longer goes on to the scan
+    path behind it (a Prusament QR there opened the wizard under the question). It
+    still answers nothing and leaves nothing in the scan buffer."""
     _clock(page61)
     _open_close_question(page61, focus)
     _type(page61, "ID:57", ms)
     assert _close_question(page61) == {"open": True, "hides": 0}
     assert _buffer(page61) == ""
-    page61.wait_for_function("() => window.__ids.length === 1")
-    assert _ids(page61)[0][0] == "ID:57"
+    page61.wait_for_function("() => (document.getElementById('editfil-esc-flash') || {}).textContent")
+    assert "Ignored: ID:57" in _close_flash(page61)
+    assert _ids(page61) == []
 
 
 def test_a_persons_enter_on_close_without_saving_still_answers(page61):
@@ -1231,12 +1242,16 @@ def test_a_space_inside_a_scan_presses_no_button(page61, which, ms):
     assert not _pressed(page61, which), f"{which}: the Space pressed the button"
     _type(page61, "SHELF", ms)
     page61.wait_for_timeout(100)
-    # Whole: on the scan path (the header, the pill, the close question), or
-    # refused by the open question, which quotes it (the two pickers).
+    # Whole: on the scan path (the header, the pill), or refused by the open question,
+    # which quotes it (the two pickers, and since Group 66 the close question, which
+    # holds scans while it is up: PIN UPDATED DELIBERATELY, the grounding's C16).
     if which == "picker":
         assert "Ignored: LOC:GARAGE SHELF" in _picker(page61)["flash"], _picker(page61)
     elif which == "tree":
         assert "GARAGE SHELF isn't one of the parents offered here" in _tree(page61)["flash"], _tree(page61)
+    elif which == "close":
+        assert "Ignored: LOC:GARAGE SHELF" in (_close_flash(page61) or ""), _close_flash(page61)
+        assert [t for t, _ in _ids(page61)[before:]] == [], _ids(page61)
     else:
         assert [t for t, _ in _ids(page61)[before:]] == ["LOC:GARAGE SHELF"], _ids(page61)
     assert not _pressed(page61, which)

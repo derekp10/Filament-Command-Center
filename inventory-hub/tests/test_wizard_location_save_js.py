@@ -368,7 +368,7 @@ def test_the_clone_prefill_leaves_a_toolheads_location_blank(tmp_path):
     spool = {"id": 134, "location": "XL-3", "comment": "", "extra": {"physical_source": "LR-MDB-1"},
              "filament": {"id": 7, "material": "PLA", "name": "Galaxy Black", "vendor": {"name": "Prusament"}}}
     res = _run(tmp_path, f"""
-window.openWizardModal = async () => {{}};
+window.openWizardModal = async () => true;   // Group 66.2: an opener goes on only on a true answer
 window.wizardSelectType = () => {{}};
 window.wizardExistingSelected = () => {{}};
 window.resolveEmptySpoolWeightSource = () => ({{ value: null, source: null }});

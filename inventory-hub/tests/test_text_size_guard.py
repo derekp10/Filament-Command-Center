@@ -255,7 +255,7 @@ def test_spool_and_filament_windows_text_is_readable(page: Page, base_url: str, 
 
 
 def _close_wizard(page: Page):
-    page.evaluate("() => { try { wizardState.isDirty = false; wizardState.forceClose = true;"
+    page.evaluate("() => { try { wizardState.isDirty = false;"
                   " wizardState.returnToSpoolId = null; wizardState.returnToFilamentId = null; } catch (e) {} }")
     _hide(page, "wizardModal")
 

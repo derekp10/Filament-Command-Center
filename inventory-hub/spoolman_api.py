@@ -325,10 +325,12 @@ def get_all_spools_strict(allow_archived=False):
     return parse_inbound_data(resp.json())
 
 
-def _read_list(path, timeout):
+def _read_list(path, timeout, parse=True):
     """GET one of Spoolman's list endpoints and SAY whether it worked:
     (records, None) with the parsed list, or (None, why) when Spoolman didn't
-    answer, answered an error, or answered something that isn't a list."""
+    answer, answered an error, or answered something that isn't a list.
+    `parse=False` hands the records on raw (Group 66.1: the vendor list, whose
+    every other read is raw, the page stripping a text extra's quotes itself)."""
     try:
         sm_url, _ = config_loader.get_api_urls()
         r = requests.get(f"{sm_url}{path}", timeout=timeout)
@@ -341,7 +343,7 @@ def _read_list(path, timeout):
         records = r.json()
         if not isinstance(records, list):
             return None, "Spoolman's answer wasn't a list"
-        return parse_inbound_data(records), None
+        return (parse_inbound_data(records) if parse else records), None
     except Exception as e:
         return None, f"Spoolman's answer couldn't be read ({e})"
 
@@ -359,6 +361,45 @@ def read_filament_list():
     """Every filament as (filaments, None), or (None, why) (Group 52.1a: the
     dashboard heartbeat counts the label backlog's flagged filaments)."""
     return _read_list("/api/v1/filament", 3)
+
+
+def read_vendor_list():
+    """Every vendor (manufacturer), raw, as (vendors, None), or (None, why) when FCC
+    couldn't read the list (Group 66.1). get_vendors answers [] for both, so after a
+    Spoolman blip Edit Filament marked a filament's own vendor "+ NEW" and its Save made a
+    second vendor of that name; and a list FCC can't read is never "no vendors" (Merge
+    Filament's 53.2 rule): every entry must be a vendor record, a dict whose `id` is an
+    int (not a bool), or the whole read counts as unread."""
+    vendors, why = _read_list("/api/v1/vendor", 5, parse=False)
+    if vendors is None:
+        return None, why
+    for v in vendors:
+        vid = v.get('id') if isinstance(v, dict) else None
+        if not isinstance(vid, int) or isinstance(vid, bool):
+            return None, "Spoolman's answer couldn't be read (an entry that isn't a vendor)"
+    return vendors, None
+
+
+def vendor_name_key(name):
+    """A vendor's name as the duplicate check compares it (Group 66.1): trimmed, inner
+    runs of spaces made one, any case. "Sunlu", " SUNLU " and "sunlu" are one name, and so
+    are "Jessie Premium" and "Jessie  Premium"; "Sun-lu" is another (66.9's possible-
+    duplicates list reads looser). The page's own check reads the same way."""
+    return ' '.join(str(name or '').split()).lower()
+
+
+def vendor_named(name, vendors, but_not=None):
+    """The vendor already holding `name` (vendor_name_key), other than `but_not` (an id):
+    the lowest id when several do; None when the name is free."""
+    key = vendor_name_key(name)
+    if not key:
+        return None
+    hits = [v for v in (vendors or []) if isinstance(v, dict)
+            and vendor_name_key(v.get('name')) == key
+            and (but_not is None or str(v.get('id')) != str(but_not))]
+    if not hits:
+        return None
+    return min(hits, key=lambda v: v.get('id') if isinstance(v.get('id'), int) else float('inf'))
 
 
 class SpoolListRead:
@@ -2488,28 +2529,46 @@ def _parse_filament_attrs_value(raw):
     or parsed) is the multi-choice shape and comes back as it is, its items
     never split: an item with a comma could only be a real choice. A JSON
     string holding a JSON list (a list once written through a text field) is
-    that list. None, '', other types and a JSON number read as before."""
+    that list. None, '' and other types read as no tag.
+
+    Group 66.6: one reading, the page's too. window.fccFilamentAttrs
+    (inv_core.js) mirrors this rule exactly, pinned by
+    tests/test_filament_attrs_one_reading_66_6.py. So a list keeps only its
+    text items (`_attr_items`: Spoolman takes only text in a multi-choice
+    list, so a number, null, true / false, list or object item can only be an
+    old record's, and reads as no tag), a JSON number is one tag, its text as
+    written ('7', '1e5'), and JSON true / false / null or an object is none.
+    Python's str() of None, True or 1e5 ('None', 'True', '100000.0') has no
+    JavaScript twin, and they were never tags."""
     if raw is None or raw == "":
         return []
     if isinstance(raw, list):
-        return [str(x) for x in raw]
+        return _attr_items(raw)
     if isinstance(raw, str):
         try:
             parsed = json.loads(raw)
         except (ValueError, TypeError):
             return _split_attr_text(raw)
         if isinstance(parsed, list):
-            return [str(x) for x in parsed]
+            return _attr_items(parsed)
         if isinstance(parsed, str):
             try:
                 inner = json.loads(parsed)
             except (ValueError, TypeError):
                 inner = None
             if isinstance(inner, list):
-                return [str(x) for x in inner]
+                return _attr_items(inner)
             return _split_attr_text(parsed)
-        return [str(parsed)]
+        if isinstance(parsed, (int, float)) and not isinstance(parsed, bool):
+            return _split_attr_text(raw)   # a JSON number, as written: '7' -> ['7']
+        return []                          # JSON true / false / null, or an object
     return []
+
+
+def _attr_items(items):
+    """Group 66.6: a list's text items, each as it is (never split, trimmed or
+    deduplicated, as before). Anything else in the list is no tag."""
+    return [x for x in items if isinstance(x, str)]
 
 
 def _split_attr_text(text):
@@ -2934,13 +2993,9 @@ def format_spool_display(spool_data):
         mat = str(mat).strip().upper()
         
         fil_extra = fil.get('extra') or {}
-        
-        raw_attrs = fil_extra.get('filament_attributes', '[]')
-        try:
-            attrs_list = json.loads(raw_attrs) if isinstance(raw_attrs, str) else raw_attrs
-            if not isinstance(attrs_list, list): attrs_list = []
-        except: attrs_list = []
-        clean_attrs = [str(a).strip().strip('"').strip("'") for a in attrs_list if a]
+
+        # Group 66.6: the shared reading, so an old "Silk, Matte" shows its tags.
+        clean_attrs = filament_attribute_list(fil)
         smart_mat = f"{' '.join(clean_attrs)} {mat}".strip() if clean_attrs else mat
         
         col_name = fil_extra.get('original_color')
@@ -3573,12 +3628,8 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 v_name = str(vid.get('name', 'Generic')).strip()
                 m_name = str(fil.get('material', 'PLA')).strip().upper()
                 
-                raw_attrs = fil.get('extra', {}).get('filament_attributes', '[]')
-                try:
-                    attrs_list = json.loads(raw_attrs) if isinstance(raw_attrs, str) else raw_attrs
-                    if not isinstance(attrs_list, list): attrs_list = []
-                except: attrs_list = []
-                clean_attrs = [str(a).strip().strip('"').strip("'") for a in attrs_list if a]
+                # Group 66.6: the shared reading, so an old "Silk, Matte" shows its tags.
+                clean_attrs = filament_attribute_list(fil)
                 smart_m_name = f"{' '.join(clean_attrs)} {m_name}".strip() if clean_attrs else m_name
                 
                 c_name = str(color_name).strip().title() if color_name else str(fil.get('name', 'Unknown')).strip().title()

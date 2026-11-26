@@ -2942,6 +2942,11 @@ window.promptPrusamentMatched = (res) => {
     const name = res.filament_name || 'filament';
     const filled = res.filled || [];
     const conflicts = res.conflicts || [];
+    // Group 66.2 (the grounding's C5) and its review round 1 (R3-03): while this very spool
+    // is open in Edit Spool, its next Save would write the wizard's old values back over an
+    // update made here: the temps and the weights both wait.
+    const editingThis = !!(window.wizardEditingSpool && window.wizardEditingSpool() === String(sid));
+    const heldWords = `#${sid} is open in the wizard: close it first, then scan its QR again.`;
     const LABELS = {
         settings_extruder_temp: 'Nozzle (min)', nozzle_temp_max: 'Nozzle (max)',
         settings_bed_temp: 'Bed (min)', bed_temp_max: 'Bed (max)',
@@ -2961,7 +2966,8 @@ window.promptPrusamentMatched = (res) => {
                     <span>${esc(c.label || LABELS[c.field] || c.field)}</span>
                     <span><span style="color:#adb5bd;">${esc(c.current)}°C</span> &rarr; <span class="text-info fw-bold">${esc(c.scanned)}°C</span></span>
                 </div>`).join('')}
-            <button id="pm-update-temps" class="btn btn-sm btn-warning w-100 mt-2">Update to Prusament's spec</button>
+            ${editingThis ? `<div class="text-warning small mt-1">⚠️ ${esc(heldWords)}</div>`
+                : `<button id="pm-update-temps" class="btn btn-sm btn-warning w-100 mt-2">Update to Prusament's spec</button>`}
         </div>` : '';
 
     // L200 — spool weight-field corrections (total / tare), confirm-gated.
@@ -2982,9 +2988,13 @@ window.promptPrusamentMatched = (res) => {
                 <span>Remaining <span class="text-muted">(used ${g(sw.used)} kept)</span></span>
                 <span><span style="color:#adb5bd;">${g(sw.remaining.current)}</span> &rarr; <span class="text-success fw-bold">${g(sw.remaining.new)}</span></span>
             </div>` : '';
+        // Group 66.2 (the grounding's C5): held while this very spool is open in Edit
+        // Spool, whose next Save would write its old weights back over the correction.
+        const heldByWizard = !!(sw.rows && sw.rows.length && editingThis);
         const blockedLine = sw.blocked
-            ? `<div class="text-warning small mt-1">⚠️ ${esc(sw.blocked)}</div>` : '';
-        const applyBtn = (sw.rows && sw.rows.length)
+            ? `<div class="text-warning small mt-1">⚠️ ${esc(sw.blocked)}</div>`
+            : (heldByWizard ? `<div class="text-warning small mt-1">⚠️ ${esc(heldWords)}</div>` : '');
+        const applyBtn = (sw.rows && sw.rows.length && !heldByWizard)
             ? `<button id="pm-update-weights" class="btn btn-sm btn-success w-100 mt-2">📦 Update spool weights</button>` : '';
         weightHtml = `
             <div id="pm-weight-section" class="border border-success rounded p-2 mb-2" style="background:#2a2a2a;">
@@ -2996,6 +3006,7 @@ window.promptPrusamentMatched = (res) => {
             </div>`;
     }
 
+    if (editingThis && (conflicts.length || (sw && sw.rows && sw.rows.length))) showToast(heldWords, 'warning', 7000);
     const content = `
         <div class="p-3" style="max-width:26.25rem; background:#1e1e1e; color:#fff; border:1px solid #444; border-radius:8px;">
             <h6 class="text-info mb-1">🎯 Matched Prusament spool</h6>
@@ -3991,9 +4002,34 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                 // (The old Step-2 "Import from External" did only the filament
                 // half, so the spool came up empty whenever the filament already
                 // existed — the bug Derek hit.)
-                showToast('🆕 New Prusament spool — opening the Add wizard to onboard it', 'info', 4500);
-                if (typeof window.openWizardModal === 'function') {
-                    Promise.resolve(window.openWizardModal()).then(() => {
+                // Group 66.2 and its review round 1: it used to open (and so reset) the
+                // wizard unasked, even one open with changes: an Edit silently became an Add.
+                // Now, in order:
+                //   - a QR a Spool box (or Edit Spool's link box) holds already is a second
+                //     read: said, nothing more;
+                //   - an Add whose filament the QR will name (New Manual Form, nothing typed
+                //     or picked for the filament) takes it into an empty Spool box;
+                //   - with a Save on its way, one sentence says it wasn't added;
+                //   - Edit Spool asks what the QR is (link it, an Add, or keep editing);
+                //   - otherwise openWizardModal asks first when the wizard holds changes, and
+                //     keeping them adds nothing, said in a toast and the Activity Log.
+                const escWords = window.escHtml || ((x) => x);
+                const url = res.url || '';
+                const startAdd = () => {
+                    if (typeof window.openWizardModal !== 'function') return;
+                    const editing = window.wizardEditingSpool ? window.wizardEditingSpool() : null;
+                    Promise.resolve(window.openWizardModal({ why: 'A new Prusament spool was scanned.' })).then((ok) => {
+                        if (ok === false) {
+                            const words = editing
+                                ? "Kept the wizard as it was, so the scanned Prusament spool wasn't added. Save first, then scan it again."
+                                : "Kept the wizard as it was, so the scanned Prusament spool wasn't added. Scan it into a Spool box, or Save first.";
+                            showToast(words, 'warning', 7000);
+                            if (window.logClientEvent) {
+                                window.logClientEvent(`⚠️ ${escWords(words)} (${escWords(res.url || '')})`, 'WARNING');
+                            }
+                            return;
+                        }
+                        showToast('🆕 New Prusament spool — opening the Add wizard to onboard it', 'info', 4500);
                         const rowEl = document.querySelector('[data-spool-row-idx]');
                         if (rowEl && typeof window.wizardScanSpoolRow === 'function') {
                             const idx = parseInt(rowEl.getAttribute('data-spool-row-idx'), 10) || 0;
@@ -4009,6 +4045,32 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                             if (q) { q.value = res.url || ''; window.wizardSearchExternal(true); }
                         }
                     });
+                };
+                const fed = window.wizardTakePrusamentLink ? window.wizardTakePrusamentLink(url) : false;
+                const editingNow = window.wizardEditingSpool ? window.wizardEditingSpool() : null;
+                if (fed && fed.already != null) {
+                    showToast(editingNow
+                        ? `That QR is in the link box already: Save links Spool #${editingNow} to it.`
+                        : `That spool's QR is in Spool ${fed.already + 1} already.`, 'info', 4000);
+                } else if (fed) {
+                    showToast(`🆕 New Prusament spool: scanning it into Spool ${fed.row + 1}`, 'info', 4000);
+                } else if (window.wizardIsSaving && window.wizardIsSaving()) {
+                    const words = "The wizard is saving, so the scanned Prusament spool wasn't added: scan it again once the Save is done.";
+                    showToast(words, 'warning', 7000);
+                    if (window.logClientEvent) window.logClientEvent(`⚠️ ${escWords(words)} (${escWords(url)})`, 'WARNING');
+                } else if (editingNow && window.wizardAskQrInEdit) {
+                    Promise.resolve(window.wizardAskQrInEdit(url)).then((answer) => {
+                        if (answer === 'add') { startAdd(); return; }
+                        if (answer === 'link') {
+                            showToast(`Checking the scanned QR in Spool #${editingNow}'s link box: Save links it.`, 'info', 4000);
+                            return;
+                        }
+                        const words = `Kept editing Spool #${editingNow}, so the scanned Prusament QR wasn't used.`;
+                        showToast(words, 'warning', 7000);
+                        if (window.logClientEvent) window.logClientEvent(`⚠️ ${escWords(words)} (${escWords(url)})`, 'WARNING');
+                    });
+                } else {
+                    startAdd();
                 }
             } else if (res.type === 'audit_done_question') {
                 // Done found spools to park, and nothing has moved. An audit
@@ -4776,10 +4838,9 @@ const printLabel = (sid) => {
                 const colorHex = fil.color_hex || '000000';
                 const rgb = hexToRgb(colorHex);
                 let typeStr = fil.material || "Unknown";
-                try {
-                    let attrs = (typeof extra.filament_attributes === 'string') ? JSON.parse(extra.filament_attributes) : extra.filament_attributes;
-                    if (Array.isArray(attrs) && attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr;
-                } catch (err) { }
+                // Group 66.6: the server's one reading of the tags (window.fccFilamentAttrs).
+                const attrs = window.fccFilamentAttrs(extra.filament_attributes);
+                if (attrs.length > 0) typeStr = attrs.join(' ') + ' ' + typeStr;
                 const qrEl = document.getElementById('print-qr');
                 if (qrEl) {
                     qrEl.innerHTML = "";

@@ -353,6 +353,33 @@ window.armedClick = armedClick;
     };
 })();
 
+// --- A QUESTION HOLDS SCANS WHILE IT IS UP (Group 66) ---
+// processScan brings every scan to the open question on top (window._fccOpenMoveQuestion,
+// the registry Group 40.3 made for the move questions): the question's own
+// `route(text, source)` may take it, a bare CMD:CANCEL calls its `cancel()` (its safe
+// answer), and anything else is refused, said in a toast and on the question's `flash`
+// line, so a scan never acts behind a question nobody has answered. `question`:
+// {title, element, hint, cancel, flash, route?}. Returns release(), which the question
+// calls as it closes (a second call does nothing). A question that is a mountOverlay
+// (its `element` the overlay's root) is released when the overlay closes by any path
+// too, its host window's close included (fcc:overlay-closed).
+window.fccHoldScans = (question) => {
+    window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
+    window._fccOpenMoveQuestion = question;
+    let released = false;
+    const release = () => {
+        if (released) return;
+        released = true;
+        document.removeEventListener('fcc:overlay-closed', onClosed);
+        const open = (window._fccOpenMoveQuestions || []).filter((q) => q !== question);
+        window._fccOpenMoveQuestions = open;
+        window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+    };
+    const onClosed = (e) => { if (e && e.detail && e.detail.element === question.element) release(); };
+    document.addEventListener('fcc:overlay-closed', onClosed);
+    return release;
+};
+
 // --- A SPOOL AS A COLOUR TILE (Group 58; Derek, 2026-11-03) ---
 // The audit panel's look for a spool in a list nobody presses: Done's question and the
 // audit's report window. Its swatch (makeSwatchHtml, as the panel's tiles), its name
@@ -1078,11 +1105,40 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 //                         a burst scanner's stall inside one sends it whole. A
 //                         held key's repeats are a person's: a scanner never
 //                         sends one ("Shelf 1111" was sent as spool #111).
-const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false }) => {
+//   snapshot(el)       -> (Group 66.4) optional: called before a key that could
+//                         start a scan lands (a run's first key, one after a
+//                         pause, a burst's first key; once a key at most), and
+//                         handed on for the scan's first key. A label's keys
+//                         land in the box before its Enter proves it a scan, and
+//                         run the page's listeners: a page that keeps state from
+//                         them (the wizard's touched sets, its sums) puts it all
+//                         back from this.
+//   onScan(txt, el, info) -> info = { source, snapshot }: 'barcode' at scanner
+//                         pace, else 'keyboard' (the default path's rule), and the
+//                         snapshot above (undefined without one).
+//   keep(txt, el)      -> (66.4) optional: true lets the Enter reach the box with
+//                         the text in it (a web address in a box that takes one).
+//   restoreEvent       -> (66.4) default true: the put-back text tells the box's
+//                         listeners with an `input` (the location editor's rely on
+//                         it); false for a caller that puts its state back itself.
+// The Enter a scan used, and a CR LF scanner's second, are the scan's: their
+// keyup never reaches the box either (66.4: the wizard's weight boxes work out
+// their sums on keyup, and blanked the Scale box after the put-back). A caller
+// with no isScanPayload gets the page's rule (looksLikeScanPayload), and one
+// with no match matches nothing (the cross-check's C10: a burst threw inside
+// the listener, the scan was lost and its Enter reached the box).
+const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false, snapshot = null,
+    keep = null, restoreEvent = true }) => {
+    if (typeof match !== 'function') match = () => false;
+    if (typeof isScanPayload !== 'function') {
+        isScanPayload = (txt) => (typeof window.looksLikeScanPayload === 'function'
+            ? window.looksLikeScanPayload(txt) : /[:/]/.test(txt));
+    }
     let buf = '';
     let startedAt = 0;
     let lastAt = 0;
     let preScanValue = '';   // what the user had typed BEFORE the burst began
+    let preScanSnap;         // the snapshot taken as that burst began (66.4)
     // `labels`: the keys typed into the box since it last changed any other
     // way, each with the box's text and selection before it.
     const RESET_MS = 2000;          // the accumulator's: keys further apart are two inputs
@@ -1148,8 +1204,13 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
     // saved, searched or pressed there unless it asked enterIsAScan).
     const SECOND_ENTER_MS = 100;
     let sentAt = 0;
+    // Group 66.4: the keyup of each Enter this capture took is the scan's too.
+    let keyupsToEat = 0;
+    let keyupsSince = 0;
+    const eatKeyup = (now) => { keyupsToEat += 1; keyupsSince = now; };
     const stampScanEnter = (now) => {
         sentAt = now;
+        eatKeyup(now);
         const st = (typeof state !== 'undefined') ? state : window.state;
         if (st) st.lastScanEnterAt = now;
     };
@@ -1160,11 +1221,12 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
         const first = keys[k];
         el.value = first.before;
         try { if (first.s0 != null) el.setSelectionRange(first.s0, first.s1); } catch (_) { /* no caret */ }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+        if (restoreEvent) el.dispatchEvent(new Event('input', { bubbles: true }));
         run = null;
         const text = keys.slice(k).map((x) => x.k).join('');
-        if (onScan) onScan(text, el);
-        else if (window.processScan) window.processScan(text, now - first.t < BURST_MS ? 'barcode' : 'keyboard');
+        const source = now - first.t < BURST_MS ? 'barcode' : 'keyboard';
+        if (onScan) onScan(text, el, { source, snapshot: first.snap });
+        else if (window.processScan) window.processScan(text, source);
     };
     document.addEventListener('keydown', (e) => {
         const el = e.target;
@@ -1175,13 +1237,15 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
             if (sentAt && now - sentAt < SECOND_ENTER_MS) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
+                eatKeyup(now);
                 return;
             }
             const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
             const looksScanned = fast && isScanPayload(buf);
             const payload = buf;
             const restore = preScanValue;
-            buf = ''; startedAt = 0; preScanValue = '';
+            const restoreSnap = preScanSnap;
+            buf = ''; startedAt = 0; preScanValue = ''; preScanSnap = undefined;
             if (labels) {
                 const keys = inStep(el, now) ? run.keys : null;
                 run = null;
@@ -1192,9 +1256,15 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
                     k = keys.length - payload.length;
                 }
                 if (k < 0 && keys && !looksScanned) k = digitsFrom(keys, now);
-                if (k >= 0) { sendFrom(e, el, keys, k, now); return; }
+                if (k >= 0) {
+                    // A box that takes this text keeps it, its Enter and all (66.4).
+                    if (keep && keep(keys.slice(k).map((x) => x.k).join(''), el)) return;
+                    sendFrom(e, el, keys, k, now);
+                    return;
+                }
             }
             if (!looksScanned) return;   // a real entry — let the field's own handler run
+            if (keep && keep(payload, el)) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             stampScanEnter(now);
@@ -1203,20 +1273,37 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
             // (this handler doesn't preventDefault on character keys), so
             // clearing outright silently destroyed an un-submitted entry.
             el.value = restore;
-            if (onScan) onScan(payload, el);
+            if (onScan) onScan(payload, el, { source: 'barcode', snapshot: restoreSnap });
             else if (window.processScan) window.processScan(payload, 'barcode');
             return;
         }
 
+        // The caller's snapshot (66.4), taken at most once a key and only where a scan
+        // can start: a labels run's first key or one after a pause (every label, burst
+        // and digits run starts so), and a burst's first key.
+        let snapTaken = false;
+        let keySnap;
+        const snapNow = () => {
+            if (!snapTaken) {
+                snapTaken = true;
+                if (typeof snapshot === 'function') {
+                    try { keySnap = snapshot(el); } catch (_) { keySnap = undefined; }
+                }
+            }
+            return keySnap;
+        };
         if (labels) {
             if (e.isComposing || e.repeat || e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)) {
                 run = null;
                 // A held key's repeats: a person's, never a scanner's burst.
-                if (e.repeat) { buf = ''; startedAt = 0; preScanValue = ''; return; }
+                if (e.repeat) { buf = ''; startedAt = 0; preScanValue = ''; preScanSnap = undefined; return; }
             } else if (e.key.length === 1) {
                 if (!inStep(el, now)) run = { el, keys: [] };
                 const [s0, s1] = caretOf(el);
-                run.keys.push({ k: e.key, t: now, before: el.value || '', s0, s1 });
+                const prevKey = run.keys[run.keys.length - 1];
+                const canStart = !prevKey || now - prevKey.t > DIGITS_BURST_MS;
+                run.keys.push({ k: e.key, t: now, before: el.value || '', s0, s1,
+                    snap: canStart ? snapNow() : undefined });
             }
         }
         if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
@@ -1226,10 +1313,18 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
             buf = '';
             startedAt = now;
             preScanValue = el.value || '';
+            preScanSnap = snapNow();
         }
         buf += e.key;
         lastAt = now;
     }, true);   // capture: must beat the field's own Enter handler
+    document.addEventListener('keyup', (e) => {
+        if (e.key !== 'Enter' || keyupsToEat <= 0) return;
+        if (Date.now() - keyupsSince > RESET_MS) { keyupsToEat = 0; return; }
+        keyupsToEat -= 1;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }, true);
 };
 window.installFieldScanCapture = installFieldScanCapture;
 
@@ -1640,6 +1735,40 @@ window.fccIsLabel = (text) => WHOLE_LABEL.test(String(text == null ? '' : text))
 // scanning a card confirmed a label in an audit and, outside one, took a flagged spool
 // off the 🏷️ Backlog with no label printed. A label FCC prints keeps ID: (labels_csv.py).
 window.fccSpoolCardQr = (id) => `SPL:${id}`;
+
+// --- A FILAMENT'S ATTRIBUTE TAGS, BY THE SERVER'S ONE RULE (Group 66.6) ---
+// spoolman_api._parse_filament_attrs_value, mirrored exactly (pinned against it by
+// tests/test_filament_attrs_one_reading_66_6.py): a list is its text items, each as it
+// is, never split; a JSON string holding a list is that list; any other string is a
+// comma list (each piece trimmed, blanks and repeats dropped), so an old record's
+// "Silk, Matte" is Silk and Matte; a JSON number is one tag, its text as written; JSON
+// true / false / null, an object or any other value is no tag. It takes the wire form
+// (/api/filaments) and FCC's parsed one (the details and spool reads) alike. Read only
+// while code runs (the load-order canary): no top-level name of its own.
+window.fccFilamentAttrs = (raw) => {
+    const splitText = (text) => {
+        const out = [];
+        for (const piece of String(text).split(',')) {
+            const tag = piece.trim();
+            if (tag && !out.includes(tag)) out.push(tag);
+        }
+        return out;
+    };
+    const textItems = (list) => list.filter((x) => typeof x === 'string');
+    if (raw == null || raw === '') return [];
+    if (Array.isArray(raw)) return textItems(raw);
+    if (typeof raw !== 'string') return [];
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch (_) { return splitText(raw); }
+    if (Array.isArray(parsed)) return textItems(parsed);
+    if (typeof parsed === 'string') {
+        let inner = null;
+        try { inner = JSON.parse(parsed); } catch (_) { inner = null; }
+        return Array.isArray(inner) ? textItems(inner) : splitText(parsed);
+    }
+    if (typeof parsed === 'number') return splitText(raw);
+    return [];
+};
 
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {

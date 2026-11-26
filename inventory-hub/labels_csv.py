@@ -13,7 +13,6 @@ Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 from flask import request, jsonify  # type: ignore
 import requests  # type: ignore
 import csv
-import json
 import os
 import tempfile
 
@@ -42,12 +41,9 @@ def hex_to_rgb(hex_str):
 
 def get_smart_type(material, extra_data):
     material = clean_string(material) or ""
-    raw_attrs = extra_data.get('filament_attributes', '[]')
-    try:
-        attrs_list = json.loads(raw_attrs) if isinstance(raw_attrs, str) else raw_attrs
-        if not isinstance(attrs_list, list): attrs_list = []
-    except json.JSONDecodeError: attrs_list = []
-    
+    # Group 66.6: the shared reading (an old "Silk, Matte" is Silk and Matte, and a
+    # stray non-text item no longer raises a TypeError out of the label export).
+    attrs_list = spoolman_api._parse_filament_attrs_value(extra_data.get('filament_attributes', '[]'))
     clean_attrs = [clean_string(a) for a in attrs_list if a]
     # 28.A2 — join only the non-empty parts so an empty material doesn't leave a
     # trailing space ('Matte ') in the label CSV Type column.

@@ -227,7 +227,11 @@
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label small text-secondary mb-1" title="Tare weight of the spool">Spool
-                                    Wt (g)</label>
+                                    Wt (g)
+                                    <span id="wiz-fil-empty-inherited-badge"
+                                        class="badge bg-info-subtle text-info-emphasis ms-1"
+                                        style="display: none; font-size: var(--fcc-fs-label); font-weight: normal;"
+                                        title="The manufacturer's empty weight: this filament has none of its own. Type a weight to give the filament its own.">↩ from vendor</span></label>
                                 <input type="number" class="form-control bg-dark text-white border-secondary"
                                     id="wiz-fil-empty_weight" placeholder="Tare">
                             </div>
@@ -330,13 +334,17 @@
                         </div>
                     </div>
 
-                    <!-- Per-spool Prusament scan rows (one per spool, optional). -->
-                    <div class="bg-dark p-2 rounded border border-secondary mb-3 mt-3">
+                    <!-- Per-spool Prusament scan rows (one per spool, optional). In Edit
+                         Spool it links the spool to its QR (Group 66.3, Derek's (B)):
+                         the label and the note line below say so. -->
+                    <div id="wiz-spool-rows-box" class="bg-dark p-2 rounded border border-secondary mb-3 mt-3">
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <label class="text-info mb-0 small fw-bold">📷 Per-spool Prusament scan (optional)</label>
+                            <label id="wiz-spool-rows-label" class="text-info mb-0 small fw-bold">📷 Per-spool Prusament scan (optional)</label>
                             <span id="wiz-spool-rows-summary" class="text-secondary small"></span>
                         </div>
                         <div id="wiz-spool-rows-container"></div>
+                        <div id="wiz-spool-link-note" role="status" class="mt-1"
+                             style="display:none; color:#ffe08a; font-size:var(--fcc-fs-small);"></div>
                     </div>
 
                     <!-- Mismatch panel: shown when an auto-switched filament has fields that

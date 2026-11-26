@@ -36,6 +36,14 @@ def _client():
     return app_module.app.test_client()
 
 
+def _names_free(monkeypatch):
+    """PIN UPDATED DELIBERATELY (Group 66.1): a rename reads the vendor list first, to
+    refuse a name another vendor has (spoolman_api.read_vendor_list). These pins are
+    about the write after it: the list holds only the vendor itself, so the new name is
+    free."""
+    monkeypatch.setattr(app_module.spoolman_api, "read_vendor_list", lambda: ([{"id": 5, "name": "Old"}], None))
+
+
 def _capture_logs(monkeypatch):
     """Capture every state.add_log_entry call as (msg, args, kwargs)."""
     calls = []
@@ -327,6 +335,7 @@ def test_update_vendor_success_forwards_data_and_logs_diff(monkeypatch):
     before = {"id": 5, "name": "Old", "extra": {"website": "a"}}
     updated = {"id": 5, "name": "New", "extra": {"website": "b"}}
     seen = {}
+    _names_free(monkeypatch)
     monkeypatch.setattr(app_module.spoolman_api, "get_vendor", lambda vid: before)
     monkeypatch.setattr(
         app_module.spoolman_api, "update_vendor_or_raise",
@@ -371,6 +380,7 @@ def test_update_vendor_rejection_maps_to_400_with_error_body(monkeypatch):
     """SpoolmanRejection -> HTTP 400 with the rejection body verbatim in msg
     (the modal's 7s-toast source) plus an ERROR/ff4444 activity entry naming
     the vendor id."""
+    _names_free(monkeypatch)
     monkeypatch.setattr(app_module.spoolman_api, "get_vendor", lambda vid: {"id": 5, "name": "Old"})
 
     def _reject(vid, data):
@@ -393,6 +403,7 @@ def test_update_vendor_rejection_maps_to_400_with_error_body(monkeypatch):
 def test_update_vendor_generic_exception_maps_to_500(monkeypatch):
     """A non-SpoolmanRejection exception maps to HTTP 500 with msg == str(e)
     and does NOT write an activity-log entry (only logger.error)."""
+    _names_free(monkeypatch)
     monkeypatch.setattr(app_module.spoolman_api, "get_vendor", lambda vid: {"id": 5})
 
     def _boom(vid, data):
