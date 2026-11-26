@@ -25,7 +25,6 @@ Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 import contextlib
 import html
 import math
-import re
 import time
 
 from flask import request, jsonify  # type: ignore
@@ -1756,6 +1755,9 @@ def api_edit_spool_wizard():
                     "msg": msg,
                     "error": err,
                     "spool_saved": spool_committed,
+                    # Group 66.9 review round 2 (R2X-1): an answer lost may have landed,
+                    # so the page sends its Vendor box's manufacturer at the next Save.
+                    "filament_may_have_saved": spoolman_api.write_may_have_landed(err),
                 }
                 if spool_committed:
                     # Group 63 review (C4): the spool's write landed, so what it did
@@ -1939,24 +1941,13 @@ def _direct_location_write(sid, pre, updates):
     return None, out
 
 
-# Group 54 review R5-2: LAST_SPOOLMAN_ERROR's shape for a refusal Spoolman answered.
-_ANSWERED_REFUSAL_RE = re.compile(r"HTTP \d{3}:")
-# requests' MaxRetryError: its adapter retries nothing (Retry(0, read=False)), so this is
-# raised only while connecting (refused, timed out, a name that doesn't resolve) and the
-# request never left FCC (review R6-1). A read error comes out as itself instead.
-_NEVER_SENT_MARK = "Max retries exceeded"
-
-
 def _write_may_have_landed(err):
     """Whether a write update_spool reported failed may have landed all the same:
-    its answer never came, or came broken (a read timeout, a dropped or cut-off
-    connection, a 200 whose body isn't JSON: update_spool's timeout is a READ
-    timeout). Not a refusal Spoolman answered ("HTTP nnn: …"), FCC's own before
-    sending (PREMERGE_READ_REFUSAL), nor one that never connected ("Max retries
-    exceeded": Spoolman down; review R6-1): those wrote nothing."""
-    s = str(err or '')
-    return not (_ANSWERED_REFUSAL_RE.match(s) or spoolman_api.PREMERGE_READ_REFUSAL in s
-                or _NEVER_SENT_MARK in s)
+    spoolman_api.write_may_have_landed's one rule (its answer never came, or came
+    broken; not a refusal Spoolman answered, FCC's own before sending, nor one that
+    never connected), shared with the manufacturer merge's read-backs (Group 66.9
+    review round 2)."""
+    return spoolman_api.write_may_have_landed(err)
 
 
 _BASED_ON_EPS_G = 0.05   # grams: Spoolman keeps weights as floats

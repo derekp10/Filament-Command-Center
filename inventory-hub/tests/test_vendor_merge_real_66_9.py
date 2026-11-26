@@ -95,9 +95,12 @@ def test_the_merge_on_real_spoolman_carries_moves_and_deletes(require_spoolman):
             assert plan["plan"]["carry"] == {"external_id": f"acme-{tag}"}
             assert sorted(f["id"] for f in plan["plan"]["filaments"]) == sorted(fils)
             assert _gone(url, "vendor", src) is False     # the plan wrote nothing
-            r = client.post(f"/api/vendors/{src}/merge_into/{dst}", json={})
+            # The merge asks for itself (review round 1, S5; round 2, S1: `{}` here was
+            # answered 400 once round 1 landed).
+            r = client.post(f"/api/vendors/{src}/merge_into/{dst}", json={"merge": True})
             body = r.get_json()
         assert r.status_code == 200, body
+        assert body["success"] is True, body
         assert sorted(body["moved_filament_ids"]) == sorted(fils)
         for fid in fils:
             fil = requests.get(f"{url}/api/v1/filament/{fid}", timeout=10).json()

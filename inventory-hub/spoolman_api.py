@@ -105,6 +105,28 @@ _CUT_OFF_MARKS = ("Connection broken", "IncompleteRead", "Response ended prematu
 _NOT_JSON_RE = re.compile(r": line \d+ column \d+ \(char \d+\)")
 
 
+# Group 54 review R5-2: LAST_SPOOLMAN_ERROR's shape for a refusal Spoolman answered.
+_ANSWERED_REFUSAL_RE = re.compile(r"HTTP \d{3}:")
+# requests' MaxRetryError: its adapter retries nothing (Retry(0, read=False)), so this is
+# raised only while connecting (refused, timed out, a name that doesn't resolve) and the
+# request never left FCC (review R6-1). A read error comes out as itself instead.
+_NEVER_SENT_MARK = "Max retries exceeded"
+
+
+def write_may_have_landed(err):
+    """Whether a write reported failed (its LAST_SPOOLMAN_ERROR) may have landed all the
+    same: its answer never came, or came broken (a read timeout, a dropped or cut-off
+    connection, a 200 whose body isn't JSON: the writes' timeouts are READ timeouts).
+    Not a refusal Spoolman answered ("HTTP nnn: …"), FCC's own before sending
+    (PREMERGE_READ_REFUSAL), nor one that never connected ("Max retries exceeded":
+    Spoolman down; Group 54 review R6-1): those wrote nothing. One rule for every
+    write's read-back (/api/spool/update's, Group 54 review R5-2; the manufacturer
+    merge's, Group 66.9 review round 2)."""
+    s = str(err or '')
+    return not (_ANSWERED_REFUSAL_RE.match(s) or PREMERGE_READ_REFUSAL in s
+                or _NEVER_SENT_MARK in s)
+
+
 def refusal_words(text):
     """LAST_SPOOLMAN_ERROR (or a caller's own words) as a person reads it (Group 58, Derek's
     look of 2026-11-04: the audit report's 🛑 tile showed `HTTP 500: {"message": "database is

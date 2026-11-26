@@ -515,7 +515,7 @@ class TestPartialFailure:
         assert r.status_code == 502
         assert body["source_kept"] is True
         assert body["moved_filament_ids"] == [160, 161, 162, 163]
-        assert body["msg"] == ("All of Sunlu #35's filaments are on Sunlu #4 now, but Sunlu #35 couldn't be "
+        assert body["msg"] == ("Moved 4 of 4 filaments onto Sunlu #4, but Sunlu #35 couldn't be "
                                "deleted: Spoolman refused it: database is locked. Press Merge again to finish.")
         assert any("couldn't be deleted" in m for m in _lines(logged, "ERROR"))
 
@@ -536,7 +536,7 @@ class TestPartialFailure:
         body = r.get_json()
         assert r.status_code == 502
         assert body["may_have_deleted"] is True
-        assert body["msg"].startswith("All of Sunlu #35's filaments are on Sunlu #4 now, but FCC couldn't tell "
+        assert body["msg"].startswith("Moved 4 of 4 filaments onto Sunlu #4, but FCC couldn't tell "
                                       "whether Sunlu #35 was deleted: ")
         assert body["msg"].endswith("Press Merge again: it finishes the merge, or says Sunlu #35 is gone.")
 
@@ -930,12 +930,16 @@ class TestLabelsAfterTheDelete:
                    for m in _lines(logged, "WARNING"))
 
     def test_a_relist_fcc_couldnt_read_names_the_moves_it_couldnt_decide(self, client):
+        # A move whose answer never came (review round 2, S5: a refusal Spoolman answered
+        # is told apart, below).
         fake = _stocked()
-        fake.canned[("PATCH", "/api/v1/filament/162")] = _Resp(500, {"message": "database is locked"})
+        fake.canned[("PATCH", "/api/v1/filament/162")] = requests.exceptions.ReadTimeout("read timed out")
         fake.canned[("LIST", 2)] = _Resp(503, {"message": "database is locked"})
         r, logged = _merge(client, fake, 35, 4)
         assert r.status_code == 502
-        assert "FCC couldn't tell whether #162 moved" in " ".join(_lines(logged, "WARNING"))
+        assert r.get_json()["unknown"] == [162]
+        assert "FCC couldn't tell whether #162 moved: its move's answer was lost." in " ".join(
+            _lines(logged, "WARNING"))
 
     def test_a_spool_list_fcc_couldnt_read_for_the_labels_is_a_warning(self, client):
         fake = _stocked()
@@ -993,3 +997,152 @@ class TestKeepOrder:
         assert plan["carry"] == {"empty_spool_weight": 167.0}
         assert plan["weight_note"]["kept_without_own"] == [164]
         assert plan["weight_note"]["moved_without_own"] == []     # #100-#104 read 167 g before and after
+
+
+class TestReviewRound2:
+    """Review round 2: the re-list is the last read before the delete (S3), a landed move
+    is marked whatever the re-list does (S2), and the words say what happened (S4-S6)."""
+
+    def test_a_lost_answer_then_a_relist_fcc_couldnt_read_still_marks_the_landed_move(self, client):
+        # S2: before, the lost answer waited for the re-list, which failed; the second
+        # press listed nothing (#300 had moved) and #301's label was never marked.
+        fake = _stocked()
+        fake.land_then_raise[("PATCH", "/api/v1/filament/300")] = requests.exceptions.ReadTimeout("read timed out")
+        fake.canned[("LIST", 2)] = _Resp(503, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 1, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["source_kept"] is True
+        assert body["moved_filament_ids"] == [300] and fake.vendor_of(300) == 4
+        assert body["labels_flagged"]["spools"] == [301]
+        assert "weren't marked" not in " ".join(_lines(logged))
+
+    def test_a_lost_answer_fcc_cant_read_back_is_marked_in_case_it_moved(self, client):
+        fake = _stocked()
+        fake.land_then_raise[("PATCH", "/api/v1/filament/300")] = requests.exceptions.ReadTimeout("read timed out")
+        fake.get_hooks["/api/v1/filament/300"] = (
+            lambda n: requests.exceptions.ConnectionError("down (test)") if n == 2 else None)
+        fake.canned[("LIST", 2)] = _Resp(503, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 1, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["unknown"] == [300]
+        assert body["labels_flagged"]["spools"] == [301]
+        assert "FCC couldn't tell whether #300 moved: its move's answer was lost." in " ".join(
+            _lines(logged, "WARNING"))
+
+    def test_the_relist_is_the_last_read_before_the_delete(self, client):
+        # S3: three moves whose answers were lost are read back BEFORE the re-list.
+        fake = _stocked()
+        for fid in (160, 161, 162):
+            fake.land_then_raise[("PATCH", f"/api/v1/filament/{fid}")] = requests.exceptions.ReadTimeout(
+                "read timed out")
+        r, _ = _merge(client, fake, 35, 4)
+        assert r.status_code == 200, r.get_json()
+        assert sorted(r.get_json()["moved_filament_ids"]) == [160, 161, 162, 163]
+        i = fake.ops.index(("DELETE", "/api/v1/vendor/35"))
+        assert fake.ops[i - 1] == ("GET", "/api/v1/filament?vendor.id=35"), fake.ops[i - 4:i + 1]
+        relist = i - 1
+        for fid in (160, 161, 162):
+            gets = [k for k, op in enumerate(fake.ops) if op == ("GET", f"/api/v1/filament/{fid}")]
+            assert len(gets) == 2 and gets[-1] < relist      # the last look, then the read-back
+
+    def test_a_refusal_spoolman_answered_is_never_read_back(self, client):
+        fake = _stocked()
+        fake.canned[("PATCH", "/api/v1/filament/162")] = _Resp(500, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 35, 4)
+        assert r.status_code == 502 and r.get_json()["still_on_source"] == [162]
+        assert fake.ops.count(("GET", "/api/v1/filament/162")) == 1        # the last look only
+        assert any("couldn't move Filament #162" in m for m in _lines(logged, "ERROR"))
+
+    def test_a_refused_delete_names_a_filament_that_left_meanwhile(self, client):
+        # S4 (a): "All of Sunlu #35's filaments are on Sunlu #4 now" and "every filament
+        # moved" of a merge that left #162 on Overture #1, which no line named.
+        fake = _stocked()
+
+        def refile(n):
+            if n == 1:
+                fake.records["filament"][162]["vendor"] = fake.nested(1)
+        fake.get_hooks["/api/v1/filament/162"] = refile
+        fake.canned[("DELETE", "/api/v1/vendor/35")] = _Resp(500, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["left_meanwhile"] == [162]
+        assert body["msg"] == ("Moved 3 of 4 filaments onto Sunlu #4, but Sunlu #35 couldn't be deleted: Spoolman "
+                               "refused it: database is locked. #162 left Sunlu #35 meanwhile, so FCC didn't move "
+                               "it. Press Merge again to finish.")
+        assert any("#162 left Sunlu #35 meanwhile" in m for m in _lines(logged, "ERROR"))
+        assert not any("every filament moved" in m for m in _lines(logged))
+
+    def test_an_unconfirmed_delete_names_a_move_fcc_couldnt_place(self, client):
+        # S4 (b): "couldn't tell where #160 went", then "All of … are on … now".
+        fake = _stocked()
+        fake.land_then_raise[("PATCH", "/api/v1/filament/160")] = requests.exceptions.ReadTimeout("read timed out")
+        fake.get_hooks["/api/v1/filament/160"] = (
+            lambda n: requests.exceptions.ConnectionError("down (test)") if n == 2 else None)
+        fake.land_then_raise[("DELETE", "/api/v1/vendor/35")] = requests.exceptions.ReadTimeout("read timed out")
+        fake.reads_fail_after_delete = True
+        r, _ = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["may_have_deleted"] is True and body["unknown"] == [160]
+        assert body["msg"].startswith("Moved 3 of 4 filaments onto Sunlu #4, but FCC couldn't tell whether "
+                                      "Sunlu #35 was deleted: ")
+        assert "FCC couldn't tell where #160 went" in body["msg"]
+        assert body["msg"].endswith("Press Merge again: it finishes the merge, or says Sunlu #35 is gone.")
+
+    def test_a_refused_delete_of_one_that_held_none_says_so(self, client):
+        # S4 (c): Derek's empty Prusament #34.
+        fake = _stocked()
+        fake.canned[("DELETE", "/api/v1/vendor/34")] = _Resp(500, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 34, 9)
+        assert r.status_code == 502
+        assert r.get_json()["msg"] == ("Prusament #34 held no filaments, but couldn't be deleted: Spoolman refused "
+                                       "it: database is locked. Press Merge again to finish.")
+        assert not any("every filament moved" in m for m in _lines(logged))
+
+    def test_a_same_name_relist_failure_names_each_move_for_what_it_was(self, client):
+        # S5: Sunlu #35 into #4 (no label changes); #161 never written, #162 refused.
+        fake = _stocked()
+        fake.get_hooks["/api/v1/filament/161"] = (
+            lambda n: _Resp(503, {"message": "database is locked"}) if n == 1 else None)
+        fake.canned[("PATCH", "/api/v1/filament/162")] = _Resp(500, {"message": "database is locked"})
+        fake.canned[("LIST", 2)] = _Resp(503, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 35, 4)
+        assert r.status_code == 502
+        warned = " ".join(_lines(logged, "WARNING"))
+        assert ("Moved 2 of 4 filaments onto Sunlu #4, but couldn't check that Sunlu #35 holds none now, "
+                "so it was kept.") in warned
+        assert "FCC didn't move #161: it couldn't read it from Spoolman first." in warned
+        assert "Couldn't move #162 (HTTP 500" in warned
+        assert "label" not in warned and "couldn't tell whether" not in warned
+
+    def test_one_filament_reads_as_one(self, client):
+        fake = _stocked()
+        fake.canned[("LIST", 2)] = _Resp(503, {"message": "database is locked"})
+        r, logged = _merge(client, fake, 1, 4)
+        assert r.get_json()["msg"].startswith("Moved 1 of 1 filament onto Sunlu #4, but couldn't check")
+        assert any("Moved 1 of 1 filament onto" in m for m in _lines(logged, "WARNING"))
+
+    def test_a_filament_put_back_meanwhile_is_still_there_and_never_left_meanwhile(self, client):
+        # S6: filed under Overture #1 at its last look, put back on #35 before the re-list.
+        fake = _stocked()
+
+        def refile(n):
+            if n == 1:
+                fake.records["filament"][162]["vendor"] = fake.nested(1)
+        fake.get_hooks["/api/v1/filament/162"] = refile
+
+        def put_back(n):
+            if n == 2:
+                fake.records["filament"][162]["vendor"] = fake.nested(35)
+        fake.on_list_read = put_back
+        r, _ = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["still_on_source"] == [162]
+        assert body["left_meanwhile"] == [] and "meanwhile" not in body["msg"]
+
+    def test_a_carried_extra_the_record_holds_blank_never_counts_as_landed(self):
+        # S7: str(None) is "None".
+        assert routes_locations._carry_landed({"id": 4, "extra": {}}, {"extra": {"website": '"None"'}}) is False
+        assert routes_locations._carry_landed({"id": 4, "extra": {"website": '""'}},
+                                              {"extra": {"website": '"None"'}}) is False
+        assert routes_locations._carry_landed({"id": 4, "extra": {"website": '"None"'}},
+                                              {"extra": {"website": '"None"'}}) is True

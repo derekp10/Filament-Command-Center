@@ -4659,6 +4659,44 @@ document.addEventListener('vendor:merged', (e) => {
     }
 });
 
+// The editor, shown on a manufacturer another write just changed (Group 66.9 review round 2,
+// R2P1: a merge that stopped part-way had copied the merged one's External ID onto the kept
+// one, the editor still showed it blank, and its Save cleared it: every box goes out). With
+// its boxes as it filled them, it fills them again from the record (and notes them as
+// filled); with a box the person changed, or no record to show, it keeps what it shows,
+// says why, and saves nothing until it is opened again. Its own Save's answer (a Save on
+// its way) is no other write.
+const _vendorEditHold = (vid, why) => {
+    const save = document.getElementById('vendoredit-save');
+    if (save) save.disabled = true;
+    _vendorMergeUi(null);
+    const errEl = document.getElementById('vendoredit-error');
+    if (errEl) { errEl.classList.remove('d-none'); errEl.innerText = why; }
+};
+const _vendorEditFollow = (vid, v) => {
+    if (_vendorSaveInFlight) return;
+    const vModal = document.getElementById('vendorEditModal');
+    const shown = (document.getElementById('vendoredit-id') || {}).value || '';
+    if (!vModal || !vModal.classList.contains('show') || !shown || shown !== vid) return;
+    const untouched = _vendorEditFilled !== null && _vendorEditBoxes() === _vendorEditFilled;
+    if (v && String(v.id) === vid && untouched) {
+        _vendorEditFill(v);
+        _vendorMergeUi(vid);
+        return;
+    }
+    _vendorEditHold(vid, untouched
+        ? `FCC couldn't read manufacturer #${vid} after a change to it, so this window may not show it as it is: `
+          + 'close it and open it again to edit it.'
+        : `Manufacturer #${vid} changed while this window was open, so Save is off (it would undo that change): `
+          + 'close it and open it again to edit it.');
+};
+// A write FCC couldn't read back (inv_vendor_merge.js: a merge with no answer, or one
+// that couldn't say whether it copied fields onto the kept one).
+document.addEventListener('vendor:unread', (e) => {
+    const vid = e && e.detail && e.detail.id != null ? String(e.detail.id) : '';
+    if (vid) _vendorEditFollow(vid, null);
+});
+
 // One save at a time (Group 50.6): a second press while the first was on its
 // way (a double click, or Enter now that it presses the focused Save) created
 // the manufacturer twice. The button stays disabled until the answer.
@@ -4770,6 +4808,7 @@ document.addEventListener('vendor:updated', (e) => {
     const vid = e.detail && e.detail.id;
     if (!vid) return;
     const v = e.detail.vendor;
+    _vendorEditFollow(String(vid), v);
 
     const brandEl = document.getElementById('fil-detail-vendor');
     if (brandEl && brandEl.dataset.vendorId === String(vid) && v) {

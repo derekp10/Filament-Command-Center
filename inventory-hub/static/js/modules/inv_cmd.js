@@ -3481,6 +3481,8 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // under it). Below the guards above, so a closed dialog's QR read again leaves it up,
     // and so does a scanner's second read of the CMD:DONE that ended the audit.
     if (window.closeAuditReportForScan) window.closeAuditReportForScan(upper, capturedAt);
+    // Group 66.9 review round 2 (R2P7): the Merge manufacturers window takes no scan either.
+    if (window.closeVendorMergeForScan) window.closeVendorMergeForScan();
 
     // Group 58: the commands below never reach the server's audit gate.
     const auditRefusal = state.auditActive ? _auditCommandRefusal(upper) : '';
