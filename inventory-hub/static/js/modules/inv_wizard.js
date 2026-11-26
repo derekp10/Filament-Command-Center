@@ -1339,6 +1339,9 @@ const wizardReset = () => {
     // its answer lost leaves the manufacturer's baseline unknown: the next Save sends the
     // Vendor box's manufacturer whatever it shows.
     wizardState.vendorUnsure = false;
+    // Group 66.9 review round 3 (R3W6): the manufacturers merged while this window is open,
+    // {gone: kept}, so a Save's baseline names the kept one whatever a merge re-pointed.
+    wizardState.vendorMerges = {};
     wizardState.spoolBoxesFollowFilament = false;
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
@@ -2140,7 +2143,7 @@ window.WIZ_SCAN_STATE_SKIPS = ['mode', 'session', 'saving', 'prefilling', 'typed
     'extraFields', 'editSpoolId', 'editSpoolLocation', 'editFilamentOriginal',
     'editLoadFailed', 'externalMetaData', 'returnToSpoolId', 'returnToFilamentId', 'forceClose',
     'spoolBoxesFollowFilament', 'filamentLockedFromScan', 'original_used_weight', 'usedShown',
-    '_dupPicker', '_mismatches', 'linkShown', 'vendorUnsure'];
+    '_dupPicker', '_mismatches', 'linkShown', 'vendorUnsure', 'vendorMerges'];
 window.wizardScanUntracked = [];
 const _wizScanFields = () => {
     const wizEl = document.getElementById('wizardModal');
@@ -2825,6 +2828,9 @@ window.wizardVendorMerged = (detail) => {
             }
         });
     });
+    const merges = wizardState.vendorMerges || (wizardState.vendorMerges = {});
+    Object.keys(merges).forEach((k) => { if (merges[k] === gone) merges[k] = kept; });
+    merges[gone] = kept;
     const orig = wizardState.editFilamentOriginal;
     if (orig && String(orig.vendor_id) === gone) {
         wizardState.editFilamentOriginal = Object.assign({}, orig, { vendor_id: kept });
@@ -5176,17 +5182,50 @@ function wizardSavedUsed(sent, addSent, readSent) {
     if (readSent && wizardState.usedRead === readSent) wizardState.usedRead = null;
 }
 
+// A manufacturer id as it stands after this window's merges (wizardState.vendorMerges).
+function _wizVendorMapped(id) {
+    let v = String(id);
+    const merges = wizardState.vendorMerges || {};
+    for (let hops = 0; hops < 20 && Object.prototype.hasOwnProperty.call(merges, v); hops += 1) v = String(merges[v]);
+    return v;
+}
+
 // Group 66.9 review round 2 (R2P2 / R2X-1): once a Save's filament write landed, the
 // manufacturer's baseline is what that Save stood for (the Vendor box's), as Total Used's
 // is above. Kept at the open's, a change back in the same window (Sunlu #4, Save, then
 // Sunlu #35 again, Save) was left out as "unchanged", and the filament stayed on #4 under
-// "Success! Spool Updated."; and the label check of every later Save compared the open's.
-// Not over a merge that re-pointed the baseline while the Save was out (another object).
-function wizardSavedVendor(origSent, shown, fPayload) {
-    if (!fPayload || !origSent || wizardState.editFilamentOriginal !== origSent) return;
-    wizardState.vendorUnsure = false;
-    if (shown == null) return;
-    wizardState.editFilamentOriginal = Object.assign({}, origSent, { vendor_id: String(shown) });
+// "Success! Spool Updated.". Round 3: so is every field the label check reads (R3W7, older
+// than 66.9: compared with the open's at every later Save, a renamed filament's labels
+// were flagged again and the swatch question asked again), normalised as the open
+// normalises them; the manufacturer through this window's merges (R3W6: a merge while the
+// Save was out left the deleted id there, or kept the merge's re-point over the Save's
+// own write); and the doubt of a lost answer ends only for a Save that carried a
+// manufacturer (R3W5: a Generic Save, which sends none, cleared it).
+function wizardSavedFilament(origSent, shown, fPayload) {
+    if (!fPayload || !origSent) return;
+    const cur = wizardState.editFilamentOriginal || origSent;
+    const sentExtra = fPayload.extra || {};
+    const extra = Object.assign({}, cur.extra || {});
+    const has = (k) => Object.prototype.hasOwnProperty.call(sentExtra, k);
+    if (has('filament_attributes')) {
+        extra.filament_attributes = sentExtra.filament_attributes === window.FCC_DELETE_EXTRA ? [] : sentExtra.filament_attributes;
+    }
+    if (has('original_color')) {
+        extra.original_color = sentExtra.original_color === window.FCC_DELETE_EXTRA ? '' : sentExtra.original_color;
+    }
+    const next = Object.assign({}, cur, {
+        name: fPayload.name || '',
+        material: fPayload.material || '',
+        color_hex: String(fPayload.color_hex || '').replace(/^#/, '').toLowerCase(),
+        multi_color_hexes: String(fPayload.multi_color_hexes || '').replace(/[#\s]/g, '').toLowerCase(),
+        multi_color_direction: String(fPayload.multi_color_direction || '').toLowerCase(),
+        extra,
+    });
+    if (shown != null) {
+        next.vendor_id = _wizVendorMapped(shown);
+        wizardState.vendorUnsure = false;
+    }
+    wizardState.editFilamentOriginal = next;
 }
 
 // Group 66.9 review round 2 (R2X-3; older than 66.9, from Group 66's R3-03): once a
@@ -5196,6 +5235,13 @@ function wizardSavedVendor(origSent, shown, fPayload) {
 function wizardSavedLinks(sent) {
     if (sent) wizardState.linkShown = Object.assign({}, sent);
 }
+
+// A link box's baseline after a Save that went out with no answer FCC could read, for a
+// box that Save sent: no box can equal it, so the next Save sends the box as it is (the
+// Save may have landed). A box it didn't send keeps its baseline (Group 66.9 review round
+// 3, R3W3: every box went out as drawn, and an old link was written over the canonical
+// one a dashboard scan had saved meanwhile).
+const WIZ_LINK_UNSURE = '\u0000unsure';
 
 const _wizardSubmitInner = async () => {
     // Fix review 4 (UP5) and 5 (VP4): the session this Save belongs to, and its spool,
@@ -5220,6 +5266,14 @@ const _wizardSubmitInner = async () => {
         return el.value;
     };
 
+    // What this Save sent, and how far it got: only a request that went out and got no
+    // answer FCC could read leaves anything unsure, and only what it sent (Group 66.9 review
+    // round 3, R3W3 / R3W4: any throw marked both, a throw before the request or after a
+    // clean answer included).
+    let posted = false;
+    let answered = false;
+    let vendorSentId = null;
+    let linkKeysSent = [];
     try {
         const qty = parseInt(getVal('wiz-spool-qty')) || 1;
 
@@ -5292,6 +5346,7 @@ const _wizardSubmitInner = async () => {
         // What the two link boxes held as this Save compared them: their baseline once the
         // spool's write lands (Group 66.9 review round 2, R2X-3: wizardSavedLinks).
         const linksSent = { purchase_url: purchaseUrl || '', product_url: productUrl || '' };
+        linkKeysSent = ['purchase_url', 'product_url'].filter((k) => Object.prototype.hasOwnProperty.call(sp_payload.extra, k));
 
         // Extract Dynamic Spool Fields (never a key with its own input above:
         // its copy would overwrite what the user typed there).
@@ -5475,8 +5530,9 @@ const _wizardSubmitInner = async () => {
                 // moment before a merge's delete, onto the one being deleted, which Spoolman
                 // then cleared. Left out, the filament keeps the one Spoolman has. The
                 // baseline is the last Save's that landed (review round 2, R2P2 / R2X-1:
-                // wizardSavedVendor); after a Save whose filament answer was lost, the box's
-                // goes out whatever it shows (`vendorUnsure`).
+                // wizardSavedFilament); after a Save that carried one and whose filament
+                // answer was lost, or that got no answer, the box's goes out whatever it shows
+                // (`vendorUnsure`).
                 if (!(isWizardEdit && filOrigSent && !wizardState.vendorUnsure
                         && String(filOrigSent.vendor_id) === String(vid))) {
                     f_payload.vendor_id = vid;
@@ -5583,12 +5639,15 @@ const _wizardSubmitInner = async () => {
 
         const endpoint = wizardState.mode === 'edit_spool' ? '/api/edit_spool_wizard' : '/api/create_inventory_wizard';
 
+        vendorSentId = (f_payload && f_payload.vendor_id != null) ? String(f_payload.vendor_id) : null;
+        posted = true;
         const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         const data = await res.json();
+        answered = true;
         // Group 40.7: an edit whose other changes saved but whose Location didn't
         // move (the server asks first, or refused it) is a partial save: the
         // post-save steps below still run for what was saved.
@@ -5640,11 +5699,18 @@ const _wizardSubmitInner = async () => {
             // Group 66.9 review round 2: the manufacturer's and the links' baselines are what
             // this Save sent (its filament write ran before any move, so a partial landed it).
             if (isWizardEdit && sameForm) {
-                wizardSavedVendor(filOrigSent, vendorShown, f_payload);
+                wizardSavedFilament(filOrigSent, vendorShown, f_payload);
                 wizardSavedLinks(linksSent);
             }
-            // Review round 1 (R4-02): the spool's link is saved; the row says so.
-            if (isWizardEdit && sameForm) window.wizardSettleLinkRow();
+            // Review round 1 (R4-02): the spool's link is saved; the row says so. Only the
+            // link this Save carried (Group 66.9 review round 3, R3W8, older than 66.9: a QR
+            // checked while the Save was out was marked saved, and its fills read as no
+            // change: the form is still changed while the row waits for a Save).
+            if (isWizardEdit && sameForm) {
+                window.wizardSettleLinkRow(linksSent);
+                const row0 = (wizardState.spoolRows || [])[0];
+                if (row0 && row0.status === 'linked-new') wizardState.isDirty = true;
+            }
             if (isWizardEdit && data.location_moved) {
                 // Group 40.7: where the Location move put it, in short arrows.
                 const lr = data.location_result;
@@ -5837,7 +5903,7 @@ const _wizardSubmitInner = async () => {
 
         } else {
             if (sameForm) {
-                msg.innerHTML = `<span class="text-danger">Error: ${data.msg}</span>`;
+                msg.innerHTML = `<span class="text-danger">Error: ${_wizEsc(data.msg)}</span>`;
                 document.getElementById('btn-wiz-submit').disabled = false;
             } else if (typeof showToast === 'function') {
                 // Fix review 4 (UP5): the form shows another spool now. Fix review 5 (VP3): an
@@ -5865,15 +5931,20 @@ const _wizardSubmitInner = async () => {
                 // never this one over a print's charge that landed in between, nor a second
                 // weighing's stamp.
                 if (sameForm) wizardSavedUsed(usedBoxSent, usedAddSent, usedReadSent);
-                // Group 66.9 review round 2: the links went with the spool's write (R2X-3);
-                // the filament's write was refused, or its answer lost: then it may have
-                // landed, and the next Save sends the Vendor box's manufacturer (R2X-1).
+                // Group 66.9 review round 2: the links went with the spool's write (R2X-3),
+                // and the row says so (round 3, R3W2: it still read "Links at Save", its ✕
+                // put the boxes back, and the next Save cleared the saved links).
                 if (sameForm) {
                     wizardSavedLinks(linksSent);
-                    if (data.filament_may_have_saved && f_payload && wizardState.editFilamentOriginal === filOrigSent) {
-                        wizardState.vendorUnsure = true;
-                    }
+                    window.wizardSettleLinkRow(linksSent);
                 }
+            }
+            // The filament's answer was lost (it may have landed): the next Save sends the
+            // Vendor box's manufacturer, when this one carried one, whatever the spool's write
+            // did (Group 66.9 review round 3, R3S1 / R3W1: a manufacturer-only Save writes no
+            // spool, answers spool_saved false, and its doubt went unnoticed).
+            if (isWizardEdit && sameForm && data.filament_may_have_saved && vendorSentId != null) {
+                wizardState.vendorUnsure = true;
             }
         }
     } catch (e) {
@@ -5889,14 +5960,23 @@ const _wizardSubmitInner = async () => {
             }
             return;
         }
-        msg.innerHTML = `<span class="text-danger">Frontend Error: ${e.message}</span>`;
+        const why = _wizEsc(e && e.message ? e.message : e);
+        msg.innerHTML = !posted
+            ? `<span class="text-danger">Frontend Error: ${why}. Nothing was sent.</span>`
+            : (answered
+                ? `<span class="text-danger">FCC answered the Save, but this page hit an error showing it (${why}): open the spool again to check it.</span>`
+                : `<span class="text-danger">FCC didn't answer this Save, so it may or may not have landed (${why}). Save again to send it again.</span>`);
         document.getElementById('btn-wiz-submit').disabled = false;
-        // Group 66.9 review round 2: an edit's Save with no answer may have landed: the
-        // next one sends the Vendor box's manufacturer and both link boxes as they are,
-        // since FCC can't tell what Spoolman holds.
-        if (editAtSave) {
-            wizardState.vendorUnsure = true;
-            wizardState.linkShown = null;
+        // Group 66.9 review rounds 2-3: a Save that went out and got no answer FCC could
+        // read may have landed, so what it sent (and only that) goes out at the next Save
+        // whatever the boxes show: its manufacturer (vendorUnsure) and its link boxes.
+        if (editAtSave && posted && !answered) {
+            if (vendorSentId != null) wizardState.vendorUnsure = true;
+            if (linkKeysSent.length && wizardState.linkShown) {
+                const ls = Object.assign({}, wizardState.linkShown);
+                linkKeysSent.forEach((k) => { ls[k] = WIZ_LINK_UNSURE; });
+                wizardState.linkShown = ls;
+            }
         }
     }
 };
@@ -6953,10 +7033,14 @@ const _wizLinkMismatch = (temp, sid) => {
 // Review round 1 of Group 66 (R4-02): once an Edit Spool Save lands, its link is the
 // spool's: the row says so, and its ✕ (or another scan) no longer puts back what the
 // boxes held before the link (that cleared the saved link at the next Save).
-window.wizardSettleLinkRow = () => {
+// `sent`: the link boxes as the Save that landed sent them (Group 66.9 review round 3,
+// R3W8): a row whose link that Save didn't carry (checked while it was out) waits for the
+// next Save, still "Links at Save". Called with none, it settles as before.
+window.wizardSettleLinkRow = (sent) => {
     if (wizardState.mode !== 'edit_spool') return;
     const row = (wizardState.spoolRows || [])[0];
     if (!row || row.status !== 'linked-new') return;
+    if (sent && String(sent.product_url || '').trim() !== String(row.linkValue || '')) return;
     row.linkFills = [];
     row.linkValue = '';
     row.linkedText = '';

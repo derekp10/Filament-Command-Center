@@ -4646,6 +4646,10 @@ document.addEventListener('vendor:merged', (e) => {
             if (title) title.innerText = '✏️ Edit Manufacturer';
             _vendorEditFill(v);
             _vendorMergeUi(kept);
+            // The boxes show the record the merge answered, so a hold before it is over
+            // (review round 3, R3P1: Save stayed off with no word why).
+            const save = document.getElementById('vendoredit-save');
+            if (save && !_vendorSaveInFlight) save.disabled = false;
         } else {
             const save = document.getElementById('vendoredit-save');
             if (save) save.disabled = true;
@@ -4679,14 +4683,18 @@ const _vendorEditFollow = (vid, v) => {
     const shown = (document.getElementById('vendoredit-id') || {}).value || '';
     if (!vModal || !vModal.classList.contains('show') || !shown || shown !== vid) return;
     const untouched = _vendorEditFilled !== null && _vendorEditBoxes() === _vendorEditFilled;
+    // (A held editor never comes here: a hold notes no boxes as filled. Its Save comes back
+    // only with a merge's record, in the vendor:merged listener.)
     if (v && String(v.id) === vid && untouched) {
         _vendorEditFill(v);
         _vendorMergeUi(vid);
         return;
     }
+    // Words that claim no more than FCC knows (review round 3, R3P2): a merge was tried,
+    // and FCC couldn't read the manufacturer after it.
     _vendorEditHold(vid, untouched
-        ? `FCC couldn't read manufacturer #${vid} after a change to it, so this window may not show it as it is: `
-          + 'close it and open it again to edit it.'
+        ? `FCC couldn't read manufacturer #${vid} after a merge was tried, so this window may not show it as it `
+          + 'is: close it and open it again to edit it.'
         : `Manufacturer #${vid} changed while this window was open, so Save is off (it would undo that change): `
           + 'close it and open it again to edit it.');
 };

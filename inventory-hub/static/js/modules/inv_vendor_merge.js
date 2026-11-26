@@ -54,6 +54,38 @@ console.log("🚀 Loaded Module: VENDOR MERGE");
     let _question = null;     // its question, while one is up
     let _captureOn = false;
 
+    // Merges sent and not accounted for (no answer, one FCC couldn't read, a delete it
+    // couldn't confirm), page-wide: {src, dst}. Kept on the question, a ⇄ or a Cancel and
+    // the same row again lost it, and a merge that finished dead-ended in "Couldn't check
+    // the merge" (review round 3, R3P4). Dropped once that merge is told as finished, or
+    // once the server says it kept the one merged (`source_kept`: the lock had let that
+    // merge end first).
+    const _unsure = [];
+    const _noteUnsure = (src, dst) => {
+        if (!_unsure.some((u) => u.src === String(src) && u.dst === String(dst))) {
+            _unsure.push({ src: String(src), dst: String(dst) });
+        }
+    };
+    const _unsureGone = (gone) => _unsure.find((u) => u.src === String(gone)) || null;
+    const _forgetUnsure = (src) => {
+        for (let i = _unsure.length - 1; i >= 0; i -= 1) if (_unsure[i].src === String(src)) _unsure.splice(i, 1);
+    };
+
+    // What the page last told of each manufacturer (vendor:updated, vendor:merged,
+    // vendor:unread, whoever sent it), counted, so a read sent before a newer word of it
+    // says nothing when it lands (review round 3, R3P3: a slow read held the record from
+    // before a merge's carry, refilled the editor over the merge's, and its Save cleared
+    // the carried External ID).
+    const _told = {};
+    const _bumpTold = (id) => { if (id != null && id !== '') _told[String(id)] = (_told[String(id)] || 0) + 1; };
+    document.addEventListener('vendor:updated', (e) => _bumpTold(e && e.detail ? e.detail.id : null));
+    document.addEventListener('vendor:unread', (e) => _bumpTold(e && e.detail ? e.detail.id : null));
+    document.addEventListener('vendor:merged', (e) => {
+        const d = (e && e.detail) || {};
+        _bumpTold(d.from);
+        _bumpTold(d.into);
+    });
+
     const esc = (v) => (typeof window.escHtml === 'function'
         ? window.escHtml(v)
         : String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
@@ -315,13 +347,15 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
     // A read that failed: its words and Try again. The list read before it is dropped
     // (review round 1, P-S3: the next key in the box drew it again, a manufacturer the
     // merge had just deleted included, and the failure line went).
-    function _fail(h, why) {
+    // `final`: the manufacturer open isn't in Spoolman any more, which asking again can't
+    // change (review round 3, R3P4): no Try again.
+    function _fail(h, why, final) {
         const body = _bodyEl(h);
         const hadKeys = body.contains(document.activeElement);
         h._data = null;
         body.innerHTML = `<div class="fcc-vm-fail" role="alert" data-vm-fail>
                 <div>⚠️ Couldn't read the manufacturers: ${esc(why)}</div>
-                <button type="button" class="fcc-vm-retry" data-vm-retry>↻ Try again</button>
+                ${final ? '' : '<button type="button" class="fcc-vm-retry" data-vm-retry>↻ Try again</button>'}
             </div>`;
         body.dataset.vmState = 'error';
         if (hadKeys) _focusBox(h);
@@ -333,8 +367,13 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         h._seq += 1;
         const seq = h._seq;
         if (!h._data) {
+            // A keyboard press on ↻ Try again: the body it was in is redrawn, and the keyboard
+            // goes to the box, never the page (review round 3, R3P5: letters typed next went
+            // to the scan path, and their Enter sent a number as a spool scan).
+            const hadKeys = _bodyEl(h).contains(document.activeElement);
             _bodyEl(h).innerHTML = '<div class="fcc-vm-state" role="status">Reading the manufacturers…</div>';
             _bodyEl(h).dataset.vmState = 'loading';
+            if (hadKeys) _focusBox(h);
         }
         const url = `/api/vendors/${encodeURIComponent(h._vid)}/merge_options`;
         return window.fetchT(url, { cache: 'no-store' }, READ_TIMEOUT_MS)
@@ -343,7 +382,15 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
                 if (seq !== h._seq || !_alive(h)) return;
                 if (!data || typeof data !== 'object') { _fail(h, `FCC's answer couldn't be read (HTTP ${res.status}).`); return; }
                 if (data.success !== true || !data.vendor || !Array.isArray(data.vendors)) {
-                    _fail(h, String(data.msg || `FCC answered with an error (HTTP ${res.status}).`));
+                    const why = String(data.msg || `FCC answered with an error (HTTP ${res.status}).`);
+                    // The manufacturer open is gone: the merge an earlier press sent of it,
+                    // finished, is told as one (review round 3, R3P4); else said for good.
+                    if (data.gone != null) {
+                        const pair = _unsureGone(data.gone);
+                        if (pair) _settleUnsure(h, null, pair, why); else _fail(h, why, true);
+                        return;
+                    }
+                    _fail(h, why);
                     return;
                 }
                 h._data = data;
@@ -423,8 +470,15 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         const opener = h._opener;
         h._opener = null;
         const a = document.activeElement;
-        if (!(opts && opts.keepFocus) && opener && opener.isConnected && (!a || a === document.body)) {
-            try { opener.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+        if (!(opts && opts.keepFocus) && (!a || a === document.body)) {
+            // The opener can't take it when a hold hid it (🔗 Merge…; review round 3,
+            // R3P6): the editor's name box, else the editor, so its keys and Escape work.
+            const canTake = (el) => !!(el && el.isConnected && !el.disabled && el.getClientRects().length);
+            const ed = editorEl();
+            const name = document.getElementById('vendoredit-name');
+            const to = canTake(opener) ? opener
+                : (ed && ed.classList.contains('show') ? (canTake(name) && ed.contains(name) ? name : ed) : null);
+            if (to) { try { to.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
         }
     }
 
@@ -545,8 +599,10 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         q.plan = plan;
         q.lastPlan = plan;
         // The keyboard had nowhere to go back to (review round 2, R2P5: a keyboard press on
-        // ↻ Try again, which the plan's lines replaced): Cancel, the safe answer.
-        const lost = !q.refocus && _qKeysLost(q);
+        // ↻ Try again, which the plan's lines replaced): Cancel, the safe answer. Where the
+        // person moved it while the plan was out, it stays (review round 3, R3P7: ⇄ took it
+        // back from Cancel, and their Enter swapped again).
+        const lost = _qKeysLost(q);
         const el = q.handle.element;
         el.querySelector('[data-vmq-title]').textContent = `🔗 Merge ${label(plan.source)} into ${label(plan.target)}?`;
         el.querySelector('[data-vmq-lines]').innerHTML = _qLines(plan)
@@ -564,7 +620,7 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         if (q.refocus) {
             const b = _qBtn(q, q.refocus);
             q.refocus = null;
-            if (b) { try { b.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
+            if (lost && b) { try { b.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
         } else if (lost) _qFocus(q, 'cancel');
         if (window.fccFitQuestion) { try { window.fccFitQuestion(el.querySelector('.fcc-vmq-panel')); } catch (_) { /* noop */ } }
     }
@@ -639,8 +695,8 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
                 if (!data || typeof data !== 'object') { _qPlanFailed(q, `FCC's answer couldn't be read (HTTP ${res.status}).`); return; }
                 if (data.success !== true || !data.plan) {
                     const why = String(data.msg || `FCC answered with an error (HTTP ${res.status}).`);
-                    if (_qSourceGone(q, data)) { _qSettleGone(q, why); return; }
-                    _qPlanFailed(q, why, data.gone != null);
+                    if (data.gone != null) { _qSettleGone(q, why, data.gone); return; }
+                    _qPlanFailed(q, why);
                     return;
                 }
                 if (!q.userSwapped && !q.triedSwap && data.default_keep != null && String(data.default_keep) !== String(q.dst)) {
@@ -667,11 +723,13 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
 
     // A merge that landed: the events first (every open window stops holding the deleted
     // id), whether or not the question or the window is still up.
-    function _merged(q, data) {
-        const from = String(q.src);
-        const into = String(q.dst);
+    // `pair`: the merge told, when it isn't the question's own pair (an earlier press's,
+    // found finished; R3P4). `q` may be a bare stand-in for a window with no question.
+    function _merged(q, data, pair) {
+        const from = String(pair ? pair.src : q.src);
+        const into = String(pair ? pair.dst : q.dst);
         const vendor = data.vendor || null;
-        q.unsure = null;
+        _forgetUnsure(from);
         document.dispatchEvent(new CustomEvent('vendor:merged', {
             detail: { from, into, vendor, moved: Array.isArray(data.moved_filament_ids) ? data.moved_filament_ids : [] },
         }));
@@ -688,7 +746,14 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             // The window's line stands for the toast, which sits under it (review round 1,
             // P-S5): label trouble said there too, in the warning tone.
             _notice(win, msg, trouble ? 'warn' : '');
-            _focusBox(win);       // a read that fails leaves the keyboard here (P-S3)
+            // A read that fails leaves the keyboard in the box (P-S3), unless another
+            // question has it (review round 3, R3P8: one opened while a gone answer's read
+            // was out lost it to the box beneath).
+            const a = document.activeElement;
+            const another = !!(_question && _question !== q);
+            const free = !a || a === document.body || !a.isConnected || win.element.contains(a)
+                || !!(q.handle && q.handle.element && q.handle.element.contains(a));
+            if (!another && free) _focusBox(win);
             const typed = _box(win).value;
             _read(win, () => {
                 // The first row takes the keyboard only while it is still where the merge
@@ -730,9 +795,10 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
     // merge). Resolves {landed, read, kept}: the read is handed on, so a merge that didn't
     // finish tells the windows the kept one's record from it.
     function _qCheckLanded(q, data) {
+        const at = _told[String(q.dst)] || 0;
         return _readVendors().then((r) => {
             const kept = _keptIn(q, r);
-            const seen = { landed: false, read: r.read, kept };
+            const seen = { landed: false, read: r.read, kept, at };
             if (!r.read || !kept || r.vendors.some((v) => v && String(v.id) === String(q.src))) return seen;
             _merged(q, {
                 vendor: kept,
@@ -758,25 +824,26 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             if (s && s.read) { if (s.kept) tell(s.kept); return; }
             document.dispatchEvent(new CustomEvent('vendor:unread', { detail: { id: dst } }));
         };
-        if (seen) { settle(seen); return; }
-        _readVendors().then((r) => settle({ read: r.read, kept: _keptIn(q, r) }));
+        // A read that lands after a newer word of the kept one says nothing (R3P3).
+        if (seen) { if ((_told[dst] || 0) === (seen.at || 0)) settle(seen); return; }
+        const at = _told[dst] || 0;
+        _readVendors().then((r) => { if ((_told[dst] || 0) === at) settle({ read: r.read, kept: _keptIn(q, r) }); });
     }
 
-    // The server's 404 `gone` names the one to merge: it isn't in Spoolman any more.
-    const _qSourceGone = (q, data) => !!(data && data.gone != null && String(data.gone) === String(q.src));
-
-    // The one to merge is gone (review round 2, R2S8 / R2P3: nothing read `gone`, so a merge
-    // that finished after the page gave up ended in "Couldn't check the merge" with a Try
-    // again that could only fail, and no window heard the merge). After a press of this
-    // question, for this very pair, that FCC couldn't account for (no answer, one it couldn't
-    // read, a delete it couldn't confirm: `q.unsure`), it is that merge, finished: the server
-    // deletes the one merged only once every filament is off it. It is told as one that
-    // answered, so every window stops holding the deleted id. Otherwise it went another way
-    // (another window's merge, Spoolman's own page), which the page can't name: the question
-    // says what the server said and offers nothing to ask again.
-    function _qSettleGone(q, why) {
-        const mine = !!(q.unsure && q.unsure.src === q.src && q.unsure.dst === q.dst);
-        if (!mine) {
+    // The server's 404 `gone` names a manufacturer of the pair that isn't in Spoolman any
+    // more (review round 2, R2S8 / R2P3: nothing read it, so a merge that finished after
+    // the page gave up ended in "Couldn't check the merge" with a Try again that could only
+    // fail, and no window heard the merge). When it is the one merged by a merge FCC sent
+    // and couldn't account for (`_unsure`, page-wide since review round 3, R3P4: on either
+    // side of the question, after a ⇄, or in a question opened again), that merge finished:
+    // the server deletes the one merged only once every filament is off it. It is told as
+    // one that answered, so every window stops holding the deleted id. Otherwise it went
+    // another way (another window's merge, Spoolman's own page), which the page can't name,
+    // or it is the one to keep: the question says what the server said and offers nothing
+    // to ask again.
+    function _qSettleGone(q, why, gone) {
+        const pair = _unsureGone(gone);
+        if (!pair) {
             q.inFlight = false;
             if (_alive(q.win)) { _notice(q.win, why, 'warn'); _read(q.win); }
             if (!_qAlive(q)) return;
@@ -784,22 +851,32 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             _qPlanFailed(q, why, true);
             return;
         }
-        const srcName = _qName(q, q.src);
+        _settleUnsure(q.win, q, pair, why);
+    }
+
+    // The merge of `pair` FCC sent and couldn't account for, found finished (its source
+    // gone): told as one that answered, from a read of the manufacturers for the kept
+    // one's record. `q`: the question that met it, or null (the window's own read).
+    function _settleUnsure(win, q, pair, why) {
+        const via = q || { win, src: pair.src, dst: pair.dst, plan: null, lastPlan: null, handle: null, closed: true };
+        const srcName = _qName(via, pair.src);
+        const dstName = _qName(via, pair.dst);
         _readVendors().then((r) => {
-            q.inFlight = false;
-            const kept = _keptIn(q, r);
+            if (q) q.inFlight = false;
+            const kept = r.read ? r.vendors.find((v) => v && String(v.id) === pair.dst) || null : null;
             if (r.read && !kept) {
                 // The one kept is gone too: no window can be told to hold it.
-                const both = `${why} ${_qName(q, q.dst)} isn't in Spoolman either.`;
-                if (_alive(q.win)) { _notice(q.win, both, 'warn'); _read(q.win); }
-                if (_qAlive(q)) { _qFlash(q, ''); _qPlanFailed(q, both, true); }
+                _forgetUnsure(pair.src);
+                const both = `${why} ${dstName} isn't in Spoolman either.`;
+                if (_alive(win)) { _notice(win, both, 'warn'); if (!q) _fail(win, both, true); else _read(win); }
+                if (q && _qAlive(q)) { _qFlash(q, ''); _qPlanFailed(q, both, true); }
                 return;
             }
-            _merged(q, {
+            _merged(via, {
                 vendor: kept,
                 moved_filament_ids: [],
-                msg: `${srcName} is gone from Spoolman: the merge into ${kept ? label(kept) : _qName(q, q.dst)} finished.`,
-            });
+                msg: `${srcName} is gone from Spoolman: the merge into ${kept ? label(kept) : dstName} finished.`,
+            }, pair);
         });
     }
 
@@ -811,8 +888,10 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
     function _qNotMerged(q, msg, data, seen) {
         const win = q.win;
         const words = msg + _labelTroubleWords(data);
-        // A carry that landed changed the kept one; filaments may have moved.
-        _qTellKept(q, data, seen);
+        // A carry that landed changed the kept one; filaments may have moved. A refusal made
+        // before any write (`nothing_written`) changed nothing, so it tells no window anything
+        // (review round 3, R3P2: a read that failed then held the editor, "after a change").
+        if (!(data && data.nothing_written === true)) _qTellKept(q, data, seen);
         document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
         if (_alive(win)) { _notice(win, words, 'warn'); _read(win); }
         else if (window.showToast) window.showToast(words, 'error', 7000);
@@ -840,18 +919,20 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             .then(({ res, data }) => {
                 if (data && data.success === true) { q.inFlight = false; _merged(q, data); return; }
                 const msg = String((data && data.msg) || `FCC answered with an error (HTTP ${res.status}), so the merge may not have finished.`);
-                if (_qSourceGone(q, data)) { _qSettleGone(q, msg); return; }
+                if (data && data.gone != null) { _qSettleGone(q, msg, data.gone); return; }
                 // An answer FCC couldn't read, or a delete it couldn't confirm: this pair's
                 // merge may have run, or be running still (review round 2, R2S8).
                 if (!data || data.may_have_deleted) {
-                    q.unsure = pair;
+                    _noteUnsure(pair.src, pair.dst);
                     _qCheckLanded(q, data).then((seen) => { q.inFlight = false; if (!seen.landed) _qNotMerged(q, msg, data, seen); });
                     return;
                 }
+                // The server kept the one merged: any earlier merge of it has ended.
+                if (data.source_kept) _forgetUnsure(pair.src);
                 q.inFlight = false;
                 _qNotMerged(q, msg, data);
             }, () => {
-                q.unsure = pair;
+                _noteUnsure(pair.src, pair.dst);
                 if (window.logClientEvent) {
                     window.logClientEvent(`⚠️ Manufacturer merge #${esc(q.src)} → #${esc(q.dst)}: FCC didn't answer, so it may not have finished.`, 'WARNING');
                 }
@@ -871,7 +952,7 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             win: h, src: String(src), dst: String(dst), from: fromRow || null,
             // The row it came from, by its pair, to find again in a list read since.
             rowKey: fromRow && fromRow.dataset ? `${fromRow.dataset.vmSrc}:${fromRow.dataset.vmDst}` : null,
-            seq: 0, plan: null, lastPlan: null, inFlight: false, unsure: null,
+            seq: 0, plan: null, lastPlan: null, inFlight: false,
             userSwapped: false, triedSwap: false, closed: false, release: null, onClosed: null, handle: null,
         };
         _question = q;

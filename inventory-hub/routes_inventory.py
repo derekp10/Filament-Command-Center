@@ -1743,21 +1743,37 @@ def api_edit_spool_wizard():
         if filament_id and filament_data:
             fil_res = spoolman_api.update_filament(filament_id, filament_data)
             if not fil_res:
-                err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+                raw_err = spoolman_api.LAST_SPOOLMAN_ERROR
+                err = raw_err or "Spoolman rejected the update"
                 state.logger.warning(f"Failed to cleanly update Filament {filament_id} during spool edit: {err}")
                 # 28.B5 — if the spool half already committed, say so (partial
                 # persist reported honestly, not as a total failure). Retry is
                 # benign: the spool diff comes up empty on the second pass.
-                msg = (f"Spool saved, but filament update rejected: {err}"
-                       if spool_committed else f"Filament update rejected: {err}")
+                # Group 66.9 review round 2 (R2X-1): an answer lost may have landed,
+                # so the page sends its Vendor box's manufacturer at the next Save.
+                # Round 3 (R3S3 / R3W9): said in words a person reads (refusal_words:
+                # requests' text, with Spoolman's address, reached the status line), and
+                # a write whose answer was lost says it may have saved, never "rejected"
+                # (told so, a person put the manufacturer back, and the Save that did
+                # left it out as unchanged).
+                may_have_saved = spoolman_api.write_may_have_landed(err)
+                said = (spoolman_api.refusal_words(err) if raw_err
+                        else "Spoolman's answer couldn't be read.").strip()
+                if not said.endswith(('.', '!', '?')):
+                    said += '.'
+                lead = "Spool saved, but " if spool_committed else ""
+                if may_have_saved:
+                    msg = (f"{lead}FCC couldn't tell whether filament #{filament_id}'s changes saved: {said} "
+                           f"Save again to send them again.")
+                else:
+                    msg = (f"{lead}{'f' if spool_committed else 'F'}ilament #{filament_id}'s changes weren't "
+                           f"saved: {said}")
                 failed = {
                     "success": False,
                     "msg": msg,
                     "error": err,
                     "spool_saved": spool_committed,
-                    # Group 66.9 review round 2 (R2X-1): an answer lost may have landed,
-                    # so the page sends its Vendor box's manufacturer at the next Save.
-                    "filament_may_have_saved": spoolman_api.write_may_have_landed(err),
+                    "filament_may_have_saved": may_have_saved,
                 }
                 if spool_committed:
                     # Group 63 review (C4): the spool's write landed, so what it did

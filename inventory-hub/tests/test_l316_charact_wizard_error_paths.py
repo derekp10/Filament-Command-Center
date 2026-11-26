@@ -128,8 +128,11 @@ def test_wizard_update_filament_rejection_surfaces_spoolman_error(monkeypatch):
     })
     body = r.get_json()
     assert body["success"] is False
-    assert body["msg"] == "Filament update rejected: HTTP 422: bad density"
+    # PIN UPDATED DELIBERATELY (Group 66.9 review round 3, R3S3 / R3W9): the words a
+    # person reads come through refusal_words; the raw text stays in `error`.
+    assert body["msg"] == "Filament #5's changes weren't saved: Spoolman refused it: bad density."
     assert body["error"] == "HTTP 422: bad density"
+    assert body["filament_may_have_saved"] is False
 
 
 def test_wizard_spool_committed_before_filament_rejection(monkeypatch):
@@ -162,7 +165,8 @@ def test_wizard_spool_committed_before_filament_rejection(monkeypatch):
     assert spool_writes[0][0] == 77
     assert body["success"] is False
     assert body["spool_saved"] is True
-    assert body["msg"] == "Spool saved, but filament update rejected: HTTP 422: nope"
+    # PIN UPDATED DELIBERATELY (Group 66.9 review round 3, R3S3 / R3W9).
+    assert body["msg"] == "Spool saved, but filament #5's changes weren't saved: Spoolman refused it: nope."
 
 
 def test_wizard_extras_diff_uses_system_managed_guard(monkeypatch):
