@@ -1168,8 +1168,10 @@ class TestReviewRound3:
         body = r.get_json()
         assert r.status_code == 502 and body["still_on_source"] == [300]
         assert body["labels_flagged"]["spools"] == [301] and body["labels_flagged"]["filaments"] == [300]
-        assert ("#300 may move yet (the answer to its move was lost): its labels are marked for a reprint "
-                "in case.") in body["msg"]
+        # Review round 4 (R4S1): the answer says it may move yet; its labels speak through
+        # their own lines, never "marked" of none.
+        assert "#300 may move yet (the answer to its move was lost)." in body["msg"]
+        assert "labels are marked" not in body["msg"] and "#300:" not in body["msg"]     # never among the refused
         _refile(fake, 300, 4)                                   # the PATCH lands late
         r2, _ = _merge(client, fake, 1, 4)
         assert r2.status_code == 200 and 1 not in fake.records["vendor"]
@@ -1415,3 +1417,124 @@ class TestWizardFilamentAnswer:
         assert body["filament_may_have_saved"] is may
         assert body["msg"] == words
         assert "spoolman.test" not in body["msg"] and body["error"] == err
+
+
+class TestReviewRound4:
+    """Review round 4: a late move's words and line (R4S1), source_kept on every refusal
+    made after the merged one was read inside the lock (R4P1), nothing_written kept off
+    the carry's refusals (R4S4), and the wizard route's words (R4S2, R4S3)."""
+
+    def test_a_late_move_is_logged_as_unsure_never_as_couldnt_move(self, client):
+        fake = _stocked()
+        fake.canned[("PATCH", "/api/v1/filament/300")] = requests.exceptions.ReadTimeout("read timed out")
+        r, logged = _merge(client, fake, 1, 4)
+        assert r.status_code == 502 and r.get_json()["still_on_source"] == [300]
+        warned = " ".join(_lines(logged, "WARNING"))
+        assert ("FCC couldn't tell whether #300 moved: the answer to its move was lost, and Overture #1 still holds "
+                "it now, so it may move yet.") in warned
+        assert "Overture #1 still holds #300, so it was kept. #300 may move yet" in warned
+        assert not any("couldn't move Filament #300" in m for m in _lines(logged, "ERROR"))
+
+    def test_a_late_move_with_nothing_to_mark_claims_no_label(self, client):
+        fake = _stocked()
+        fake.records["filament"][300]["extra"] = {}                 # no swatch status
+        for sid in (301, 302, 303):
+            del fake.records["spool"][sid]                          # no spool in stock
+        fake.canned[("PATCH", "/api/v1/filament/300")] = requests.exceptions.ReadTimeout("read timed out")
+        r, _ = _merge(client, fake, 1, 4)
+        body = r.get_json()
+        assert body["labels_flagged"] == {"spools": [], "filaments": [], "errors": []}
+        assert "label" not in body["msg"]
+
+    @pytest.mark.parametrize("where", ["the kept end", "the merged one's list"])
+    def test_a_refusal_after_the_merged_one_was_read_says_it_was_kept(self, client, where):
+        # R4P1: the page forgets a merge it couldn't account for once an answer shows
+        # the merged one was there, inside the lock.
+        fake = _stocked()
+        if where == "the kept end":
+            fake.canned[("GET", "/api/v1/vendor/4")] = _Resp(503, {"message": "database is locked"})
+        else:
+            fake.canned[("LIST", 1)] = _Resp(503, {"message": "database is locked"})
+        r, _ = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["nothing_written"] is True and body["source_kept"] is True
+
+    def test_the_kept_one_gone_says_the_merged_one_was_kept(self, client):
+        fake = _stocked()
+        for fid in (100, 101, 102, 103, 104):
+            fake.records["filament"][fid].pop("vendor", None)
+        del fake.records["vendor"][4]
+        r, _ = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 404 and body["gone"] == 4 and body["source_kept"] is True
+
+    def test_the_merged_ones_own_refusal_and_a_dry_run_never_say_it_was_kept(self, client):
+        fake = _stocked()
+        fake.canned[("GET", "/api/v1/vendor/35")] = _Resp(503, {"message": "database is locked"})
+        r, _ = _merge(client, fake, 35, 4)
+        assert r.status_code == 502 and "source_kept" not in r.get_json()
+        fake = _stocked()
+        fake.canned[("GET", "/api/v1/vendor/4")] = _Resp(503, {"message": "database is locked"})
+        r, _ = _merge(client, fake, 35, 4, body={"dry_run": True})
+        assert r.status_code == 502 and "source_kept" not in r.get_json()
+
+    def test_the_carrys_refusals_say_the_merged_one_was_kept_and_may_have_written(self, client):
+        # R4S4: never nothing_written (the "couldn't tell" one may have written, and the
+        # page reads the kept one after it); R4P1: source_kept.
+        fake = _stocked()
+        fake.canned[("PATCH", "/api/v1/vendor/4")] = _Resp(500, {"message": "database is locked"})
+        r, _ = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert body["source_kept"] is True and "nothing_written" not in body and body["vendor"]["id"] == 4
+        fake = _stocked()
+        fake.land_then_raise[("PATCH", "/api/v1/vendor/4")] = requests.exceptions.ReadTimeout("read timed out")
+        fake.get_hooks["/api/v1/vendor/4"] = (
+            lambda n: requests.exceptions.ConnectionError("down (test)") if n >= 2 else None)
+        r, _ = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert set(body) == {"success", "source_kept", "msg"} and body["source_kept"] is True
+
+
+class TestWizardFilamentAnswerWords:
+    """R4S2 / R4S3: the wizard route's words around a lost filament answer."""
+
+    def _post(self, client, monkeypatch, err, spool_data, record=None, spool_writes=None):
+        record = record or {"id": 77, "archived": False, "comment": "", "initial_weight": 1000, "used_weight": 100,
+                            "remaining_weight": 900, "location": "SHELF-1", "extra": {}}
+        writes = [] if spool_writes is None else spool_writes
+        monkeypatch.setattr(spoolman_api, "LAST_SPOOLMAN_ERROR", None)
+
+        def failing_update(fid, data):
+            spoolman_api.LAST_SPOOLMAN_ERROR = err
+            return None
+
+        def spool_write(sid, data, **k):
+            writes.append(data)
+            return dict(record, **data)
+        monkeypatch.setattr(spoolman_api, "get_spool", lambda sid: dict(record))
+        monkeypatch.setattr(spoolman_api, "update_spool", spool_write)
+        monkeypatch.setattr(spoolman_api, "update_filament", failing_update)
+        monkeypatch.setattr(state, "add_log_entry", lambda *a, **k: None)
+        return client.post("/api/edit_spool_wizard", json={
+            "spool_id": 77, "spool_data": spool_data, "filament_id": 5, "filament_data": {"vendor_id": 4}}).get_json()
+
+    def test_an_empty_error_never_says_rejected(self, client, monkeypatch):
+        body = self._post(client, monkeypatch, None, {"comment": ""})
+        assert body["filament_may_have_saved"] is True and body["error"] == "Spoolman rejected the update"
+        assert body["msg"] == ("FCC couldn't tell whether filament #5's changes saved: Spoolman's answer couldn't "
+                               "be read. Save again to send them again.")
+
+    def test_a_lost_answer_after_the_spools_write_says_the_spool_saved(self, client, monkeypatch):
+        body = self._post(client, monkeypatch, LOST, {"comment": "a note"})
+        assert body["spool_saved"] is True
+        assert body["msg"].startswith("Spool saved, but FCC couldn't tell whether filament #5's changes saved: ")
+
+    def test_a_lost_answer_with_a_location_change_has_no_either(self, client, monkeypatch):
+        body = self._post(client, monkeypatch, LOST, {"comment": "", "location": "SHELF-2"})
+        assert "either" not in body["msg"], body["msg"]
+        assert body["msg"].endswith("#77 was not moved to SHELF-2: that Save moves it too.")
+
+    def test_a_refusal_with_a_location_change_keeps_either(self, client, monkeypatch):
+        body = self._post(client, monkeypatch, 'HTTP 500: {"message": "database is locked"}',
+                          {"comment": "", "location": "SHELF-2"})
+        assert body["msg"].endswith("#77 was not moved to SHELF-2 either: save again to move it.")

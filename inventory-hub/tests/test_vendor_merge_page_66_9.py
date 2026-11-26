@@ -30,6 +30,7 @@ from edit_filament_harness import errors, filament, load, open_form, posts_to
 from test_weigh_out_scan_focus_js import wo  # noqa: F401 (the weigh-out page)
 from test_wizard_price_mark_54_8 import wiz  # noqa: F401 (the wizard's page)
 from test_scanner_safe_dialogs_61_js import page61  # noqa: F401 (the real processScan)
+from test_wizard_label_status_58_5 import wizard  # noqa: F401 (the label-status wizard page)
 
 HIDDEN_VENDOR = "#wiz-fil-vendor-sel"
 
@@ -1501,7 +1502,7 @@ SAVE_STUB = r"""() => {
         return base(url, opts);
     };
     window.__labelCalls = [];
-    window._maybePromptLabelReprint = (fid, name, cn, ce) => { window.__labelCalls.push({ cn, ce }); };
+    window._maybePromptLabelReprint = (fid, name, cn, ce, raw) => { window.__labelCalls.push({ cn, ce, raw }); };
 }"""
 LOST_ANSWER = {"success": False, "spool_saved": False, "filament_may_have_saved": True, "error": "Read timed out.",
                "msg": "FCC couldn't tell whether filament #7's changes saved: Spoolman didn't answer in time."}
@@ -1672,3 +1673,782 @@ def test_a_merge_while_a_save_is_out_leaves_the_kept_one_as_the_baseline(wiz, me
     assert wiz.locator(HIDDEN_VENDOR).input_value() == kept
     assert _save_n(wiz, 2)["filament_data"].get("vendor_id") is None
     assert "vendor_id" not in wiz.evaluate("window.__labelCalls")[-1]["cn"]
+
+
+# --- review round 4 (2026-11-26): the page and wizard findings, pinned ---------------------
+
+OVERTURE_AFTER = dict(OVERTURE, external_id="Sunlu")
+PLAN_1_35 = dict(PLAN, default_keep=1, plan=dict(PLAN["plan"], source=ROWS[1], target=ROWS[35]))
+PLAN_35_1 = dict(PLAN, default_keep=1, plan=dict(PLAN["plan"], source=ROWS[35], target=ROWS[1]))
+CARRY_REFUSED = {"__status": 502, "__body": {
+    "success": False, "source_kept": True, "vendor": SUNLU4,
+    "msg": ("Couldn't copy Sunlu #35's External ID “Sunlu” onto Sunlu #4: Spoolman refused it: database is "
+            "locked. Nothing was moved; try again in a moment.")}}
+BUSY = {"__status": 409, "__body": {"success": False, "busy": True,
+                                    "msg": "Another manufacturer merge is running. Try again once it has finished."}}
+
+
+def _notice_text(page):
+    return page.evaluate("""() => { const n = document.querySelector('#fcc-vendor-merge [data-vm-notice]');
+        return n && !n.hidden ? n.textContent : ''; }""")
+
+
+def _on(page):
+    return page.evaluate("""() => { const a = document.activeElement;
+        if (!a) return 'none'; if (a.matches && a.matches('[data-vm-box]')) return 'box';
+        return a.dataset && a.dataset.vmSrc ? a.dataset.vmSrc + ':' + a.dataset.vmDst : a.tagName; }""")
+
+
+def test_two_unaccounted_merges_of_one_manufacturer_tell_the_questions_own(vm):
+    """R4P2: 35 -> 4 and then 35 -> 1 pressed with no answer; a gone for #35 met by the
+    35 -> 1 question is that merge, never the older 35 -> 4."""
+    vm.evaluate("""(a) => { window.__goneNow = false;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run) ? a.plan : '__reject__';
+        window.__answers['POST /api/vendors/1/merge_into/35'] = (req) => a.p1_35;
+        window.__answers['POST /api/vendors/35/merge_into/1'] = (req) => (req.body && req.body.dry_run)
+            ? (window.__goneNow ? a.gone : a.p35_1) : '__reject__'; }""",
+                {"plan": PLAN, "p1_35": PLAN_1_35, "p35_1": PLAN_35_1, "gone": GONE35})
+    _open_window(vm, 35)
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="35"][data-vm-dst="4"]').first.click()
+    _plan_painted(vm)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="1"][data-vm-dst="35"]').click()
+    _plan_painted(vm)
+    assert _q(vm)["title"] == "🔗 Merge Sunlu #35 into Overture #1?"
+    vm.evaluate("""(a) => { let n = 0; window.__goneNow = true;
+        window.__answers['/api/vendors'] = () => (++n === 1 ? a.before : a.after); }""",
+                {"before": VENDORS, "after": {"success": True, "vendors": [SUNLU4, OVERTURE_AFTER, ACME]}})
+    _yes_by_keyboard(vm)
+    vm.wait_for_timeout(400)
+    ev = _merged_events(vm)
+    assert len(ev) == 1 and (ev[0][1]["from"], ev[0][1]["into"]) == ("35", "1")
+    assert _notice_text(vm) == "Sunlu #35 is gone from Spoolman: the merge into Overture #1 finished."
+
+
+def test_a_refusal_after_the_merged_one_was_read_ends_an_unaccounted_merge(vm):
+    """R4P1: a press with no answer, then a refusal the server made after reading #35
+    inside the lock (source_kept): #35 deleted another way later is said as gone, never
+    told as that merge."""
+    vm.evaluate("""(a) => { window.__goneNow = false; window.__mergeN = 0;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run)
+            ? (window.__goneNow ? a.gone : a.plan) : (++window.__mergeN === 1 ? '__reject__' : a.refused); }""",
+                {"plan": PLAN, "gone": GONE35, "refused": CARRY_REFUSED})
+    _ask_pair(vm, 4)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.evaluate("(a) => { window.__goneNow = true; window.__answers['/api/vendors'] = a; }",
+                {"success": True, "vendors": [SUNLU4, OVERTURE, ACME]})
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="35"][data-vm-dst="4"]').first.click()
+    vm.wait_for_timeout(400)
+    assert _merged_events(vm) == []
+    assert vm.locator('#fcc-vendor-merge-confirm [data-vmq="retry"]').count() == 0
+
+
+def test_an_older_read_landing_first_never_silences_a_newer_one(vm):
+    """R4P3: reads are ordered by when they were sent: B (after the carry) is told though
+    A (before it) landed first."""
+    vm.evaluate("""(a) => { window.__mergeN = 0;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run)
+            ? a.plan : (++window.__mergeN === 1 ? a.unsure : { __status: 500, __body: null }); }""",
+                {"plan": PLAN, "unsure": CARRY_UNSURE})
+    _ask_pair(vm, 4)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = '__hold__'; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.evaluate("() => { window.__A = window.__held['/api/vendors']; delete window.__held['/api/vendors']; }")
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.evaluate("() => { window.__B = window.__held['/api/vendors']; }")
+    vm.evaluate("(v) => window.__A(v)", VENDORS)
+    vm.wait_for_timeout(100)
+    vm.evaluate("(v) => window.__B(v)", {"success": True, "vendors": [SUNLU4_AFTER, SUNLU35, OVERTURE, ACME]})
+    vm.wait_for_timeout(250)
+    assert _editor_state(vm)["ext"] == "Sunlu"
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(100)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    _vendors_answer(vm, {"success": True, "vendors": [SUNLU4_AFTER, SUNLU35, OVERTURE, ACME]})
+    sent = _save_editor_with_a_note(vm, 4, SUNLU4_AFTER)
+    assert len(sent) == 1 and sent[0]["body"]["data"]["external_id"] == "Sunlu"
+
+
+def test_a_newer_read_told_first_silences_an_older_one(vm):
+    """R4P8 (M14c): the other order."""
+    _answer_merge(vm, merge=BUSY)
+    _ask_pair(vm, 4)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = '__hold__'; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.evaluate("() => { window.__A = window.__held['/api/vendors']; delete window.__held['/api/vendors']; }")
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.evaluate("() => { window.__B = window.__held['/api/vendors']; }")
+    vm.evaluate("(v) => window.__B(v)", {"success": True, "vendors": [SUNLU4_AFTER, SUNLU35, OVERTURE, ACME]})
+    vm.wait_for_timeout(100)
+    vm.evaluate("(v) => window.__A(v)", VENDORS)
+    vm.wait_for_timeout(200)
+    assert _editor_state(vm)["ext"] == "Sunlu"
+
+
+def test_a_good_read_after_an_earlier_word_of_the_kept_one_still_refills(vm):
+    """R4P8 (M13b): the check's read counts from when it was sent."""
+    _answer_merge(vm, merge="__reject__")
+    _ask_pair(vm, 4)
+    vm.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } }))",
+                SUNLU4)
+    _vendors_answer(vm, {"success": True, "vendors": [SUNLU4_AFTER, SUNLU35, OVERTURE, ACME]})
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(250)
+    assert _editor_state(vm)["ext"] == "Sunlu"
+
+
+def test_an_unread_word_on_a_changed_editor_claims_no_change(vm):
+    """R4P5: a 409, the person types a note, the read fails: the banner says FCC couldn't
+    read #4 after a merge was tried, and that the note stays."""
+    _answer_merge(vm, merge=BUSY)
+    _ask_pair(vm, 4)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = '__hold__'; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    _plan_painted(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(100)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.fill("#vendoredit-comment", "a note")
+    vm.evaluate("() => window.__held['/api/vendors']({ success: false, msg: 'blip' }, 502)")
+    vm.wait_for_timeout(150)
+    st = _editor_state(vm)
+    assert st["saveOff"] and st["banner"].startswith("FCC couldn't read manufacturer #4 after a merge was tried")
+    assert "Your changes stay in the boxes" in st["banner"]
+    assert vm.locator("#vendoredit-comment").input_value() == "a note"
+
+
+def test_a_record_that_matches_what_the_editor_showed_lifts_its_hold(vm):
+    """R4P5: held after a read failed; a later read finds #4 as the editor last showed it."""
+    vm.evaluate("""(a) => { window.__mergeN = 0;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run)
+            ? a.plan : (++window.__mergeN === 1 ? '__reject__' : a.busy); }""", {"plan": PLAN, "busy": BUSY})
+    _ask_pair(vm, 4)
+    _vendors_answer(vm, VENDORS_502)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(250)
+    assert "after a merge was tried" in _editor_state(vm)["banner"]
+    _plan_painted(vm)
+    _vendors_answer(vm, VENDORS)
+    _yes_by_keyboard(vm)
+    vm.wait_for_timeout(250)
+    st = _editor_state(vm)
+    assert (st["saveOff"], st["banner"]) == (False, "")
+
+
+def test_a_merges_record_keeps_a_note_typed_since_on_the_kept_one(vm):
+    """R4P6: the record never fills over the person's typing; Save is off and says why."""
+    vm.evaluate("""(a) => { window.__goneNow = false;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run)
+            ? (window.__goneNow ? a.gone : a.plan) : '__reject__'; }""", {"plan": PLAN, "gone": GONE35})
+    _ask_pair(vm, 4)
+    vm.evaluate("""(v) => { let n = 0; window.__goneNow = true;
+        window.__answers['/api/vendors'] = () => (++n === 1 ? v : '__hold__'); }""", VENDORS)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.wait_for_timeout(100)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(150)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.fill("#vendoredit-comment", "my note")
+    vm.evaluate("(v) => window.__held['/api/vendors'](v)", AFTER)
+    vm.wait_for_timeout(200)
+    st = _editor_state(vm)
+    assert vm.locator("#vendoredit-comment").input_value() == "my note"
+    # The merge's own words, through the vendor:updated that follows it with the same record.
+    assert st["saveOff"] and st["banner"].startswith("Manufacturer #4 was merged with #35 while this window had unsaved")
+    assert len(_merged_events(vm)) == 1
+    # Another change of #4 after that is news of its own.
+    vm.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } }))",
+                dict(SUNLU4_AFTER, comment="changed again"))
+    vm.wait_for_timeout(60)
+    st = _editor_state(vm)
+    assert st["saveOff"] and st["banner"].startswith("Manufacturer #4 changed while this window was open")
+    assert vm.locator("#vendoredit-comment").input_value() == "my note"
+
+
+def test_a_merge_settled_after_cancel_leaves_the_row_the_person_arrowed_to(vm):
+    """R4P4."""
+    vm.evaluate("""(a) => { window.__goneNow = false;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run)
+            ? (window.__goneNow ? a.gone : a.plan) : '__reject__'; }""", {"plan": PLAN, "gone": GONE35})
+    _ask_pair(vm, 4)
+    vm.evaluate("""(v) => { let n = 0; window.__goneNow = true;
+        window.__answers['/api/vendors'] = () => (++n === 1 ? v : '__hold__'); }""", VENDORS)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.wait_for_timeout(100)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(150)
+    vm.keyboard.press("ArrowDown")
+    vm.keyboard.press("ArrowDown")
+    assert _on(vm) == "1:4"
+    vm.evaluate("(o) => { window.__answers['/api/vendors/4/merge_options'] = o; }", AFTER_OPTIONS)
+    vm.evaluate("(v) => window.__held['/api/vendors'](v)", AFTER)
+    vm.wait_for_timeout(300)
+    assert len(_merged_events(vm)) == 1 and _on(vm) == "1:4"
+
+
+def test_both_gone_after_a_press_with_no_answer_can_be_cancelled(vm):
+    """R4P8 (M21): the press path's both-gone question isn't left in flight."""
+    vm.evaluate("""(a) => { window.__mergeN = 0;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run)
+            ? a.plan : (++window.__mergeN === 1 ? '__reject__' : a.gone); }""", {"plan": PLAN, "gone": GONE35})
+    _ask_pair(vm, 35)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    _vendors_answer(vm, {"success": True, "vendors": [OVERTURE, ACME]})
+    _yes_by_keyboard(vm)
+    vm.wait_for_timeout(250)
+    assert any("isn't in Spoolman either" in line for line in _q(vm)["lines"])
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(150)
+    assert not _question_up(vm) and _merged_events(vm) == []
+
+
+def test_a_question_whose_words_were_clicked_keeps_the_keyboard_off_the_box(vm):
+    """R4P8 (M28): the keyboard on the page under a question opened meanwhile."""
+    vm.evaluate("""(a) => { window.__goneNow = false;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run)
+            ? (window.__goneNow ? a.gone : a.plan) : '__reject__';
+        window.__answers['POST /api/vendors/1/merge_into/35'] = (req) => a.p1; }""",
+                {"plan": PLAN, "gone": GONE35,
+                 "p1": dict(PLAN, default_keep=35, plan=dict(PLAN["plan"], source=ROWS[1], target=ROWS[35]))})
+    vm.evaluate("(o) => { window.__answers['/api/vendors/4/merge_options'] = o; }", AFTER_OPTIONS)
+    _ask_pair(vm, 35)
+    vm.evaluate("""(v) => { let n = 0; window.__goneNow = true;
+        window.__answers['/api/vendors'] = () => (++n === 1 ? v : '__hold__'); }""", VENDORS)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.wait_for_function("() => document.querySelector('#fcc-vendor-merge-confirm [data-vmq=\"cancel\"]') === document.activeElement")
+    vm.keyboard.press("Escape")
+    vm.wait_for_function("() => !document.querySelector('#fcc-vendor-merge-confirm')")
+    vm.wait_for_timeout(750)
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="1"]').click()
+    _plan_painted(vm)
+    vm.wait_for_function("() => document.querySelector('#fcc-vendor-merge-confirm [data-vmq=\"cancel\"]') === document.activeElement")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq-title]').click()
+    vm.evaluate("(v) => window.__held['/api/vendors'](v)", AFTER)
+    vm.wait_for_function("() => window.__ev.some((e) => e[0] === 'vendor:merged')")
+    vm.wait_for_timeout(150)
+    assert _on(vm) != "box"
+
+
+def test_the_window_both_gone_is_said_for_good(vm):
+    """R4P8 (M6 / M41): the window's own read, both manufacturers gone: no Try again."""
+    _press_with_no_answer_then_replanned(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.evaluate("(a) => { window.__answers['/api/vendors/35/merge_options'] = a.gone; window.__answers['/api/vendors'] = a.v; }",
+                {"gone": {"__status": 404, "__body": {"success": False, "gone": 35,
+                                                      "msg": "Manufacturer #35 isn't in Spoolman any more (merged or deleted?)."}},
+                 "v": {"success": True, "vendors": [OVERTURE, ACME]}})
+    vm.locator("#vendoredit-merge").click()
+    vm.wait_for_selector("#fcc-vendor-merge [data-vm-fail]")
+    vm.wait_for_timeout(200)
+    assert vm.locator("#fcc-vendor-merge [data-vm-retry]").count() == 0
+    assert "isn't in Spoolman either" in vm.locator("#fcc-vendor-merge [data-vm-body]").inner_text()
+    assert _merged_events(vm) == []
+
+
+def test_a_merge_told_during_the_editors_own_save_leaves_its_save_to_that_save(ef):
+    """R4P8 (M31): the record branch never turns Save on under a Save on its way."""
+    _open_editor(ef, 4)
+    ef.evaluate("() => { window.__answers['PATCH /api/vendors/4'] = '__hold__'; }")
+    ef.locator("#vendoredit-save").click()
+    ef.wait_for_timeout(60)
+    ef.evaluate("""(v) => document.dispatchEvent(new CustomEvent('vendor:merged', { detail:
+        { from: '35', into: '4', vendor: v, moved: [] } }))""", SUNLU4_AFTER)
+    ef.wait_for_timeout(60)
+    assert ef.evaluate("() => document.getElementById('vendoredit-save').disabled")
+
+
+def test_changes_typed_for_the_one_merged_away_go_with_it_and_the_editor_says_so(ef):
+    """R4P6: the editor on #35 with a note typed, #35 merged into #4: it shows #4, Save is
+    #4's, and it says the note was for #35 (through the vendor:updated that follows)."""
+    _open_editor(ef, 35)
+    ef.fill("#vendoredit-comment", "for 35")
+    ef.evaluate("""(v) => { document.dispatchEvent(new CustomEvent('vendor:merged', { detail:
+        { from: '35', into: '4', vendor: v, moved: [] } }));
+        document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } })); }""",
+                SUNLU4_AFTER)
+    ef.wait_for_timeout(60)
+    st = _editor_state(ef)
+    assert (st["id"], st["ext"], st["saveOff"]) == ("4", "Sunlu", False)
+    assert st["banner"] == "Your changes were for #35, which was merged into #4 and deleted: this window shows #4 now."
+    assert ef.locator("#vendoredit-comment").input_value() == ""
+
+
+def test_a_hold_lifted_keeps_a_note_typed_under_it_as_a_change(ef):
+    """R4P5: held after a read failed, the person types; a record that is what the editor
+    last showed lifts the hold, and the note still counts as a change: a later change of
+    #4 holds the editor again, never filling over the note."""
+    _open_editor(ef, 4)
+    ef.evaluate("() => document.dispatchEvent(new CustomEvent('vendor:unread', { detail: { id: '4' } }))")
+    ef.wait_for_timeout(30)
+    assert _editor_state(ef)["saveOff"]
+    ef.fill("#vendoredit-comment", "a note")
+    ef.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } }))",
+                SUNLU4)
+    ef.wait_for_timeout(30)
+    st = _editor_state(ef)
+    assert (st["saveOff"], st["banner"]) == (False, "")
+    ef.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } }))",
+                SUNLU4_AFTER)
+    ef.wait_for_timeout(30)
+    st = _editor_state(ef)
+    assert ef.locator("#vendoredit-comment").input_value() == "a note"
+    assert st["saveOff"] and st["banner"].startswith("Manufacturer #4 changed while this window was open")
+
+
+def _click_by_keyboard(page, what):
+    """A question button pressed from the keyboard (a click with detail 0: no arming, no
+    double-click guard holds it)."""
+    page.evaluate("""(w) => document.querySelector('#fcc-vendor-merge-confirm [data-vmq="' + w + '"]')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }))""", what)
+
+
+def _close_question_and_window(page):
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(750)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(750)
+
+
+def _reopen_window_gone(page, vid, vendors):
+    """The editor's 🔗 Merge… again, with `vid` gone from Spoolman and `vendors` listed."""
+    page.evaluate("(a) => { window.__answers['/api/vendors/' + a.vid + '/merge_options'] = a.gone;"
+                  " window.__answers['/api/vendors'] = a.v; }",
+                  {"vid": vid, "v": {"success": True, "vendors": vendors},
+                   "gone": {"__status": 404, "__body": {"success": False, "gone": vid,
+                            "msg": f"Manufacturer #{vid} isn't in Spoolman any more (merged or deleted?)."}}})
+    page.locator("#vendoredit-merge").click()
+    page.wait_for_timeout(400)
+
+
+def test_a_pair_pressed_twice_with_no_answer_is_still_one_merge_to_the_windows_read(vm):
+    """R4P2's memory holds one entry per pair (the newest last): two presses of 35 -> 4
+    with no answer, then #35 gone at the window's own read, is that merge, finished."""
+    _answer_merge(vm, merge="__reject__")
+    _ask_pair(vm, 35)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()      # no answer: #35 still listed
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)                                                   # no answer again
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    _close_question_and_window(vm)
+    _merge_finished(vm)
+    _reopen_window_gone(vm, 35, [SUNLU4_AFTER, OVERTURE, ACME])
+    ev = _merged_events(vm)
+    assert len(ev) == 1 and (ev[0][1]["from"], ev[0][1]["into"]) == ("35", "4")
+
+
+def test_two_unaccounted_merges_of_one_manufacturer_leave_the_windows_read_unsure(vm):
+    """R4P2: with no question to choose by, 35 -> 4 and 35 -> 1 pressed with no answer
+    can't say which finished: the window says #35 is gone and tells no merge."""
+    vm.evaluate("""(a) => {
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run) ? a.plan : '__reject__';
+        window.__answers['POST /api/vendors/1/merge_into/35'] = (req) => a.p1_35;
+        window.__answers['POST /api/vendors/35/merge_into/1'] = (req) => (req.body && req.body.dry_run) ? a.p35_1 : '__reject__'; }""",
+                {"plan": PLAN, "p1_35": PLAN_1_35, "p35_1": PLAN_35_1})
+    _open_window(vm, 35)
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="35"][data-vm-dst="4"]').first.click()
+    _plan_painted(vm)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="1"][data-vm-dst="35"]').click()
+    _plan_painted(vm)
+    assert _q(vm)["title"] == "🔗 Merge Sunlu #35 into Overture #1?"
+    _yes_by_keyboard(vm)
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    _close_question_and_window(vm)
+    _reopen_window_gone(vm, 35, [SUNLU4_AFTER, OVERTURE_AFTER, ACME])
+    assert _merged_events(vm) == []
+    body = vm.locator("#fcc-vendor-merge [data-vm-body]").inner_text()
+    assert "isn't in Spoolman any more (merged or deleted?)" in body and "either" not in body
+    assert vm.locator("#fcc-vendor-merge [data-vm-retry]").count() == 0
+
+
+def test_a_merge_that_kept_a_manufacturer_ends_an_unaccounted_merge_of_it(vm):
+    """R4P1: 4 -> 35 pressed with no answer, then ⇄ and 35 -> 4 merged: #4 was there with
+    no merge of it running, so #4 gone another way later is said as gone, never tied to a
+    merge into #35."""
+    _answer_merge(vm)                                                      # 35 -> 4: the plan, then merged
+    vm.evaluate("""(p) => { window.__answers['POST /api/vendors/4/merge_into/35'] = (req) =>
+        (req.body && req.body.dry_run) ? p : '__reject__'; }""", SWAPPED)
+    _ask_pair(vm, 35)
+    _click_by_keyboard(vm, "swap")
+    vm.wait_for_timeout(150)
+    _plan_painted(vm)
+    assert _q(vm)["title"] == "🔗 Merge Sunlu #4 into Sunlu #35?"
+    _yes_by_keyboard(vm)                                                   # no answer: #4 still listed
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    _click_by_keyboard(vm, "swap")                                         # back to 35 -> 4
+    vm.wait_for_timeout(150)
+    _plan_painted(vm)
+    assert _q(vm)["title"] == "🔗 Merge Sunlu #35 into Sunlu #4?"
+    _yes_by_keyboard(vm)                                                   # merged
+    vm.wait_for_function("() => window.__ev.some((e) => e[0] === 'vendor:merged')")
+    vm.wait_for_timeout(200)
+    assert vm.locator("#vendoredit-id").input_value() == "4"
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    _reopen_window_gone(vm, 4, [OVERTURE, ACME])
+    body = vm.locator("#fcc-vendor-merge [data-vm-body]").inner_text()
+    assert "isn't in Spoolman any more (merged or deleted?)" in body and "either" not in body
+    assert len(_merged_events(vm)) == 1
+
+
+def test_a_check_read_overtaken_by_a_newer_word_says_nothing(vm):
+    """R4P3: the check's read takes its number when it is sent: a newer word of #4 told
+    while it was out (here another window's Save) wins over the older record it brings."""
+    _answer_merge(vm, merge="__reject__")
+    _ask_pair(vm, 4)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = '__hold__'; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()      # no answer: the check reads
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } }))",
+                SUNLU4_AFTER)
+    vm.wait_for_timeout(60)
+    assert _editor_state(vm)["ext"] == "Sunlu"
+    vm.evaluate("(v) => window.__held['/api/vendors'](v)", VENDORS)      # #4 from before; #35 still listed
+    vm.wait_for_timeout(250)
+    st = _editor_state(vm)
+    assert (st["ext"], st["saveOff"], st["banner"]) == ("Sunlu", False, "")
+
+
+def test_an_older_read_landing_after_a_newer_failed_one_lifts_no_hold(vm):
+    """R4P3: two 409s; the newer read (B) fails first, and the editor holds; the older
+    read (A), sent before it, then brings #4 as the editor showed it. B's "couldn't read"
+    is the newer word, so A says nothing and the hold stays (A may be from before the
+    other merge's carry)."""
+    _answer_merge(vm, merge=BUSY)
+    _ask_pair(vm, 4)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = '__hold__'; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.evaluate("() => { window.__A = window.__held['/api/vendors']; delete window.__held['/api/vendors']; }")
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)
+    vm.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    vm.evaluate("() => window.__held['/api/vendors']({ success: false, msg: 'blip' }, 502)")       # B fails
+    vm.wait_for_timeout(100)
+    held = _editor_state(vm)
+    assert held["saveOff"] and held["banner"].startswith("FCC couldn't read manufacturer #4 after a merge was tried")
+    vm.evaluate("(v) => window.__A(v)", VENDORS)                                                    # A, older
+    vm.wait_for_timeout(200)
+    assert _editor_state(vm) == held
+
+
+GONE4_KEPT = {"__status": 404, "__body": {"success": False, "gone": 4, "source_kept": True, "nothing_written": True,
+                                          "msg": "Manufacturer #4 isn't in Spoolman any more: it was merged or deleted already."}}
+
+
+def test_a_gone_answer_for_the_kept_one_ends_an_unaccounted_merge_of_the_merged_one(vm):
+    """R4P1 (the page): the server read #35 inside the lock before it found #4 gone
+    (source_kept), so the earlier press FCC couldn't account for ended without deleting
+    #35. #35 deleted another way later is said as gone, never tied to a merge into #4."""
+    vm.evaluate("""(a) => { window.__mergeN = 0;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run)
+            ? a.plan : (++window.__mergeN === 1 ? '__reject__' : a.gone4); }""", {"plan": PLAN, "gone4": GONE4_KEPT})
+    _ask_pair(vm, 35)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()      # no answer: #35 still listed
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)                                                   # #4 is gone; #35 was there
+    vm.wait_for_timeout(250)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.evaluate("(a) => { window.__answers['/api/vendors/35/merge_options'] = a.gone; window.__answers['/api/vendors'] = a.v; }",
+                {"gone": {"__status": 404, "__body": {"success": False, "gone": 35,
+                                                      "msg": "Manufacturer #35 isn't in Spoolman any more (merged or deleted?)."}},
+                 "v": {"success": True, "vendors": [OVERTURE, ACME]}})
+    vm.locator("#vendoredit-merge").click()
+    vm.wait_for_selector("#fcc-vendor-merge [data-vm-fail]")
+    vm.wait_for_timeout(200)
+    body = vm.locator("#fcc-vendor-merge [data-vm-body]").inner_text()
+    assert "isn't in Spoolman any more (merged or deleted?)" in body and "either" not in body
+    assert vm.locator("#fcc-vendor-merge [data-vm-retry]").count() == 0
+    assert _merged_events(vm) == []
+
+
+# --- the wizard (R4W1-R4W7) ---
+
+# The label check's own fields on the filament (the shared wizard page lists neither).
+LABEL_FIELDS = {"success": True, "fields": {
+    "filament": [
+        {"entity_type": "filament", "field_type": "choice", "multi_choice": True, "key": "filament_attributes",
+         "name": "Filament Attributes", "order": 5, "choices": ["Matte", "Silk"]},
+        {"entity_type": "filament", "field_type": "text", "key": "original_color", "name": "Original Color", "order": 7},
+        {"entity_type": "filament", "field_type": "boolean", "key": "needs_label_print",
+         "name": "Needs Label Print", "order": 14},
+    ],
+    "spool": [],
+}}
+
+CREATE_STUB = r"""() => {
+    if (window.__createStub) return;
+    window.__createStub = true;
+    const base = window.fetch;
+    window.__createMode = null;
+    window.fetch = (url, opts) => {
+        if (String(url).split('?')[0] === '/api/create_inventory_wizard' && window.__createMode) {
+            const mode = window.__createMode;
+            window.__createMode = null;
+            window.__posts.push({ url: '/api/create_inventory_wizard', body: opts && opts.body ? JSON.parse(opts.body) : null });
+            if (mode === 'reject') return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        return base(url, opts);
+    };
+}"""
+
+
+@pytest.mark.parametrize("how", ["no answer", "answered, then a page error"])
+def test_a_create_is_never_told_to_save_again(wiz, how):
+    """R4W1 (orange): "Save again" after a create that went out made its spools twice."""
+    from test_wizard_price_mark_54_8 import _open_new_spool
+    _open_new_spool(wiz)
+    wiz.evaluate(CREATE_STUB)
+    if how == "no answer":
+        wiz.evaluate("() => { window.__createMode = 'reject'; }")
+    else:
+        wiz.evaluate("""() => { const real = window.wizardRenderPostSaveQueueActions;
+            window.wizardRenderPostSaveQueueActions = function () { window.wizardRenderPostSaveQueueActions = real;
+                throw new Error('<b>boom</b>'); }; }""")
+    wiz.evaluate("() => { window.wizardSubmit(); }")
+    wiz.wait_for_function("() => wizardState.saving == null && window.__posts.some((p) => p.url === '/api/create_inventory_wizard')")
+    text = wiz.locator("#wiz-status-msg").inner_text()
+    assert "Save again" not in text and "open the spool" not in text
+    assert "search for" in text and "before creating them again" in text
+    assert wiz.evaluate("() => document.getElementById('btn-wiz-submit').disabled && wizardState.lockedAfterSuccess")
+    if how != "no answer":
+        assert "<b>boom</b>" in text            # a thrown message is text, never markup
+
+
+def test_a_hand_edited_link_is_settled_by_the_save_that_carried_it(wiz):
+    """R4W2: decided by the row's own link, never by Product Link's text."""
+    _wiz_edit(wiz)
+    link = "https://prusament.com/spool/17705/5b1a183b26/"
+    _set_link(wiz, link + "?mine=1")
+    wiz.evaluate("""(l) => { Object.assign(wizardState.spoolRows[0], { status: 'linked-new', linkValue: l, linkFills: [],
+        errorMsg: 'Links at Save' }); }""", link)
+    _save_n(wiz, 1)
+    out = wiz.evaluate("() => ({ status: wizardState.spoolRows[0].status, dirty: wizardState.isDirty })")
+    assert out == {"status": "linked", "dirty": False}
+    assert "product_url" not in _save_n(wiz, 2)["spool_data"]["extra"]
+
+
+def test_a_new_manufacturer_given_a_merged_away_id_is_its_own(wiz):
+    """R4W3: Spoolman on SQLite gives a deleted highest id to the next manufacturer made."""
+    from test_wizard_vendor_66_1 import _brand
+    _wiz_edit(wiz, vendors=[_brand(2), _brand(4, "Other"), _brand(42, "Fresh")])
+    wiz.evaluate("""(v) => { document.dispatchEvent(new CustomEvent('vendor:merged', { detail:
+        { from: '42', into: '4', vendor: v, moved: [] } })); }""", _brand(4, "Other"))
+    wiz.evaluate("""(v) => { document.dispatchEvent(new CustomEvent('vendor:created', { detail: { id: '42', vendor: v } })); }""",
+                 _brand(42, "Fresh"))
+    wiz.wait_for_timeout(80)
+    _pick_vendor(wiz, 42, "Fresh")
+    assert _save_n(wiz, 1)["filament_data"]["vendor_id"] == 42
+    assert wiz.evaluate("() => wizardState.editFilamentOriginal.vendor_id") == "42"
+    assert _save_n(wiz, 2)["filament_data"].get("vendor_id") is None
+
+
+def test_a_change_made_while_a_save_was_out_stays_a_change(wiz):
+    """R4W4 (older than 66.9): the answer marked a comment typed meanwhile saved."""
+    _wiz_edit(wiz)
+    wiz.evaluate("() => { window.__saveMode = 'hold'; window.wizardSubmit(); }")
+    wiz.wait_for_function("() => window.__posts.filter((p) => p.url === '/api/edit_spool_wizard').length === 1")
+    wiz.evaluate("""() => { const c = document.getElementById('wiz-spool-comment'); c.value = 'typed meanwhile';
+        c.dispatchEvent(new Event('input', { bubbles: true })); }""")
+    wiz.evaluate("() => window.__releaseSave({ success: true, spool_id: 57 })")
+    wiz.wait_for_function("() => wizardState.saving == null")
+    assert wiz.evaluate("() => wizardState.isDirty") is True
+
+
+@pytest.mark.parametrize("meanwhile", ["a link checked", "a comment typed"])
+def test_an_answered_move_leaves_what_changed_meanwhile_unsaved(wiz, meanwhile):
+    """R4W4: the move question's 'moved' marked the form saved with a change made while
+    the Save was out."""
+    _wiz_edit(wiz)
+    wiz.evaluate("""() => { window.wizardEditLocationNotMoved = (data, opts) => opts.onDone('moved', {}, {});
+        window.__saveMode = 'hold'; window.wizardSubmit(); }""")
+    wiz.wait_for_function("() => window.__posts.filter((p) => p.url === '/api/edit_spool_wizard').length === 1")
+    seq = wiz.evaluate("() => wizardState.changeSeq")
+    if meanwhile == "a link checked":
+        link = "https://prusament.com/spool/17705/5b1a183b26/"
+        # The row checked a QR while the Save was out (no key typed: the change count stands).
+        wiz.evaluate("""(l) => { document.getElementById('wiz-spool-product_url').value = l;
+            Object.assign(wizardState.spoolRows[0], { status: 'linked-new', linkValue: l, linkFills: [],
+            errorMsg: 'Links at Save' }); }""", link)
+    else:
+        wiz.evaluate("""() => { const c = document.getElementById('wiz-spool-comment'); c.value = 'typed meanwhile';
+            c.dispatchEvent(new Event('input', { bubbles: true })); }""")
+    wiz.evaluate("""() => window.__releaseSave({ success: false, spool_saved: true, location_moved: false,
+        location_result: { status: 'requires_confirm' }, msg: 'asks' })""")
+    wiz.wait_for_function("() => wizardState.saving == null")
+    wiz.wait_for_timeout(80)
+    assert (wiz.evaluate("() => wizardState.changeSeq") == seq) is (meanwhile == "a link checked")
+    assert wiz.evaluate("() => wizardState.isDirty") is True
+
+
+def test_a_chip_removed_while_a_save_was_out_stays_a_change(wiz):
+    """R4W4: a chip's removal is the person's change too."""
+    wiz.evaluate("(f) => { window.__answers['/api/external/fields'] = f; }", LABEL_FIELDS)
+    _wiz_edit(wiz)
+    wiz.wait_for_selector("#chip-container-fil-filament_attributes", state="attached")
+    wiz.evaluate("() => window.wizardAddMultiChoiceChip('fil', 'filament_attributes', 'Matte')")
+    wiz.evaluate("() => { window.__saveMode = 'hold'; window.wizardSubmit(); }")
+    wiz.wait_for_function("() => window.__posts.filter((p) => p.url === '/api/edit_spool_wizard').length === 1")
+    seq = wiz.evaluate("() => wizardState.changeSeq")
+    wiz.evaluate("""() => document.querySelector('#chip-container-fil-filament_attributes .dynamic-chip')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))""")
+    assert wiz.evaluate("() => document.querySelectorAll('#chip-container-fil-filament_attributes .dynamic-chip').length") == 0
+    assert wiz.evaluate("() => wizardState.changeSeq") > seq
+    wiz.evaluate("() => window.__releaseSave({ success: true, spool_id: 57 })")
+    wiz.wait_for_function("() => wizardState.saving == null")
+    assert wiz.evaluate("() => wizardState.isDirty") is True
+
+
+def test_a_saved_link_under_a_refusal_is_settled(wiz):
+    """R4W5 (older than 66.9): the row stops saying the earlier QR still links at Save."""
+    _wiz_edit(wiz)
+    link = "https://prusament.com/spool/17705/5b1a183b26/"
+    _set_link(wiz, link)
+    wiz.evaluate("""(l) => { Object.assign(wizardState.spoolRows[0], { status: 'refused', linkValue: l,
+        linkedText: l, linkedNote: 'n', linkFills: [], errorMsg: 'A different product',
+        linkNote: 'That QR is another product. The QR scanned before this one still links at Save: ✕ goes back to it.' }); }""",
+                link)
+    assert _save_n(wiz, 1)["spool_data"]["extra"]["product_url"] == link
+    row = wiz.evaluate("() => { const r = wizardState.spoolRows[0]; return { status: r.status, value: r.linkValue, note: r.linkNote }; }")
+    assert row == {"status": "refused", "value": "", "note": "That QR is another product."}
+    assert "product_url" not in _save_n(wiz, 2)["spool_data"]["extra"]
+
+
+def test_the_reprint_gate_reads_the_label_status_the_window_saved(wizard):
+    """R4W6 (older than 66.9): a confirmed swatch label, then a rename."""
+    from test_wizard_label_status_58_5 import _open_edit, BOX
+    _open_edit(wizard, {"needs_label_print": True, "sample_printed": False})
+    wizard.evaluate(SAVE_STUB)
+    wizard.locator(BOX).click()                 # unticked: the label was printed
+    assert _save_n(wizard, 1)["filament_data"]["extra"]["needs_label_print"] is False
+    wizard.evaluate("""() => { const n = document.getElementById('wiz-fil-color_name'); n.value = 'Red Renamed';
+        n.dispatchEvent(new Event('input', { bubbles: true })); }""")
+    _save_n(wizard, 2)
+    last = wizard.evaluate("window.__labelCalls")[-1]
+    assert last["cn"].get("name") == "Red Renamed" and last["raw"]["needs_label_print"] is False
+
+
+@pytest.mark.parametrize("change", ["attributes", "original colour", "colour"])
+def test_a_landed_label_change_flags_nothing_at_the_next_save(wiz, change):
+    """R4W7: every field the label check reads moves with the baseline."""
+    wiz.evaluate("(f) => { window.__answers['/api/external/fields'] = f; }", LABEL_FIELDS)
+    _wiz_edit(wiz)
+    if change == "colour":
+        wiz.evaluate("""() => { const h = document.getElementById('wiz-fil-color_hex_0'); h.value = '#123456';
+            h.dispatchEvent(new Event('input', { bubbles: true })); }""")
+        first = ("cn", "color_hex", "123456")
+    elif change == "original colour":
+        wiz.wait_for_selector("#wiz_fil_ef_original_color", state="attached")
+        wiz.evaluate("""() => { const b = document.getElementById('wiz_fil_ef_original_color');
+            b.value = 'Deep Red'; b.dispatchEvent(new Event('input', { bubbles: true })); }""")
+        first = ("ce", "original_color", True)
+    else:
+        wiz.wait_for_selector("#chip-container-fil-filament_attributes", state="attached")
+        wiz.evaluate("() => window.wizardAddMultiChoiceChip('fil', 'filament_attributes', 'Matte')")
+        first = ("ce", "filament_attributes", True)
+    _save_n(wiz, 1)
+    calls = wiz.evaluate("window.__labelCalls")
+    assert calls[0][first[0]].get(first[1]) == first[2], calls       # the change is flagged once...
+    _save_n(wiz, 2)
+    calls = wiz.evaluate("window.__labelCalls")
+    assert calls[-1]["cn"] == {} and calls[-1]["ce"] == {}, calls    # ...and never again
+
+
+def test_a_throw_before_the_request_says_nothing_was_sent_and_leaves_nothing_unsure(wiz):
+    """R4W7."""
+    _wiz_edit(wiz)
+    _pick_vendor(wiz, 4, "Other")
+    wiz.evaluate("() => { window.wizardCommitSuggestedChoices = () => { throw new Error('<i>early</i>'); }; }")
+    wiz.evaluate("() => { window.wizardSubmit(); }")
+    wiz.wait_for_function("() => wizardState.saving == null")
+    text = wiz.locator("#wiz-status-msg").inner_text()
+    assert text == "Frontend Error: <i>early</i>. Nothing was sent."
+    assert wiz.evaluate("() => wizardState.vendorUnsure") is False
+    assert wiz.evaluate("() => window.__posts.filter((p) => p.url === '/api/edit_spool_wizard').length") == 0
+
+
+def test_a_failure_message_with_markup_is_text(wiz):
+    """R4W7: the status line escapes the server's words."""
+    _wiz_edit(wiz)
+    _answer_saves(wiz, {"success": False, "spool_saved": False, "msg": "<b>bold</b> words"})
+    _save_n(wiz, 1)
+    assert wiz.locator("#wiz-status-msg").inner_text() == "Error: <b>bold</b> words"
+
+
+def test_a_lost_answer_of_a_save_that_carried_no_manufacturer_leaves_it_alone(wiz):
+    """R4W7: only what the Save sent is unsure."""
+    _wiz_edit(wiz)
+    _answer_saves(wiz, LOST_ANSWER)
+    _save_n(wiz, 1)
+    _answer_saves(wiz, {"success": True, "spool_id": 57})
+    assert _save_n(wiz, 2)["filament_data"].get("vendor_id") is None
+
+
+def test_an_answer_fcc_couldnt_read_leaves_what_the_save_sent_unsure(wiz):
+    """R4W7: a 500 page instead of JSON may follow a write that landed."""
+    _wiz_edit(wiz)
+    wiz.evaluate("""() => { const base = window.fetch; let first = true;
+        window.fetch = (url, opts) => {
+            if (first && String(url).split('?')[0] === '/api/edit_spool_wizard') {
+                first = false;
+                window.__posts.push({ url: '/api/edit_spool_wizard', body: JSON.parse(opts.body) });
+                return Promise.resolve({ ok: false, status: 500, json: () => Promise.reject(new SyntaxError('Unexpected token <')) });
+            }
+            return base(url, opts);
+        }; }""")
+    _pick_vendor(wiz, 4, "Other")
+    _save_n(wiz, 1)
+    assert wiz.evaluate("() => wizardState.vendorUnsure") is True
+    _pick_vendor(wiz, 2, "Some Brand")
+    assert _save_n(wiz, 2)["filament_data"]["vendor_id"] == 2
+
+
+def test_an_open_forgets_the_last_windows_merges(wiz):
+    """R4W7."""
+    _wiz_edit(wiz)
+    wiz.evaluate("""() => document.dispatchEvent(new CustomEvent('vendor:merged', { detail:
+        { from: '9', into: '4', vendor: { id: 4, name: 'Other' }, moved: [] } }))""")
+    assert wiz.evaluate("() => wizardState.vendorMerges['9']") == "4"
+    _wiz_edit(wiz)
+    assert wiz.evaluate("() => Object.keys(wizardState.vendorMerges).length") == 0

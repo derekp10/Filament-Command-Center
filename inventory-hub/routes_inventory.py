@@ -1801,10 +1801,14 @@ def api_edit_spool_wizard():
                     failed["msg"] += f" {_archived_off_note(spool_id, archived_off)}"
                 elif new_location is not None:
                     # Group 40.7: the move comes last, so nothing moved; saving
-                    # again moves it (the spool's diff is empty by then).
+                    # again moves it (the spool's diff is empty by then). After words
+                    # that say the filament's changes may have saved, no "either" (Group
+                    # 66.9 review round 4, R4S2: it read as "weren't saved either").
                     failed["location_moved"] = False
-                    failed["msg"] += (f" #{spool_id} was not moved to {new_location or 'Unassigned'} "
-                                      f"either: save again to move it.")
+                    failed["msg"] += ((f" #{spool_id} was not moved to {new_location or 'Unassigned'}: "
+                                       f"that Save moves it too.") if may_have_saved else
+                                      (f" #{spool_id} was not moved to {new_location or 'Unassigned'} "
+                                       f"either: save again to move it."))
                     if archived_off:
                         failed["msg"] += f" {_archived_off_note(spool_id, archived_off)}"
                 return jsonify(failed)

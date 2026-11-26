@@ -113,8 +113,9 @@ def test_wizard_update_spool_rejection_fallback_message(monkeypatch):
 
 
 def test_wizard_update_filament_rejection_surfaces_spoolman_error(monkeypatch):
-    """update_filament -> None returns the filament-flavored rejection
-    ('Filament update rejected: <LAST_SPOOLMAN_ERROR>') with the error key."""
+    """update_filament -> None returns the filament-flavored rejection in words
+    ("Filament #5's changes weren't saved: <refusal_words>", Group 66.9 review round 3),
+    with the raw LAST_SPOOLMAN_ERROR under `error`."""
     monkeypatch.setattr(app_module.spoolman_api, "update_filament", lambda fid, data: None)
     monkeypatch.setattr(app_module.spoolman_api, "LAST_SPOOLMAN_ERROR",
                         "HTTP 422: bad density", raising=False)

@@ -1195,10 +1195,11 @@ def _keep_order(row):
             rid if _int_id(rid) else 0)
 
 
-def _merge_vendor_end(vid):
+def _merge_vendor_end(vid, also=None):
     """One end of a manufacturer merge, read through get_vendor_answer: (the vendor,
     None), or (None, (answer, status)). A read that gives no vendor has its hub.log
-    line from get_vendor_answer."""
+    line from get_vendor_answer. `also`: keys every refusal carries (`source_kept`)."""
+    also = also or {}
     rec, answered = spoolman_api.get_vendor_answer(vid)
     if spoolman_api.is_vendor_record(rec, vid):
         return rec, None
@@ -1206,17 +1207,17 @@ def _merge_vendor_end(vid):
         # Spoolman's own "no such vendor" ({"message": "No vendor with ID 35 found."}).
         # Never "so nothing was merged" (review round 1, P1): read after a merge whose
         # answer was lost, it is the merge that finished.
-        return None, (jsonify({
+        return None, (jsonify(dict({
             "success": False,
             "gone": vid,
             "nothing_written": True,
             "msg": f"Manufacturer #{vid} isn't in Spoolman any more: it was merged or deleted already.",
-        }), 404)
-    return None, (jsonify({
+        }, **also)), 404)
+    return None, (jsonify(dict({
         "success": False,
         "nothing_written": True,
         "msg": f"Couldn't read manufacturer #{vid} from Spoolman, so nothing was merged. Try again in a moment.",
-    }), 502)
+    }, **also)), 502)
 
 
 def _vendor_filaments(vid, label):
@@ -1390,15 +1391,20 @@ def _sample_printed(extra):
     return str(v).strip().strip('"').strip().lower() in ("true", "1")
 
 
-def _vendor_merge_reads(src_vid, dst_vid, target_filaments=False):
+def _vendor_merge_reads(src_vid, dst_vid, target_filaments=False, in_lock=False):
     """Everything a manufacturer merge reads before it writes, shared by the dry run
     and the merge: both ends (strict), the merged one's filaments (strict, each
     checked), the kept one's when `target_filaments` (the plan's counts), and the
-    carry. (reads, None) or (None, answer)."""
+    carry. (reads, None) or (None, answer). `in_lock` (the merge): a refusal made after
+    the merged one was read says so (`source_kept`): no earlier merge of it was running,
+    and it was there, so none can delete it now (review round 4, R4P1: the page kept
+    such a merge as one it couldn't account for, and called a manufacturer deleted
+    another way later "the merge into X finished")."""
     src, refused = _merge_vendor_end(src_vid)
     if refused:
         return None, refused
-    dst, refused = _merge_vendor_end(dst_vid)
+    kept = {"source_kept": True} if in_lock else {}
+    dst, refused = _merge_vendor_end(dst_vid, kept)
     if refused:
         return None, refused
     src_label, dst_label = _vendor_label(src), _vendor_label(dst)
@@ -1406,14 +1412,14 @@ def _vendor_merge_reads(src_vid, dst_vid, target_filaments=False):
     if unread:
         detail, words, _reason = unread
         state.logger.error(f"Manufacturer merge: couldn't list vendor {src_vid}'s filaments: {detail}")
-        return None, (jsonify({"success": False, "nothing_written": True, "msg": words}), 502)
+        return None, (jsonify(dict({"success": False, "nothing_written": True, "msg": words}, **kept)), 502)
     dst_fils = None
     if target_filaments:
         dst_fils, unread = _vendor_filaments(dst_vid, dst_label)
         if unread:
             detail, words, _reason = unread
             state.logger.error(f"Manufacturer merge: couldn't list vendor {dst_vid}'s filaments: {detail}")
-            return None, (jsonify({"success": False, "nothing_written": True, "msg": words}), 502)
+            return None, (jsonify(dict({"success": False, "nothing_written": True, "msg": words}, **kept)), 502)
     carry, kept_own = _vendor_carry(src, dst)
     return {
         "src": src, "dst": dst, "src_label": src_label, "dst_label": dst_label,
@@ -1682,7 +1688,7 @@ def api_merge_vendor(src_vid, dst_vid):
             "msg": "Another manufacturer merge is running. Try again once it has finished.",
         }), 409
     try:
-        reads, refused = _vendor_merge_reads(src_vid, dst_vid)
+        reads, refused = _vendor_merge_reads(src_vid, dst_vid, in_lock=True)
         if refused:
             return refused
         src_label, dst_label = reads["src_label"], reads["dst_label"]
@@ -1720,6 +1726,7 @@ def api_merge_vendor(src_vid, dst_vid):
                         "ERROR", "ff4444")
                     return jsonify({
                         "success": False,
+                        "source_kept": True,
                         "vendor": rec,
                         "msg": (f"Couldn't copy {src_label}'s {fields} onto {dst_label}: "
                                 f"{_sentence(spoolman_api.refusal_words(err))} Nothing was moved; try again in a moment."),
@@ -1731,6 +1738,7 @@ def api_merge_vendor(src_vid, dst_vid):
                         "WARNING", "ffaa00")
                     return jsonify({
                         "success": False,
+                        "source_kept": True,
                         "msg": (f"FCC couldn't tell whether {src_label}'s {fields} was copied onto {dst_label}: "
                                 f"{_sentence(spoolman_api.refusal_words(err))} Nothing was moved; try again in a moment."),
                     }), 502
@@ -1806,7 +1814,8 @@ def api_merge_vendor(src_vid, dst_vid):
 
         # Labels whose Brand changed, marked once, after the delete when it happens
         # (review round 1, S1) and on every return that stops before it (S2). Never one
-        # the re-list finds on the merged one: its Brand hasn't changed.
+        # the re-list finds on the merged one (its Brand hasn't changed), except a lost
+        # answer that may land yet (`late`, marked in case: review round 3).
         labels = {"flagged": None, "skip": set(), "also": set()}
 
         def mark_labels():
@@ -1889,7 +1898,17 @@ def api_merge_vendor(src_vid, dst_vid):
         tried.update(pending)
         filament_errors = []
         for fid, err in sorted(tried.items()):
-            if fid in left_ids:
+            if fid in late:
+                # Its answer was lost and it is on the merged one still: it may move yet
+                # (review round 4, R4S1: logged "couldn't move", and the label line beside
+                # it claimed a Brand change no line explained).
+                state.add_log_entry(
+                    f"⚠️ Manufacturer merge {src_html} → {dst_html}: "
+                    + html.escape(f"FCC couldn't tell whether #{fid} moved: the answer to its move was lost, and "
+                                  f"{src_label} still holds it now, so it may move yet.", quote=False),
+                    "WARNING", "ffaa00")
+                filament_errors.append({"filament_id": fid, "error": spoolman_api.refusal_words(err)})
+            elif fid in left_ids:
                 state.add_log_entry(
                     f"❌ Manufacturer merge {src_html} → {dst_html}: couldn't move Filament #{fid}: "
                     f"{html.escape(err, quote=False)}",
@@ -1909,20 +1928,21 @@ def api_merge_vendor(src_vid, dst_vid):
                 f"⚠️ Manufacturer merge {src_html} → {dst_html}:{html.escape(unk_words, quote=False)}",
                 "WARNING", "ffaa00")
         if still:
-            refused_words = "".join(f" #{e['filament_id']}: {_sentence(e['error'])}" for e in filament_errors)
+            refused_words = "".join(f" #{e['filament_id']}: {_sentence(e['error'])}" for e in filament_errors
+                                    if e["filament_id"] not in late)
             # One FCC moved that is back on the merged one counts as still there, never
             # also as moved (review round 3, R3S5: "Moved 4 of 4" beside "still holds #160").
             put_back = sorted(set(moved) & left_ids)
             moved_now = [fid for fid in moved if fid not in left_ids]
             back_words = (f" {_ids_words(put_back)} {'was' if len(put_back) == 1 else 'were'} put back on "
                           f"{src_label} meanwhile." if put_back else "")
-            late_words = (f" {_ids_words(sorted(late))} may move yet ({lost_words(late)}): "
-                          f"{'its' if len(late) == 1 else 'their'} labels are marked for a reprint in case."
-                          if late and reads["label_change"] else "")
+            # Its labels speak through their own lines (round 2's rule for the unread
+            # line; review round 4, R4S1: "its labels are marked" of none marked).
+            late_words = (f" {_ids_words(sorted(late))} may move yet ({lost_words(late)})." if late else "")
             state.add_log_entry(
                 f"⚠️ Manufacturer merge {src_html} → {dst_html}: "
-                + html.escape(f"{src_label} still holds {_ids_words(still)}, so it was kept.{back_words}{mw_words}",
-                              quote=False),
+                + html.escape(f"{src_label} still holds {_ids_words(still)}, so it was kept.{back_words}{late_words}"
+                              f"{mw_words}", quote=False),
                 "WARNING", "ffaa00")
             moves = f"Moved {len(moved_now)} of {_n_filaments(len(listed))} onto {dst_label}. " if listed else ""
             return jsonify({

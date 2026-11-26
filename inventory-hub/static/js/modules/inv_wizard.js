@@ -222,6 +222,7 @@ window.wizardSetFilEmptyWeightInherited = (value, source) => {
         // a second click on Create would silently rebuild the same spools.
         const _onDirty = () => {
             wizardState.isDirty = true;
+            wizardState.changeSeq = (wizardState.changeSeq || 0) + 1;
             if (wizardState.lockedAfterSuccess) {
                 wizardState.lockedAfterSuccess = false;
                 const submitBtn = document.getElementById('btn-wiz-submit');
@@ -286,7 +287,10 @@ window.wizardSetFilEmptyWeightInherited = (value, source) => {
 
         // Chip removal uses onclick="this.remove()" which bypasses input/change events.
         wizEl.addEventListener('click', (e) => {
-            if (e.target.classList.contains('dynamic-chip')) wizardState.isDirty = true;
+            if (e.target.classList.contains('dynamic-chip')) {
+                wizardState.isDirty = true;
+                wizardState.changeSeq = (wizardState.changeSeq || 0) + 1;
+            }
         });
     }
 })();
@@ -1342,6 +1346,9 @@ const wizardReset = () => {
     // Group 66.9 review round 3 (R3W6): the manufacturers merged while this window is open,
     // {gone: kept}, so a Save's baseline names the kept one whatever a merge re-pointed.
     wizardState.vendorMerges = {};
+    // Group 66.9 review round 4 (R4W4): the person's changes, counted, so a Save's answer
+    // marks saved only what that Save carried (a change made while it was out stays one).
+    wizardState.changeSeq = 0;
     wizardState.spoolBoxesFollowFilament = false;
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
@@ -2132,7 +2139,7 @@ window.wizardOpenWeightEntry = () => {
 // The key canary (tests/test_wizard_scan_capture_66_4.py) holds every wizardState key to
 // one of these two lists: a new key fails it until someone decides.
 // What a label's keys can change, put back:
-window.WIZ_SCAN_STATE_KEYS = ['isDirty', 'lockedAfterSuccess', 'touchedExtras', 'touchedNative',
+window.WIZ_SCAN_STATE_KEYS = ['isDirty', 'changeSeq', 'lockedAfterSuccess', 'touchedExtras', 'touchedNative',
     'spoolPriceFrom', 'spoolEmptyWeightFrom', 'spoolEmptyWeightVendorId', 'filEmptyWeightFrom',
     'usedRead', 'usedAdd', 'pendingPlacement', 'selectedFilamentId', 'spoolRows', 'profileSuggestion'];
 // What they can't (set by an open, a pick, a Save or a read), or what is put back
@@ -2759,6 +2766,10 @@ const _wizardCascadeVendorEmptyWeight = (vendor) => {
 // old one whole: a weight cleared is a key Spoolman leaves out.
 window.wizardVendorSaved = (vendor, { created = false } = {}) => {
     if (!vendor || vendor.id == null) return;
+    // A live record holds the id now (Group 66.9 review round 4, R4W3: Spoolman on SQLite
+    // gives a deleted highest id to the next manufacturer made, and the merge map read it
+    // as the kept one).
+    if (wizardState.vendorMerges) delete wizardState.vendorMerges[String(vendor.id)];
     const wizModalEl = document.getElementById('wizardModal');
     if (!wizModalEl || !wizModalEl.classList.contains('show')) return;
     const vid = String(vendor.id);
@@ -3426,6 +3437,7 @@ window.wizardAddMultiChoiceChip = (entityType, key, directVal = null) => {
         return;
     }
     wizardState.isDirty = true;
+    wizardState.changeSeq = (wizardState.changeSeq || 0) + 1;
 
     const isKnown = existingChoices.includes(val) || isExistingExact;
     if (!isKnown) {
@@ -3473,6 +3485,7 @@ window.wizardOnNewChoiceAdded = (apiEntity, key, value, info) => {
         // hears `change`, which is all this pick fires).
         window.wizardNoteExtraTouched(input);
         wizardState.isDirty = true;
+        wizardState.changeSeq = (wizardState.changeSeq || 0) + 1;
     } else if (input.tagName === 'INPUT' && info && info.wasNew) {
         // Multi-choice path (chips) — wizardAddMultiChoiceChip already handles
         // chip creation, so nothing to do here. Kept as a no-op branch for
@@ -5213,6 +5226,12 @@ function wizardSavedFilament(origSent, shown, fPayload) {
     if (has('original_color')) {
         extra.original_color = sentExtra.original_color === window.FCC_DELETE_EXTRA ? '' : sentExtra.original_color;
     }
+    // The reprint question's gate reads these (review round 4, R4W6: a Save that confirmed
+    // the swatch label, then a rename, asked nothing).
+    ['needs_label_print', 'sample_printed'].forEach((k) => {
+        if (!has(k)) return;
+        if (sentExtra[k] === window.FCC_DELETE_EXTRA) delete extra[k]; else extra[k] = sentExtra[k];
+    });
     const next = Object.assign({}, cur, {
         name: fPayload.name || '',
         material: fPayload.material || '',
@@ -5274,6 +5293,8 @@ const _wizardSubmitInner = async () => {
     let answered = false;
     let vendorSentId = null;
     let linkKeysSent = [];
+    let linkAtSave = null;
+    let seqAtSave = 0;
     try {
         const qty = parseInt(getVal('wiz-spool-qty')) || 1;
 
@@ -5640,6 +5661,13 @@ const _wizardSubmitInner = async () => {
         const endpoint = wizardState.mode === 'edit_spool' ? '/api/edit_spool_wizard' : '/api/create_inventory_wizard';
 
         vendorSentId = (f_payload && f_payload.vendor_id != null) ? String(f_payload.vendor_id) : null;
+        // The link this Save carries (its row's, waiting or under a refusal; review round 4,
+        // R4W2 / R4W5: its Product Link's text decided, and a hand edit kept it unsettled),
+        // and the person's change count, so the answer marks saved only what it carried.
+        const row0AtSave = isWizardEdit ? (wizardState.spoolRows || [])[0] : null;
+        linkAtSave = row0AtSave && row0AtSave.linkValue
+            && (row0AtSave.status === 'linked-new' || row0AtSave.status === 'refused') ? row0AtSave.linkValue : null;
+        seqAtSave = wizardState.changeSeq || 0;
         posted = true;
         const res = await fetch(endpoint, {
             method: 'POST',
@@ -5666,7 +5694,8 @@ const _wizardSubmitInner = async () => {
 
         if (data.success || partial) {
             // A partial save leaves the Location unsaved, so closing still warns.
-            if (sameForm) wizardState.isDirty = partial;
+            // A change made while the Save was out stays one (review round 4, R4W4).
+            if (sameForm) wizardState.isDirty = partial || (wizardState.changeSeq || 0) !== seqAtSave;
             // 2026-10-20 review (engine-1): the Archived box follows the server. A box
             // still ticked after the spool came back into stock (a weight fix with a
             // move) sent archived: true on the next Save and archived it ON its head.
@@ -5707,7 +5736,7 @@ const _wizardSubmitInner = async () => {
             // checked while the Save was out was marked saved, and its fills read as no
             // change: the form is still changed while the row waits for a Save).
             if (isWizardEdit && sameForm) {
-                window.wizardSettleLinkRow(linksSent);
+                window.wizardSettleLinkRow(linkAtSave);
                 const row0 = (wizardState.spoolRows || [])[0];
                 if (row0 && row0.status === 'linked-new') wizardState.isDirty = true;
             }
@@ -5871,7 +5900,11 @@ const _wizardSubmitInner = async () => {
                     noStore: !!(placement && placement.noStore),
                     onDone: (outcome, res, info) => {
                         if (outcome === 'moved') {
-                            wizardState.isDirty = false;
+                            // Saved, unless the person changed something since the Save was
+                            // built, or the link row still waits (review round 4, R4W4).
+                            const row0 = (wizardState.spoolRows || [])[0];
+                            wizardState.isDirty = (wizardState.changeSeq || 0) !== seqAtSave
+                                || !!(row0 && row0.status === 'linked-new');
                             wizardState.pendingPlacement = null;
                             // Group 40.7 review (wizard-resave-unloads-head): where
                             // the answered move put it (the head its slot loaded, or
@@ -5936,7 +5969,7 @@ const _wizardSubmitInner = async () => {
                 // put the boxes back, and the next Save cleared the saved links).
                 if (sameForm) {
                     wizardSavedLinks(linksSent);
-                    window.wizardSettleLinkRow(linksSent);
+                    window.wizardSettleLinkRow(linkAtSave);
                 }
             }
             // The filament's answer was lost (it may have landed): the next Save sends the
@@ -5961,12 +5994,24 @@ const _wizardSubmitInner = async () => {
             return;
         }
         const why = _wizEsc(e && e.message ? e.message : e);
-        msg.innerHTML = !posted
-            ? `<span class="text-danger">Frontend Error: ${why}. Nothing was sent.</span>`
-            : (answered
-                ? `<span class="text-danger">FCC answered the Save, but this page hit an error showing it (${why}): open the spool again to check it.</span>`
-                : `<span class="text-danger">FCC didn't answer this Save, so it may or may not have landed (${why}). Save again to send it again.</span>`);
-        document.getElementById('btn-wiz-submit').disabled = false;
+        // A create that went out is never told to send it again (Group 66.9 review round 4,
+        // R4W1: "Save again" made the spools, and in New Manual Form the filament, twice):
+        // the other session's words, and Create waits for a change, as after a success.
+        let said;
+        if (!posted) said = `Frontend Error: ${why}. Nothing was sent.`;
+        else if (editAtSave) {
+            said = answered
+                ? `FCC answered the Save, but this page hit an error showing it (${why}): open the spool again to check it.`
+                : `FCC didn't answer this Save, so it may or may not have landed (${why}). Save again to send it again.`;
+        } else {
+            said = answered
+                ? `FCC answered, but this page hit an error showing it (${why}): search for the new spool(s) before creating them again.`
+                : `FCC didn't answer, so the new spool(s) may or may not have been created (${why}): search for them before creating them again.`;
+        }
+        msg.innerHTML = `<span class="text-danger">${said}</span>`;
+        const createSent = posted && !editAtSave;
+        if (createSent) wizardState.lockedAfterSuccess = true;
+        document.getElementById('btn-wiz-submit').disabled = createSent;
         // Group 66.9 review rounds 2-3: a Save that went out and got no answer FCC could
         // read may have landed, so what it sent (and only that) goes out at the next Save
         // whatever the boxes show: its manufacturer (vendorUnsure) and its link boxes.
@@ -7033,14 +7078,31 @@ const _wizLinkMismatch = (temp, sid) => {
 // Review round 1 of Group 66 (R4-02): once an Edit Spool Save lands, its link is the
 // spool's: the row says so, and its ✕ (or another scan) no longer puts back what the
 // boxes held before the link (that cleared the saved link at the next Save).
-// `sent`: the link boxes as the Save that landed sent them (Group 66.9 review round 3,
-// R3W8): a row whose link that Save didn't carry (checked while it was out) waits for the
-// next Save, still "Links at Save". Called with none, it settles as before.
-window.wizardSettleLinkRow = (sent) => {
+// `carried`: the row's link when the Save that landed was built (null: it had none).
+// Only that link settles (Group 66.9 review round 3, R3W8: a QR checked while the Save was
+// out waits for the next, still "Links at Save"; round 4, R4W2: decided by the row's own
+// link, never by Product Link's text, which a hand edit may change). A refusal over a
+// waiting link the Save carried settles that link and keeps the refusal (R4W5, older than
+// 66.9: the row kept saying the earlier QR "still links at Save", and a second ✕ cleared
+// the saved links). Called with nothing, it settles a waiting link as before.
+window.wizardSettleLinkRow = (carried) => {
     if (wizardState.mode !== 'edit_spool') return;
     const row = (wizardState.spoolRows || [])[0];
-    if (!row || row.status !== 'linked-new') return;
-    if (sent && String(sent.product_url || '').trim() !== String(row.linkValue || '')) return;
+    if (!row || !row.linkValue) return;
+    if (carried !== undefined && String(carried || '') !== String(row.linkValue)) return;
+    if (row.status === 'refused') {
+        row.linkFills = [];
+        row.linkValue = '';
+        row.linkedText = '';
+        row.linkedNote = '';
+        row.linkNote = String(row.linkNote || '')
+            .replace(/\s*The QR scanned before this one still links at Save: ✕ goes back to it\.$/, '');
+        window.wizardRenderSpoolRowBadge(0);
+        window.wizardRenderLinkNote();
+        window.wizardUpdateSubmitGate();
+        return;
+    }
+    if (row.status !== 'linked-new') return;
     row.linkFills = [];
     row.linkValue = '';
     row.linkedText = '';
@@ -7178,6 +7240,7 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
     row.linkFills = fills;
     row.linkValue = canonical;
     wizardState.isDirty = true;
+    wizardState.changeSeq = (wizardState.changeSeq || 0) + 1;
     const bits = [];
     if (o.initial_weight !== undefined) bits.push(`${o.initial_weight} g of filament`);
     if (o.spool_weight !== undefined) bits.push(`${o.spool_weight} g empty`);

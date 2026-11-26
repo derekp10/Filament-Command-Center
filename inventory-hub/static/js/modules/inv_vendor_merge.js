@@ -55,35 +55,58 @@ console.log("🚀 Loaded Module: VENDOR MERGE");
     let _captureOn = false;
 
     // Merges sent and not accounted for (no answer, one FCC couldn't read, a delete it
-    // couldn't confirm), page-wide: {src, dst}. Kept on the question, a ⇄ or a Cancel and
-    // the same row again lost it, and a merge that finished dead-ended in "Couldn't check
-    // the merge" (review round 3, R3P4). Dropped once that merge is told as finished, or
-    // once the server says it kept the one merged (`source_kept`: the lock had let that
-    // merge end first).
+    // couldn't confirm), page-wide: {src, dst}, the newest last. Kept on the question, a ⇄
+    // or a Cancel and the same row again lost it, and a merge that finished dead-ended in
+    // "Couldn't check the merge" (review round 3, R3P4). Dropped once that merge is told as
+    // finished, and once an answer shows the one merged was there with no merge of it
+    // running (review round 4, R4P1): the server's `source_kept` (any refusal made inside
+    // the lock after it read the one merged), and a merge that kept it (`_merged`'s
+    // `into`).
     const _unsure = [];
     const _noteUnsure = (src, dst) => {
-        if (!_unsure.some((u) => u.src === String(src) && u.dst === String(dst))) {
-            _unsure.push({ src: String(src), dst: String(dst) });
-        }
+        const at = _unsure.findIndex((u) => u.src === String(src) && u.dst === String(dst));
+        if (at >= 0) _unsure.splice(at, 1);
+        _unsure.push({ src: String(src), dst: String(dst) });
     };
-    const _unsureGone = (gone) => _unsure.find((u) => u.src === String(gone)) || null;
+    // The merge a `gone` of `gone` finishes: the question's own pair, either way round,
+    // when it is one; else the only pair of that source. Two pairs of one source and none
+    // the question's: FCC can't tell which finished, and says only that it is gone (review
+    // round 4, R4P2: the oldest pair was told, and every window re-pointed to its keeper).
+    const _unsureGone = (gone, q) => {
+        const all = _unsure.filter((u) => u.src === String(gone));
+        if (q) {
+            const own = all.find((u) => u.dst === String(q.dst) || u.dst === String(q.src));
+            if (own) return own;
+        }
+        return all.length === 1 ? all[0] : null;
+    };
     const _forgetUnsure = (src) => {
         for (let i = _unsure.length - 1; i >= 0; i -= 1) if (_unsure[i].src === String(src)) _unsure.splice(i, 1);
     };
 
-    // What the page last told of each manufacturer (vendor:updated, vendor:merged,
-    // vendor:unread, whoever sent it), counted, so a read sent before a newer word of it
-    // says nothing when it lands (review round 3, R3P3: a slow read held the record from
-    // before a merge's carry, refilled the editor over the merge's, and its Save cleared
-    // the carried External ID).
-    const _told = {};
-    const _bumpTold = (id) => { if (id != null && id !== '') _told[String(id)] = (_told[String(id)] || 0) + 1; };
-    document.addEventListener('vendor:updated', (e) => _bumpTold(e && e.detail ? e.detail.id : null));
-    document.addEventListener('vendor:unread', (e) => _bumpTold(e && e.detail ? e.detail.id : null));
+    // Words of a manufacturer (vendor:updated, vendor:merged, vendor:unread, whoever sent
+    // them) and the module's own reads, in the order they were SENT: each takes a number
+    // when it goes out, a word dispatched elsewhere when it is dispatched, and a read says
+    // something only when nothing newer was told of that manufacturer (review round 3,
+    // R3P3: a slow read held the record from before a merge's carry and refilled the
+    // editor over the merge's; round 4, R4P3: counted by landing, an older read that landed
+    // first silenced a newer one). A read's own word carries its number (`fccSeq`).
+    let _seq = 0;
+    const _toldSeq = {};
+    const _noteTold = (id, n) => {
+        if (id == null || id === '') return;
+        const k = String(id);
+        if (!(n <= (_toldSeq[k] || 0))) _toldSeq[k] = n;
+    };
+    const _toldNewer = (id, n) => (_toldSeq[String(id)] || 0) > n;
+    const _wordSeq = (e) => (e && e.detail && typeof e.detail.fccSeq === 'number' ? e.detail.fccSeq : ++_seq);
+    document.addEventListener('vendor:updated', (e) => { if (e && e.detail) _noteTold(e.detail.id, _wordSeq(e)); });
+    document.addEventListener('vendor:unread', (e) => { if (e && e.detail) _noteTold(e.detail.id, _wordSeq(e)); });
     document.addEventListener('vendor:merged', (e) => {
         const d = (e && e.detail) || {};
-        _bumpTold(d.from);
-        _bumpTold(d.into);
+        const n = _wordSeq(e);
+        _noteTold(d.from, n);
+        _noteTold(d.into, n);
     });
 
     const esc = (v) => (typeof window.escHtml === 'function'
@@ -386,7 +409,7 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
                     // The manufacturer open is gone: the merge an earlier press sent of it,
                     // finished, is told as one (review round 3, R3P4); else said for good.
                     if (data.gone != null) {
-                        const pair = _unsureGone(data.gone);
+                        const pair = _unsureGone(data.gone, null);
                         if (pair) _settleUnsure(h, null, pair, why); else _fail(h, why, true);
                         return;
                     }
@@ -730,6 +753,7 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         const into = String(pair ? pair.dst : q.dst);
         const vendor = data.vendor || null;
         _forgetUnsure(from);
+        _forgetUnsure(into);
         document.dispatchEvent(new CustomEvent('vendor:merged', {
             detail: { from, into, vendor, moved: Array.isArray(data.moved_filament_ids) ? data.moved_filament_ids : [] },
         }));
@@ -751,7 +775,9 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             // was out lost it to the box beneath).
             const a = document.activeElement;
             const another = !!(_question && _question !== q);
-            const free = !a || a === document.body || !a.isConnected || win.element.contains(a)
+            // Never off a row the person arrowed to (review round 4, R4P4: any of the
+            // window's elements counted, and the read's callback then lit row 0).
+            const free = !a || a === document.body || !a.isConnected || a === _box(win)
                 || !!(q.handle && q.handle.element && q.handle.element.contains(a));
             if (!another && free) _focusBox(win);
             const typed = _box(win).value;
@@ -795,7 +821,7 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
     // merge). Resolves {landed, read, kept}: the read is handed on, so a merge that didn't
     // finish tells the windows the kept one's record from it.
     function _qCheckLanded(q, data) {
-        const at = _told[String(q.dst)] || 0;
+        const at = ++_seq;
         return _readVendors().then((r) => {
             const kept = _keptIn(q, r);
             const seen = { landed: false, read: r.read, kept, at };
@@ -818,16 +844,23 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
     // showing the fields from before the carry, and its Save cleared what the carry copied).
     function _qTellKept(q, data, seen) {
         const dst = String(q.dst);
-        const tell = (v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: dst, vendor: v } }));
-        if (data && data.vendor && String(data.vendor.id) === dst) { tell(data.vendor); return; }
-        const settle = (s) => {
-            if (s && s.read) { if (s.kept) tell(s.kept); return; }
-            document.dispatchEvent(new CustomEvent('vendor:unread', { detail: { id: dst } }));
+        if (data && data.vendor && String(data.vendor.id) === dst) {
+            document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: dst, vendor: data.vendor } }));
+            return;
+        }
+        // A read says something only when nothing newer was told of the kept one since it
+        // was sent (R3P3, R4P3); its word carries its own number.
+        const settle = (s, at) => {
+            if (_toldNewer(dst, at)) return;
+            if (s && s.read) {
+                if (s.kept) document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: dst, vendor: s.kept, fccSeq: at } }));
+                return;
+            }
+            document.dispatchEvent(new CustomEvent('vendor:unread', { detail: { id: dst, fccSeq: at } }));
         };
-        // A read that lands after a newer word of the kept one says nothing (R3P3).
-        if (seen) { if ((_told[dst] || 0) === (seen.at || 0)) settle(seen); return; }
-        const at = _told[dst] || 0;
-        _readVendors().then((r) => { if ((_told[dst] || 0) === at) settle({ read: r.read, kept: _keptIn(q, r) }); });
+        if (seen) { settle(seen, seen.at || 0); return; }
+        const at = ++_seq;
+        _readVendors().then((r) => settle({ read: r.read, kept: _keptIn(q, r) }, at));
     }
 
     // The server's 404 `gone` names a manufacturer of the pair that isn't in Spoolman any
@@ -842,7 +875,7 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
     // or it is the one to keep: the question says what the server said and offers nothing
     // to ask again.
     function _qSettleGone(q, why, gone) {
-        const pair = _unsureGone(gone);
+        const pair = _unsureGone(gone, q);
         if (!pair) {
             q.inFlight = false;
             if (_alive(q.win)) { _notice(q.win, why, 'warn'); _read(q.win); }
@@ -919,6 +952,10 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             .then(({ res, data }) => {
                 if (data && data.success === true) { q.inFlight = false; _merged(q, data); return; }
                 const msg = String((data && data.msg) || `FCC answered with an error (HTTP ${res.status}), so the merge may not have finished.`);
+                // The server read the one merged inside the lock, so no merge of it was
+                // running and it was there: any earlier one FCC couldn't account for has
+                // ended without deleting it (review round 4, R4P1).
+                if (data && data.source_kept) _forgetUnsure(pair.src);
                 if (data && data.gone != null) { _qSettleGone(q, msg, data.gone); return; }
                 // An answer FCC couldn't read, or a delete it couldn't confirm: this pair's
                 // merge may have run, or be running still (review round 2, R2S8).
@@ -927,8 +964,6 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
                     _qCheckLanded(q, data).then((seen) => { q.inFlight = false; if (!seen.landed) _qNotMerged(q, msg, data, seen); });
                     return;
                 }
-                // The server kept the one merged: any earlier merge of it has ended.
-                if (data.source_kept) _forgetUnsure(pair.src);
                 q.inFlight = false;
                 _qNotMerged(q, msg, data);
             }, () => {

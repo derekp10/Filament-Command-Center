@@ -4446,6 +4446,8 @@ window.openVendorCreateModal = (prefill) => {
     const saveOn = document.getElementById('vendoredit-save');
     if (saveOn && !_vendorSaveInFlight) saveOn.disabled = false;
     document.getElementById('vendoredit-id').value = '';
+    _vendorEditLastFill = null;
+    _vendorEditHeldOn = null;
     const p = prefill || {};
     document.getElementById('vendoredit-name').value = p.name || '';
     document.getElementById('vendoredit-website').value = p.website || '';
@@ -4494,6 +4496,8 @@ const _vendorEditFill = (v) => {
     // payload is missing it (Spoolman versions before 0.20).
     const regEl = document.getElementById('vendoredit-registered');
     if (regEl) regEl.innerText = v.registered ? `Registered ${String(v.registered).slice(0, 10)}` : '';
+    _vendorEditLastFill = _vendorEditBoxes();
+    _vendorEditHeldOn = null;
 };
 
 window.openVendorEditModal = (vendorId) => {
@@ -4510,6 +4514,8 @@ window.openVendorEditModal = (vendorId) => {
     const saveOn = document.getElementById('vendoredit-save');
     if (saveOn && !_vendorSaveInFlight) saveOn.disabled = false;
     document.getElementById('vendoredit-id').value = vid;
+    _vendorEditLastFill = null;
+    _vendorEditHeldOn = null;
     document.getElementById('vendoredit-name').value = '';
     document.getElementById('vendoredit-website').value = '';
     document.getElementById('vendoredit-empty-weight').value = '';
@@ -4558,7 +4564,28 @@ let _vendorTwinSeq = 0;
 // 🔗 Merge… shown, the boxes noted as filled, and the same-name note read in the
 // background (merge_options' twins). A read that fails, or lands after the editor moved on,
 // draws nothing: no claim either way.
-const _vendorMergeUi = (vid) => {
+// The five boxes as the editor last filled them from a record, kept through a hold (Group
+// 66.9 review round 4, R4P5 / R4P6): what a later record, or the news that FCC couldn't
+// read one, is judged against. Null before a fill and in create mode.
+let _vendorEditLastFill = null;
+// The record a hold was given (its boxes, as _vendorBoxesFor reads them), so the
+// vendor:updated a merge sends after its vendor:merged leaves that hold's own words: it is
+// the same news (review round 4: "was merged with #35 while this window had unsaved
+// changes" became "changed while this window was open" at once). Null for a hold with no
+// record, and once a fill or a release ends the hold.
+let _vendorEditHeldOn = null;
+// The boxes as a fill from record `v` would leave them (_vendorEditFill's own reading).
+const _vendorBoxesFor = (v) => {
+    const ex = (v && v.extra) || {};
+    const site = (typeof unquoteExtra === 'function') ? unquoteExtra(ex.website) : (ex.website || '');
+    const wt = v ? v.empty_spool_weight : null;
+    return [(v && v.name) || '', site || '', (wt == null || wt === '') ? '' : String(wt),
+        (v && v.external_id) || '', (v && v.comment) || ''].join('\u0001');
+};
+
+// `filled`: the boxes to count as filled (a hold lifted keeps the person's typing as a
+// change); else the boxes as they are.
+const _vendorMergeUi = (vid, filled) => {
     const btn = document.getElementById('vendoredit-merge');
     const note = document.getElementById('vendoredit-twin-note');
     const seq = ++_vendorTwinSeq;
@@ -4568,7 +4595,7 @@ const _vendorMergeUi = (vid) => {
         if (btn) btn.classList.add('d-none');
         return;
     }
-    _vendorEditFilled = _vendorEditBoxes();
+    _vendorEditFilled = filled != null ? filled : _vendorEditBoxes();
     if (btn) btn.classList.remove('d-none');
     if (!note || typeof window.fetchT !== 'function') return;
     window.fetchT(`/api/vendors/${encodeURIComponent(vid)}/merge_options`, { cache: 'no-store' }, 20000)
@@ -4640,7 +4667,14 @@ document.addEventListener('vendor:merged', (e) => {
         // kept id, and a Save then wiped the kept one's fields). With no record the editor
         // keeps what it shows, says why, and saves nothing until it is opened again.
         const errEl = document.getElementById('vendoredit-error');
-        if (v && String(v.id) === kept) {
+        // A box the person changed since the editor last filled it (review round 4, R4P6:
+        // the record was filled over a note typed after the window closed, unasked).
+        const changed = _vendorEditLastFill !== null && _vendorEditBoxes() !== _vendorEditLastFill;
+        if (v && String(v.id) === kept && shown === kept && changed) {
+            // On the kept one: the person's boxes stay, and Save would undo the merge's.
+            _vendorEditHold(kept, `Manufacturer #${kept} was merged with #${gone} while this window had unsaved `
+                + 'changes, so Save is off (it would undo what the merge changed): close it and open it again to edit it.', v);
+        } else if (v && String(v.id) === kept) {
             if (errEl) { errEl.classList.add('d-none'); errEl.innerText = ''; }
             const title = document.getElementById('vendorEditModalLabel');
             if (title) title.innerText = '✏️ Edit Manufacturer';
@@ -4650,6 +4684,12 @@ document.addEventListener('vendor:merged', (e) => {
             // (review round 3, R3P1: Save stayed off with no word why).
             const save = document.getElementById('vendoredit-save');
             if (save && !_vendorSaveInFlight) save.disabled = false;
+            // Changes typed for the one merged away go with it, and the editor says so.
+            if (shown === gone && changed && errEl) {
+                errEl.classList.remove('d-none');
+                errEl.innerText = `Your changes were for #${gone}, which was merged into #${kept} and deleted: `
+                    + `this window shows #${kept} now.`;
+            }
         } else {
             const save = document.getElementById('vendoredit-save');
             if (save) save.disabled = true;
@@ -4670,10 +4710,12 @@ document.addEventListener('vendor:merged', (e) => {
 // filled); with a box the person changed, or no record to show, it keeps what it shows,
 // says why, and saves nothing until it is opened again. Its own Save's answer (a Save on
 // its way) is no other write.
-const _vendorEditHold = (vid, why) => {
+// `onRecord`: the record this hold was given, when it has one.
+const _vendorEditHold = (vid, why, onRecord) => {
     const save = document.getElementById('vendoredit-save');
     if (save) save.disabled = true;
     _vendorMergeUi(null);
+    _vendorEditHeldOn = onRecord ? _vendorBoxesFor(onRecord) : null;
     const errEl = document.getElementById('vendoredit-error');
     if (errEl) { errEl.classList.remove('d-none'); errEl.innerText = why; }
 };
@@ -4682,21 +4724,42 @@ const _vendorEditFollow = (vid, v) => {
     const vModal = document.getElementById('vendorEditModal');
     const shown = (document.getElementById('vendoredit-id') || {}).value || '';
     if (!vModal || !vModal.classList.contains('show') || !shown || shown !== vid) return;
-    const untouched = _vendorEditFilled !== null && _vendorEditBoxes() === _vendorEditFilled;
-    // (A held editor never comes here: a hold notes no boxes as filled. Its Save comes back
-    // only with a merge's record, in the vendor:merged listener.)
-    if (v && String(v.id) === vid && untouched) {
-        _vendorEditFill(v);
+    const boxes = _vendorEditBoxes();
+    const untouched = _vendorEditFilled !== null && boxes === _vendorEditFilled;
+    const record = v && String(v.id) === vid ? v : null;
+    // (A held editor never refills here: a hold notes no boxes as filled.)
+    if (record && untouched) {
+        _vendorEditFill(record);
         _vendorMergeUi(vid);
         return;
     }
-    // Words that claim no more than FCC knows (review round 3, R3P2): a merge was tried,
-    // and FCC couldn't read the manufacturer after it.
-    _vendorEditHold(vid, untouched
-        ? `FCC couldn't read manufacturer #${vid} after a merge was tried, so this window may not show it as it `
-          + 'is: close it and open it again to edit it.'
-        : `Manufacturer #${vid} changed while this window was open, so Save is off (it would undo that change): `
-          + 'close it and open it again to edit it.');
+    // Words that claim no more than FCC knows (review rounds 3 and 4, R3P2 / R4P5).
+    const changed = _vendorEditLastFill !== null && boxes !== _vendorEditLastFill;
+    if (!record) {
+        _vendorEditHold(vid, `FCC couldn't read manufacturer #${vid} after a merge was tried, so this window may not `
+            + 'show it as it is: close it and open it again to edit it.'
+            + (changed ? ' Your changes stay in the boxes until you close it.' : ''));
+        return;
+    }
+    // The record is what the editor last showed: nothing changed it meanwhile. A changed
+    // editor keeps the person's boxes and its Save; a held one is let go.
+    if (_vendorEditLastFill !== null && _vendorBoxesFor(record) === _vendorEditLastFill) {
+        if (_vendorEditFilled === null) _vendorEditRelease(vid);
+        return;
+    }
+    // A hold given this very record already says why (a merge's, then its vendor:updated).
+    if (_vendorEditFilled === null && _vendorEditHeldOn !== null && _vendorBoxesFor(record) === _vendorEditHeldOn) return;
+    _vendorEditHold(vid, `Manufacturer #${vid} changed while this window was open, so Save is off (it would undo `
+        + 'that change): close it and open it again to edit it.', record);
+};
+// A hold FCC can lift: the record read is what the editor last showed.
+const _vendorEditRelease = (vid) => {
+    _vendorEditHeldOn = null;
+    const save = document.getElementById('vendoredit-save');
+    if (save && !_vendorSaveInFlight) save.disabled = false;
+    const errEl = document.getElementById('vendoredit-error');
+    if (errEl) { errEl.classList.add('d-none'); errEl.innerText = ''; }
+    _vendorMergeUi(vid, _vendorEditLastFill);
 };
 // A write FCC couldn't read back (inv_vendor_merge.js: a merge with no answer, or one
 // that couldn't say whether it copied fields onto the kept one).
