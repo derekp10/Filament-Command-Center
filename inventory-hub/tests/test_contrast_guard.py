@@ -2398,3 +2398,103 @@ def test_edit_spools_qr_question_is_readable(page: Page, base_url: str, assert_c
     page.locator("#fcc-wiz-qr-keep").click()
     page.evaluate("() => { wizardState.isDirty = false; }")
     conftest.close_wizard(page)
+
+
+def _merge_page_66_9(page, base_url):
+    """Group 66.9's manufacturer editor, merge window and question on the dev container,
+    every answer served in this browser (read-only: nothing is merged, nothing written).
+    The dry run answers a plan with every kind of line; the merge itself a refusal."""
+    import json as _json
+    from conftest import quiet_heartbeat
+    from test_text_size_guard import _read_only
+    from test_vendor_merge_page_66_9 import PARTIAL, PLAN, VENDORS, options
+    plan = dict(PLAN, plan=dict(
+        PLAN["plan"], label_change=True,
+        kept_own_words=["Sunlu #35's notes “old notes” isn't kept: Sunlu #4 has its own (“new notes”)."],
+        weight_note={"moved_without_own": [160], "from_g": None, "to_g": 167.0, "kept_without_own": [101]}))
+    _read_only(page, extra_get={"/api/vendors": VENDORS, "/api/vendors/35/merge_options": options(35)})
+
+    def merge(route, request):
+        body = _json.loads(request.post_data or "{}")
+        if body.get("dry_run"):
+            route.fulfill(status=200, content_type="application/json", body=_json.dumps(plan))
+        else:
+            route.fulfill(status=502, content_type="application/json", body=_json.dumps(PARTIAL))
+    page.route("**/api/vendors/35/merge_into/4", merge)
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openVendorEditModal === 'function'"
+                           " && typeof window.openVendorMerge === 'function'", timeout=45_000)
+    page.evaluate("() => { window.fccQuestionArmMs = 0; window.openVendorEditModal(35); }")
+    page.wait_for_selector("#vendoredit-twin-note:not(.d-none)")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_manufacturer_merge_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 66.9: the editor's same-name note and 🔗 Merge… (judged by their ids: the
+    editor's older labels hold text-muted), the merge window (a pair with its keep / merge /
+    open / kind tags, every manufacturer and the open one's row, the highlighted and a
+    hovered row, the notice line both ways, "No manufacturer matches", a failed read with
+    Try again hovered) and its question (each kind of line, a refusal on its line, ⇄
+    hovered). Read-only: every answer is served in this browser."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    _merge_page_66_9(page, base_url)
+    for root, eid in (("#vendorEditModal .modal-body", "vendoredit-twin-note"),
+                      ("#vendorEditModal .modal-footer", "vendoredit-merge")):
+        scored = conftest.contrast_offenders(page.locator(root), min_ratio=100)
+        assert any(o.get("id") == eid for o in scored), (eid, scored)
+        bad = [o for o in conftest.contrast_offenders(page.locator(root)) if o.get("id") == eid]
+        assert not bad, bad
+    page.locator("#vendoredit-merge").click()
+    win = page.locator("#fcc-vendor-merge")
+    expect(win.locator("[data-vm-body][data-vm-state='ready']")).to_have_count(1)
+    assert_contrast(win)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(win, min_ratio=100))
+    for words in ("Merge manufacturers", "Possible duplicates", "keep", "merge", "open in the editor", "same name",
+                  "Sunlu #4", "42 filaments", "Esc closes"):
+        assert words in scored, (words, scored)
+    page.keyboard.press("ArrowDown")
+    assert_contrast(win)
+    win.locator("button.fcc-vm-row").nth(1).hover()
+    page.wait_for_timeout(200)
+    assert_contrast(win)
+    page.mouse.move(0, 0)
+    for tone in ("", "warn"):
+        page.evaluate("""(t) => { const n = document.querySelector('#fcc-vendor-merge [data-vm-notice]');
+            n.hidden = false; n.textContent = 'Merged Sunlu #35 into Sunlu #4: 4 filaments moved, Sunlu #35 deleted.';
+            if (t) n.dataset.tone = t; else delete n.dataset.tone; }""", tone)
+        assert_contrast(win)
+    win.locator("[data-vm-box]").fill("zzz")
+    expect(win).to_contain_text("No manufacturer matches")
+    assert_contrast(win)
+    win.locator("[data-vm-box]").fill("")
+    page.wait_for_timeout(800)          # past the double-click shield
+    win.locator("button.fcc-vm-row").first.click()
+    q = page.locator("#fcc-vendor-merge-confirm")
+    expect(q.locator('[data-vmq="yes"]')).to_be_enabled()
+    assert_contrast(q)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(q, min_ratio=100))
+    # Each line's start: the guard keeps only the start of a long line's text.
+    for words in ("Keep Sunlu #4", "Delete Sunlu #35", "External ID", "isn't kept", "Their labels print",
+                  "of them have no empty", "A merge can't be undone."):
+        assert words in scored, (words, scored)
+    q.locator('[data-vmq="yes"]').click()
+    expect(q.locator("[data-vmq-flash]")).to_contain_text("still holds #162")
+    expect(q.locator('[data-vmq="yes"]')).to_be_enabled()
+    assert_contrast(q)
+    q.locator('[data-vmq="swap"]').hover()
+    page.wait_for_timeout(200)
+    assert_contrast(q)
+    page.keyboard.press("Escape")       # the question
+    page.keyboard.press("Escape")       # the window
+    expect(win).to_have_count(0)
+    page.route("**/api/vendors/35/merge_options", lambda route, request: route.fulfill(
+        status=502, content_type="application/json",
+        body='{"success": false, "msg": "Couldn\'t read the manufacturers from Spoolman, so the list can\'t be shown. Try again in a moment."}'))
+    page.wait_for_timeout(800)
+    page.locator("#vendoredit-merge").click()
+    expect(win.locator("[data-vm-retry]")).to_be_visible()
+    win.locator("[data-vm-retry]").hover()
+    page.wait_for_timeout(200)
+    assert_contrast(win)
+    page.keyboard.press("Escape")

@@ -241,7 +241,7 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         const tagFor = (row) => (String(row.id) === openId ? '<span class="fcc-vm-tag fcc-vm-tag-open">open in the editor</span> ' : '');
         const kindWords = kind === 'same_name' ? 'same name' : 'similar name';
         const line = (tag, tagCls, row) => `<span class="fcc-vm-line"><span class="fcc-vm-tag ${tagCls}">${tag}</span> `
-            + `<span class="fcc-vm-name">${esc(label(row))}</span> ${tagFor(row)}<span class="fcc-vm-facts">${esc(facts(row))}</span></span>`;
+            + `<span class="fcc-vm-name">${esc(label(row))}</span> ${tagFor(row)}<span class="fcc-vm-facts">· ${esc(facts(row))}</span></span>`;
         return `<button type="button" class="fcc-vm-row" tabindex="-1" data-vm-src="${esc(other.id)}" data-vm-dst="${esc(keep.id)}"
                     title="${esc(`Merge ${label(other)} into ${label(keep)}`)}">
                 <span class="fcc-vm-main">${line('keep', 'fcc-vm-tag-keep', keep)}${line('merge', 'fcc-vm-tag-merge', other)}</span>

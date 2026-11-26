@@ -985,3 +985,53 @@ def test_qr_codes_take_their_buttons_colour(page: Page, base_url: str, dev_ids):
                             {"confirm": "#fcc-quickswap-yes", "cancel": "#fcc-quickswap-no"}, "Quick-Swap")
     page.keyboard.press("Escape")
     assert not wrong, "QR codes that don't match their buttons:\n  " + "\n  ".join(wrong)
+
+
+def _merge_page_66_9(page, base_url):
+    """Group 66.9's manufacturer editor, merge window and question on the dev container,
+    every answer served in this browser (read-only: nothing is merged, nothing written).
+    The dry run answers a plan with every kind of line; the merge itself a refusal."""
+    import json as _json
+    from conftest import quiet_heartbeat
+    from test_text_size_guard import _read_only
+    from test_vendor_merge_page_66_9 import PARTIAL, PLAN, VENDORS, options
+    plan = dict(PLAN, plan=dict(
+        PLAN["plan"], label_change=True,
+        kept_own_words=["Sunlu #35's notes “old notes” isn't kept: Sunlu #4 has its own (“new notes”)."],
+        weight_note={"moved_without_own": [160], "from_g": None, "to_g": 167.0, "kept_without_own": [101]}))
+    _read_only(page, extra_get={"/api/vendors": VENDORS, "/api/vendors/35/merge_options": options(35)})
+
+    def merge(route, request):
+        body = _json.loads(request.post_data or "{}")
+        if body.get("dry_run"):
+            route.fulfill(status=200, content_type="application/json", body=_json.dumps(plan))
+        else:
+            route.fulfill(status=502, content_type="application/json", body=_json.dumps(PARTIAL))
+    page.route("**/api/vendors/35/merge_into/4", merge)
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openVendorEditModal === 'function'"
+                           " && typeof window.openVendorMerge === 'function'", timeout=45_000)
+    page.evaluate("() => { window.fccQuestionArmMs = 0; window.openVendorEditModal(35); }")
+    page.wait_for_selector("#vendoredit-twin-note:not(.d-none)")
+
+
+def test_the_manufacturer_merge_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 66.9: the merge window (its rows, tags and foot) and its question (each kind of
+    line and a refusal), at Standard. Read-only: every answer is served in this browser."""
+    _merge_page_66_9(page, base_url)
+    assert_text_size(page.locator("#vendoredit-twin-note").locator(".."))
+    page.click("#vendoredit-merge")
+    page.wait_for_selector("#fcc-vendor-merge [data-vm-body][data-vm-state='ready']")
+    assert_text_size(page.locator("#fcc-vendor-merge"))
+    page.wait_for_timeout(800)          # past the double-click shield
+    page.locator("#fcc-vendor-merge button.fcc-vm-row").first.click()
+    page.wait_for_function("() => { const y = document.querySelector('#fcc-vendor-merge-confirm [data-vmq=\"yes\"]');"
+                           " return !!y && !y.disabled; }")
+    assert_text_size(page.locator("#fcc-vendor-merge-confirm"))
+    page.click('#fcc-vendor-merge-confirm [data-vmq="yes"]')
+    page.wait_for_function("() => document.querySelector('#fcc-vendor-merge-confirm [data-vmq-flash]').textContent"
+                           ".includes('still holds')")
+    assert_text_size(page.locator("#fcc-vendor-merge-confirm"))
+    page.keyboard.press("Escape")
+    page.keyboard.press("Escape")
