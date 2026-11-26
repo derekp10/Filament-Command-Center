@@ -681,6 +681,10 @@
                     <input type="text" id="vendoredit-name"
                         class="form-control bg-black text-white border-secondary"
                         placeholder="e.g. Polymaker" autocomplete="off">
+                    <!-- Group 66.9: another manufacturer has this name (filled by
+                         openVendorEditModal from /api/vendors/<id>/merge_options). -->
+                    <div id="vendoredit-twin-note" class="d-none mt-1" role="note"
+                         style="color:#ffd27a; font-size:var(--fcc-fs-small);"></div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label text-light small mb-1">Website</label>
@@ -716,6 +720,9 @@
                 <div id="vendoredit-error" class="alert alert-danger mt-3 mb-0 d-none" role="alert"></div>
             </div>
             <div class="modal-footer bg-dark border-top border-warning justify-content-end">
+                <!-- Group 66.9: Merge manufacturers (inv_vendor_merge.js), edit mode only. -->
+                <button type="button" class="btn btn-outline-info me-auto d-none" id="vendoredit-merge"
+                        title="Merge this manufacturer with another (possible duplicates first)">🔗 Merge…</button>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-warning fw-bold" id="vendoredit-save" onclick="vendorEditSave()">💾 Save</button>
             </div>

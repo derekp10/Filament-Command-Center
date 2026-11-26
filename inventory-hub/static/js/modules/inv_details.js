@@ -2840,6 +2840,10 @@ const _editfilOpenModal = (fil) => {
     // record is laid over it: a late older list, taken once a newer read failed (Q1-03),
     // never puts the old weight back.
     const vendorSavedOver = new Map();   // id -> { record, seq }
+    // Group 66.9: each manufacturer merged away while the window is open, with the newest
+    // read sent before the merge: a list from a read sent by then still holds it, and it is
+    // dropped from that list (it is deleted, and a Save must never send its id).
+    const vendorMergedAway = new Map();  // id -> seq
     const vendorKey = (s) => String(s == null ? '' : s).split(/\s+/).filter(Boolean).join(' ').toLowerCase();
     const vendorNameEl = document.getElementById('editfil-vendor-name');
     const vendorIdEl = document.getElementById('editfil-vendor-id');
@@ -2965,7 +2969,10 @@ const _editfilOpenModal = (fil) => {
             if (seq < vendorTakenSeq) return;       // a newer read's list was taken
             vendorTakenSeq = seq;
             session.codeSet(() => {
-                vendorCache = d.vendors.map((x) => {
+                vendorCache = d.vendors.filter((x) => {
+                    const m = x && x.id != null ? vendorMergedAway.get(String(x.id)) : undefined;
+                    return m === undefined || seq > m;
+                }).map((x) => {
                     const s = x && x.id != null ? vendorSavedOver.get(String(x.id)) : null;
                     return s && seq <= s.seq ? s.record : x;
                 });
@@ -2993,6 +3000,37 @@ const _editfilOpenModal = (fil) => {
             if (i >= 0) vendorCache[i] = v; else vendorCache.push(v);
             if (fil.vendor && String(fil.vendor.id) === String(v.id)) fil.vendor = Object.assign({}, fil.vendor, v);
             if (vendorIdEl.value === String(v.id) && v.name) vendorNameEl.value = v.name;
+            refreshVendorBadge();
+        });
+        readVendors();
+    };
+    // Group 66.9: a manufacturer merged away over the window ({from, into, vendor}). The one
+    // merged is deleted and its filaments are the kept one's now: the list drops it and
+    // takes the kept record; a filament on it reads the kept one as its own (the server
+    // moved it, so Save sends no manufacturer change and asks no label reprint); a box
+    // holding it, in edit or create mode, holds the kept one. Then the list is read again,
+    // and a read sent before the merge never brings it back. Through codeSet: no edit.
+    session.onVendorMerged = ({ from, into, vendor }) => {
+        const gone = from != null ? String(from) : '';
+        const kept = into != null ? String(into) : '';
+        if (!gone || !kept || gone === kept) return;
+        vendorMergedAway.set(gone, vendorReadSeq);
+        vendorSavedOver.delete(gone);
+        const rec = vendor && vendor.id != null ? vendor : null;
+        if (rec) vendorSavedOver.set(kept, { record: rec, seq: vendorReadSeq });
+        session.codeSet(() => {
+            vendorCache = vendorCache.filter((x) => !x || String(x.id) !== gone);
+            if (rec) {
+                const i = vendorCache.findIndex((x) => x && String(x.id) === kept);
+                if (i >= 0) vendorCache[i] = rec; else vendorCache.push(rec);
+            }
+            if (fil.vendor && String(fil.vendor.id) === gone) {
+                fil.vendor = rec ? Object.assign({}, rec) : Object.assign({}, fil.vendor, { id: Number(kept) });
+            }
+            if (vendorIdEl.value === gone) {
+                vendorIdEl.value = kept;
+                if (rec && rec.name) vendorNameEl.value = rec.name;
+            }
             refreshVendorBadge();
         });
         readVendors();
@@ -4330,6 +4368,9 @@ document.addEventListener('DOMContentLoaded', () => {
             _showMergeFilamentFlow(fid);
         });
     }
+    // Group 66.9: the manufacturer editor's 🔗 Merge….
+    const vendorMerge = document.getElementById('vendoredit-merge');
+    if (vendorMerge) vendorMerge.addEventListener('click', () => _vendorMergePress());
     const filDel = document.getElementById('btn-fil-delete');
     if (filDel) {
         filDel.addEventListener('click', async () => {
@@ -4405,6 +4446,8 @@ window.openVendorCreateModal = (prefill) => {
     if (titleEl) titleEl.innerText = '➕ Add Manufacturer';
     const regEl = document.getElementById('vendoredit-registered');
     if (regEl) regEl.innerText = '';
+    // Group 66.9: a manufacturer not made yet has nothing to merge.
+    _vendorMergeUi(null);
 
     const modalEl = document.getElementById('vendorEditModal');
     if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
@@ -4435,6 +4478,7 @@ window.openVendorEditModal = (vendorId) => {
     document.getElementById('vendoredit-comment').value = '';
     const regEl = document.getElementById('vendoredit-registered');
     if (regEl) regEl.innerText = '';
+    _vendorMergeUi(null);
 
     fetch('/api/vendors')
         .then(r => r.json())
@@ -4442,6 +4486,8 @@ window.openVendorEditModal = (vendorId) => {
             if (!d || !d.success) throw new Error(d && d.msg ? d.msg : 'Vendor lookup failed');
             const v = (d.vendors || []).find(x => String(x.id) === vid);
             if (!v) throw new Error(`Vendor #${vid} not found.`);
+            // Another open asked meanwhile (a merge re-shows the kept one): this one draws nothing.
+            if (document.getElementById('vendoredit-id').value !== vid) return;
             document.getElementById('vendoredit-name').value = v.name || '';
             document.getElementById('vendoredit-comment').value = v.comment || '';
             document.getElementById('vendoredit-external-id').value = v.external_id || '';
@@ -4463,6 +4509,9 @@ window.openVendorEditModal = (vendorId) => {
             if (regEl && v.registered) {
                 regEl.innerText = `Registered ${String(v.registered).slice(0, 10)}`;
             }
+            // Group 66.9: 🔗 Merge… for an existing manufacturer, and the note under its
+            // name when another one has the same name.
+            _vendorMergeUi(vid);
 
             const modalEl = document.getElementById('vendorEditModal');
             if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
@@ -4474,6 +4523,102 @@ window.openVendorEditModal = (vendorId) => {
             showToast(`Failed to open manufacturer: ${e.message || e}`, 'error', 7000);
         });
 };
+
+// --- Group 66.9: MERGE MANUFACTURERS from the editor ---
+// The five boxes as the editor filled them, so 🔗 Merge… can refuse while the person has
+// changed one (a merge shows the editor again, which would lose the change).
+let _vendorEditFilled = null;
+const _vendorEditBoxes = () => ['vendoredit-name', 'vendoredit-website', 'vendoredit-empty-weight',
+    'vendoredit-external-id', 'vendoredit-comment'].map((id) => {
+    const el = document.getElementById(id);
+    return el ? String(el.value) : '';
+}).join('\u0001');
+let _vendorTwinSeq = 0;
+
+// The editor's merge pieces for manufacturer `vid` ('' or null: create mode, none):
+// 🔗 Merge… shown, the boxes noted as filled, and the same-name note read in the
+// background (merge_options' twins). A read that fails, or lands after the editor moved on,
+// draws nothing: no claim either way.
+const _vendorMergeUi = (vid) => {
+    const btn = document.getElementById('vendoredit-merge');
+    const note = document.getElementById('vendoredit-twin-note');
+    const seq = ++_vendorTwinSeq;
+    if (note) { note.textContent = ''; note.classList.add('d-none'); }
+    if (!vid) {
+        _vendorEditFilled = null;
+        if (btn) btn.classList.add('d-none');
+        return;
+    }
+    _vendorEditFilled = _vendorEditBoxes();
+    if (btn) btn.classList.remove('d-none');
+    if (!note || typeof window.fetchT !== 'function') return;
+    window.fetchT(`/api/vendors/${encodeURIComponent(vid)}/merge_options`, { cache: 'no-store' }, 20000)
+        .then((r) => r.json())
+        .then((d) => {
+            if (seq !== _vendorTwinSeq) return;
+            if (document.getElementById('vendoredit-id').value !== String(vid)) return;
+            if (!d || d.success !== true || !Array.isArray(d.twins) || !d.twins.length) return;
+            const words = d.twins.map((t) => {
+                const n = Number(t.filaments) || 0;
+                const name = String(t.name || '').split(/\s+/).filter(Boolean).join(' ');
+                return `${name} #${t.id} (${n} filament${n === 1 ? '' : 's'})`;
+            });
+            const list = words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}` : words[0];
+            note.textContent = `⚠️ ${words.length > 1 ? 'Other manufacturers have' : 'Another manufacturer has'} `
+                + `this name: ${list}. 🔗 Merge… combines them.`;
+            note.classList.remove('d-none');
+        })
+        .catch(() => { /* a read that failed draws nothing */ });
+};
+
+// 🔗 Merge…: refused while a Save is on its way or a box was changed (both said on the
+// editor's banner and in a 7 s toast); else the merge window opens over the editor.
+const _vendorMergePress = () => {
+    const errEl = document.getElementById('vendoredit-error');
+    const refuse = (msg) => {
+        if (errEl) { errEl.classList.remove('d-none'); errEl.innerText = msg; }
+        showToast(msg, 'warning', 7000);
+    };
+    const vid = (document.getElementById('vendoredit-id') || {}).value || '';
+    if (!vid) return;
+    if (_vendorSaveInFlight) { refuse('The manufacturer is saving: wait for it, then merge.'); return; }
+    if (_vendorEditFilled !== null && _vendorEditBoxes() !== _vendorEditFilled) {
+        refuse('Save or Cancel your changes first, then merge: a merge shows this window again.');
+        return;
+    }
+    if (errEl) { errEl.classList.add('d-none'); errEl.innerText = ''; }
+    if (typeof window.openVendorMerge !== 'function') return;
+    if (window.fccShieldNextPress) window.fccShieldNextPress();
+    window.openVendorMerge({ vid, opener: document.getElementById('vendoredit-merge') });
+};
+
+// A manufacturer merged away (vendor:merged {from, into, vendor, moved}, inv_vendor_merge.js).
+// The one merged is deleted from Spoolman, its filaments moved to the one kept, so nothing
+// here may hold its id: the Filament window's Brand names the kept one (the vendor:updated
+// sent next reads the window again), an open Edit Filament takes the kept one
+// (_editfilSession.onVendorMerged), and the editor, on either of the two, shows the kept one.
+document.addEventListener('vendor:merged', (e) => {
+    const d = (e && e.detail) || {};
+    const gone = d.from != null ? String(d.from) : '';
+    const kept = d.into != null ? String(d.into) : '';
+    if (!gone || !kept || gone === kept) return;
+    const v = d.vendor || null;
+    const brandEl = document.getElementById('fil-detail-vendor');
+    if (brandEl && brandEl.dataset.vendorId === gone) {
+        brandEl.dataset.vendorId = kept;
+        if (v && v.name) brandEl.innerText = v.name;
+    }
+    const editModal = document.getElementById('editFilamentModal');
+    if (editModal && editModal.classList.contains('show')
+            && _editfilSession && typeof _editfilSession.onVendorMerged === 'function') {
+        _editfilSession.onVendorMerged({ from: gone, into: kept, vendor: v });
+    }
+    const vModal = document.getElementById('vendorEditModal');
+    const shown = (document.getElementById('vendoredit-id') || {}).value || '';
+    if (vModal && vModal.classList.contains('show') && (shown === gone || shown === kept)) {
+        window.openVendorEditModal(kept);
+    }
+});
 
 // One save at a time (Group 50.6): a second press while the first was on its
 // way (a double click, or Enter now that it presses the focused Save) created

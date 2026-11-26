@@ -201,10 +201,12 @@ def filament(**over):
     return fil
 
 
-def load(page, answers=None):
+def load(page, answers=None, extra_modules=()):
     """The window's page: the modal markup, the stand-ins, then the modules in the
     dashboard's order, inv_details.js's ready handlers run by hand (the page has
-    loaded already, as in test_enter_presses_buttons_50_6.py's `_load_details`)."""
+    loaded already, as in test_enter_presses_buttons_50_6.py's `_load_details`).
+    `extra_modules`: more modules loaded after inv_details.js, in the dashboard's order
+    (Group 66.9's merge window, inv_vendor_merge.js)."""
     page.set_content('<!doctype html><html><head><meta charset="utf-8"><style>' + CSS + '</style></head><body>'
                      '<div id="toast-container"></div>' + DETAILS_HTML.read_text(encoding="utf-8")
                      + '</body></html>')
@@ -216,6 +218,8 @@ def load(page, answers=None):
         document.addEventListener = function (t, f, o) {
             if (t === 'DOMContentLoaded') window.__ready.push(f); else window.__add.call(document, t, f, o); }; }""")
     page.add_script_tag(content=(MODULES / "inv_details.js").read_text(encoding="utf-8"))
+    for name in extra_modules:
+        page.add_script_tag(content=(MODULES / name).read_text(encoding="utf-8"))
     page.evaluate("() => { document.addEventListener = window.__add; window.__ready.forEach((f) => f()); }")
     return page
 

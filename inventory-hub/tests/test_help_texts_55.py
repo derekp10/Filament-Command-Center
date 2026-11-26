@@ -241,8 +241,10 @@ def test_every_question_an_entry_matches_draws_its_help_button(entries):
         for oid in _overlay_ids(e):
             if oid == "fcc-active-print-confirm-overlay":       # confirmActivePrint's own
                 continue
+            # fccCornerHelpHtml's optional second argument names what the ? explains
+            # ('window': Group 66.9's merge window), so it counts as drawn either way.
             drawn = [name for name, src in js.items()
-                     if f"fccCornerHelpHtml('{oid}')" in src
+                     if re.search(r"fccCornerHelpHtml\('" + re.escape(oid) + r"'\s*[,)]", src)
                      or re.search(r"\boverlay:\s*'" + re.escape(oid) + "'", src)]
             assert drawn, (
                 f"{e['key']}: the overlay {oid!r} draws no ? (pass it to confirmActivePrint as "
@@ -283,6 +285,8 @@ SCRIPT_DRAWN = {
     "swap-question": ("inv_quickswap.js", "fccCornerHelpHtml('fcc-quickswap-confirm-overlay')"),
     # Group 63.1: the refill question's ? is its overlay's help, the same way.
     "refill-place": ("inv_details.js", "fccCornerHelpHtml('fcc-refill-place')"),
+    # Group 66.9: the merge window's ? and its question's, through window.fccCornerHelpHtml.
+    "vendor-merge": ("inv_vendor_merge.js", "fccCornerHelpHtml('fcc-vendor-merge'"),
 }
 
 

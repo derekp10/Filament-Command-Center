@@ -129,6 +129,27 @@ document.addEventListener('vendor:updated', (e) => {
     if (changed) refreshAllRowPreviews();
 });
 
+// Group 66.9: a manufacturer merged away (vendor:merged {from, into, vendor},
+// inv_vendor_merge.js): each cached spool of the one merged takes the kept record whole
+// (its filament is the kept one's now), its context names it, and its empty weight is
+// worked out again from it, unless a tare was typed for the spool (Group 63.7).
+document.addEventListener('vendor:merged', (e) => {
+    const d = (e && e.detail) || {};
+    const gone = d.from != null ? String(d.from) : '';
+    const v = d.vendor;
+    if (!gone || !v || v.id == null) return;
+    let changed = false;
+    weighOutDetailsCache.forEach((entry) => {
+        const was = entry && entry.cascade ? entry.cascade.vendor : null;
+        if (!was || was.id == null || String(was.id) !== gone) return;
+        entry.cascade = Object.assign({}, entry.cascade, { vendor: Object.assign({}, v) });
+        if (entry.context) entry.context = Object.assign({}, entry.context, { vendor: v.name || entry.context.vendor });
+        if (entry.tareTyped == null) entry.empty = window.resolveEmptySpoolWeightSource(entry.cascade).value;
+        changed = true;
+    });
+    if (changed) refreshAllRowPreviews();
+});
+
 const setWeighOutMode = (mode) => {
     if (!['gross', 'net', 'additive', 'set_used'].includes(mode)) return;
     window.weighOutMode = mode;

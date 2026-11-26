@@ -2789,6 +2789,53 @@ document.addEventListener('vendor:updated', (e) => {
     window.wizardVendorSaved(Object.assign({}, d.vendor, { id: d.vendor.id != null ? d.vendor.id : d.id }));
 });
 
+// Group 66.9: a manufacturer merged away while the wizard is open (vendor:merged
+// {from, into, vendor}, inv_vendor_merge.js). The one merged is deleted from Spoolman and
+// its filaments are the kept one's now, so nothing in the wizard may hold its id (Edit
+// Spool sends its filament whole, with the Vendor box's id): the list drops it and takes
+// the kept record; the filament records the wizard read take the kept one; the Vendor box
+// holding it holds the kept one; and the edit's baselines follow (editFilamentOriginal's
+// vendor_id, spoolEmptyWeightVendorId), so Save sends no manufacturer change and asks no
+// label reprint for a filament the merge already moved. All of it is code (no box counts
+// as typed in). The vendor:updated sent after it redraws what comes from the kept one.
+window.wizardVendorMerged = (detail) => {
+    const d = detail || {};
+    const gone = d.from != null ? String(d.from) : '';
+    const kept = d.into != null ? String(d.into) : '';
+    if (!gone || !kept || gone === kept) return;
+    const wizModalEl = document.getElementById('wizardModal');
+    if (!wizModalEl || !wizModalEl.classList.contains('show')) return;
+    const rec = d.vendor && d.vendor.id != null ? Object.assign({}, d.vendor) : null;
+    const list = (Array.isArray(wizardState.vendors) ? wizardState.vendors : []).filter(x => !x || String(x.id) !== gone);
+    if (rec) {
+        const at = list.findIndex(x => x && String(x.id) === kept);
+        if (at >= 0) list[at] = rec; else list.push(rec);
+    }
+    wizardState.vendors = list;
+    [wizardState.existingFilaments, wizardState.allFilaments].forEach((fl) => {
+        if (!Array.isArray(fl)) return;
+        fl.forEach((f) => {
+            if (f && f.vendor && String(f.vendor.id) === gone) {
+                f.vendor = rec ? Object.assign({}, rec) : Object.assign({}, f.vendor, { id: Number(kept) });
+            }
+        });
+    });
+    const orig = wizardState.editFilamentOriginal;
+    if (orig && String(orig.vendor_id) === gone) {
+        wizardState.editFilamentOriginal = Object.assign({}, orig, { vendor_id: kept });
+    }
+    if (wizardState.spoolEmptyWeightVendorId === gone) wizardState.spoolEmptyWeightVendorId = kept;
+    _wizBindVendorCombobox();
+    const hidden = document.getElementById('wiz-fil-vendor-sel');
+    if (hidden && hidden.value === gone) {
+        const search = document.getElementById('wiz-fil-vendor-search');
+        window.wizardComboboxSet('wiz-fil-vendor-search', 'wiz-fil-vendor-sel', kept,
+            rec && rec.name ? rec.name : (search ? search.value : ''));
+    }
+    wizardFetchVendors().catch(() => false);
+};
+document.addEventListener('vendor:merged', (e) => window.wizardVendorMerged(e && e.detail));
+
 const wizardFetchLocations = () => {
     return fetch('/api/locations')
         .then(r => r.json())

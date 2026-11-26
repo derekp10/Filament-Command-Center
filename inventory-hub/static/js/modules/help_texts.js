@@ -178,6 +178,23 @@
         ],
     });
 
+    // Group 66.9: the manufacturer editor's 🔗 Merge… (inv_vendor_merge.js).
+    help({
+        key: 'vendor-merge',
+        title: 'Merge manufacturers',
+        match: { overlay: ['fcc-vendor-merge', 'fcc-vendor-merge-confirm'] },
+        lines: [
+            'Two manufacturers that are one maker (say Acme #3 and Acme #12) become one: every filament of the one merged moves to the one kept, its spools with it, and the merged one is deleted.',
+            'Possible duplicates come first: the same name (ignoring capitals, spaces and punctuation), then names that look alike. Each shows its filaments and its empty spool weight.',
+            'Below them is every manufacturer: type a name or #number in the box to find one, and pick it to merge it with the one open in the editor.',
+            'The question says which one is kept: by default the one with more filaments, then the one with an empty weight, then the older. ⇄ keeps the other one instead.',
+            "Where the one kept has a field blank (its empty weight, External ID, notes or website), it takes the merged one's; a field it has keeps its own.",
+            'When the two names are written differently, the moved filaments’ labels go on the 🏷️ Backlog for a reprint, since the Brand they print changed.',
+            "Nothing changes until you press Merge into … in the question, and a merge can't be undone. Cancel or Esc keeps both. While the question is up, other scans wait until you answer it.",
+        ],
+        scopes: ['Merge Manufacturers'],
+    });
+
     help({
         key: 'move-question',
         title: 'Load or store question',
