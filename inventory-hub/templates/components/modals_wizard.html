@@ -175,7 +175,7 @@
                                         placeholder="#FFFFFF" value="#FFFFFF" id="wiz-fil-color_hex_0"
                                         autocomplete="off"
                                         oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
-                                    <button class="btn btn-outline-secondary" type="button" onclick="wizardAddColorHex()"
+                                    <button class="btn btn-outline-secondary" type="button" onclick="wizardAddColorHex(); window.wizardMarkChanged && window.wizardMarkChanged()"
                                         title="Add another color for gradients">➕</button>
                                 </div>
                                 <div id="wiz-fil-color-extra-container"></div>

@@ -4448,6 +4448,8 @@ window.openVendorCreateModal = (prefill) => {
     document.getElementById('vendoredit-id').value = '';
     _vendorEditLastFill = null;
     _vendorEditHeldOn = null;
+    _vendorEditHeld = false;
+    _vendorDroppedWord = null;
     const p = prefill || {};
     document.getElementById('vendoredit-name').value = p.name || '';
     document.getElementById('vendoredit-website').value = p.website || '';
@@ -4498,6 +4500,7 @@ const _vendorEditFill = (v) => {
     if (regEl) regEl.innerText = v.registered ? `Registered ${String(v.registered).slice(0, 10)}` : '';
     _vendorEditLastFill = _vendorEditBoxes();
     _vendorEditHeldOn = null;
+    _vendorEditHeld = false;
 };
 
 window.openVendorEditModal = (vendorId) => {
@@ -4516,6 +4519,8 @@ window.openVendorEditModal = (vendorId) => {
     document.getElementById('vendoredit-id').value = vid;
     _vendorEditLastFill = null;
     _vendorEditHeldOn = null;
+    _vendorEditHeld = false;
+    _vendorDroppedWord = null;
     document.getElementById('vendoredit-name').value = '';
     document.getElementById('vendoredit-website').value = '';
     document.getElementById('vendoredit-empty-weight').value = '';
@@ -4574,13 +4579,36 @@ let _vendorEditLastFill = null;
 // changes" became "changed while this window was open" at once). Null for a hold with no
 // record, and once a fill or a release ends the hold.
 let _vendorEditHeldOn = null;
-// The boxes as a fill from record `v` would leave them (_vendorEditFill's own reading).
+// Whether Save is held off (a hold, or a merge FCC couldn't show): the editor's own Save
+// leaves it off when it ends (review round 5, R5P1: its `finally` turned Save back on
+// under a hold set while it was out, over the boxes from before a merge's carry).
+let _vendorEditHeld = false;
+// The last word of the shown manufacturer that came while the editor's own Save was out,
+// {vid, v}: weighed once a Save that failed ends (R5P1: it was dropped).
+let _vendorDroppedWord = null;
+// The boxes as a fill from record `v` would leave them: each value set on a copy of its box
+// and read back, so what a box changes on the way in (a website's spaces, a CR LF in the
+// notes) compares as the box shows it (review round 5, R5P7: a record the editor showed
+// never matched, and it said the manufacturer had changed).
 const _vendorBoxesFor = (v) => {
     const ex = (v && v.extra) || {};
     const site = (typeof unquoteExtra === 'function') ? unquoteExtra(ex.website) : (ex.website || '');
     const wt = v ? v.empty_spool_weight : null;
-    return [(v && v.name) || '', site || '', (wt == null || wt === '') ? '' : String(wt),
-        (v && v.external_id) || '', (v && v.comment) || ''].join('\u0001');
+    const vals = {
+        'vendoredit-name': (v && v.name) || '',
+        'vendoredit-website': site || '',
+        'vendoredit-empty-weight': (wt == null || wt === '') ? '' : String(wt),
+        'vendoredit-external-id': (v && v.external_id) || '',
+        'vendoredit-comment': (v && v.comment) || '',
+    };
+    return ['vendoredit-name', 'vendoredit-website', 'vendoredit-empty-weight',
+        'vendoredit-external-id', 'vendoredit-comment'].map((id) => {
+        const el = document.getElementById(id);
+        if (!el) return String(vals[id]);
+        const copy = el.cloneNode(false);
+        copy.value = String(vals[id]);
+        return String(copy.value);
+    }).join('\u0001');
 };
 
 // `filled`: the boxes to count as filled (a hold lifted keeps the person's typing as a
@@ -4670,6 +4698,12 @@ document.addEventListener('vendor:merged', (e) => {
         // A box the person changed since the editor last filled it (review round 4, R4P6:
         // the record was filled over a note typed after the window closed, unasked).
         const changed = _vendorEditLastFill !== null && _vendorEditBoxes() !== _vendorEditLastFill;
+        // A merge told from a read a newer word of the kept one overtook (`stale`, no record):
+        // that word already set the editor on the kept one (review round 5, R5P2).
+        if (d.stale && shown === kept) return;
+        // A merge that changed nothing on the kept one: the person's boxes and Save stay as
+        // they are (review round 5, R5P8: it held, and the vendor:updated after it let go).
+        if (v && String(v.id) === kept && shown === kept && changed && _vendorBoxesFor(v) === _vendorEditLastFill) return;
         if (v && String(v.id) === kept && shown === kept && changed) {
             // On the kept one: the person's boxes stay, and Save would undo the merge's.
             _vendorEditHold(kept, `Manufacturer #${kept} was merged with #${gone} while this window had unsaved `
@@ -4694,10 +4728,13 @@ document.addEventListener('vendor:merged', (e) => {
             const save = document.getElementById('vendoredit-save');
             if (save) save.disabled = true;
             _vendorMergeUi(null);
+            _vendorEditHeld = true;
             if (errEl) {
                 errEl.classList.remove('d-none');
-                errEl.innerText = `Manufacturer #${gone} was merged into #${kept}, and FCC couldn't read #${kept} `
-                    + 'to show it here: close this window and open it again to edit it.';
+                errEl.innerText = d.stale
+                    ? `Manufacturer #${gone} was merged into #${kept}: close this window and open #${kept} to edit it.`
+                    : `Manufacturer #${gone} was merged into #${kept}, and FCC couldn't read #${kept} `
+                      + 'to show it here: close this window and open it again to edit it.';
             }
         }
     }
@@ -4714,13 +4751,17 @@ document.addEventListener('vendor:merged', (e) => {
 const _vendorEditHold = (vid, why, onRecord) => {
     const save = document.getElementById('vendoredit-save');
     if (save) save.disabled = true;
+    _vendorEditHeld = true;
     _vendorMergeUi(null);
     _vendorEditHeldOn = onRecord ? _vendorBoxesFor(onRecord) : null;
     const errEl = document.getElementById('vendoredit-error');
     if (errEl) { errEl.classList.remove('d-none'); errEl.innerText = why; }
 };
 const _vendorEditFollow = (vid, v) => {
-    if (_vendorSaveInFlight) return;
+    if (_vendorSaveInFlight) {
+        _vendorDroppedWord = { vid, v };
+        return;
+    }
     const vModal = document.getElementById('vendorEditModal');
     const shown = (document.getElementById('vendoredit-id') || {}).value || '';
     if (!vModal || !vModal.classList.contains('show') || !shown || shown !== vid) return;
@@ -4755,6 +4796,7 @@ const _vendorEditFollow = (vid, v) => {
 // A hold FCC can lift: the record read is what the editor last showed.
 const _vendorEditRelease = (vid) => {
     _vendorEditHeldOn = null;
+    _vendorEditHeld = false;
     const save = document.getElementById('vendoredit-save');
     if (save && !_vendorSaveInFlight) save.disabled = false;
     const errEl = document.getElementById('vendoredit-error');
@@ -4785,6 +4827,15 @@ window.vendorEditSave = () => {
         if (errEl) { errEl.classList.remove('d-none'); errEl.innerText = msg; }
         showToast(msg, 'error', 7000);
     };
+    // FCC is still reading what a merge did to this manufacturer: the boxes may be from
+    // before it, and a Save now would undo it (review round 5, R5P1).
+    if (vid && typeof window.vendorMergeReading === 'function' && window.vendorMergeReading(vid)) {
+        const wait = `FCC is still reading manufacturer #${vid} after the merge, so nothing was saved: `
+            + 'press Save again in a moment.';
+        if (errEl) { errEl.classList.remove('d-none'); errEl.innerText = wait; }
+        showToast(wait, 'warning', 7000);
+        return;
+    }
     // Empty vid is legitimate — that's create mode (openVendorCreateModal).
     // Edit mode never opens with an empty vid (openVendorEditModal rejects),
     // so we don't need to guard against missing-id in this path anymore.
@@ -4827,6 +4878,8 @@ window.vendorEditSave = () => {
     const url = isCreate ? '/api/vendors' : `/api/vendors/${encodeURIComponent(vid)}`;
     const method = isCreate ? 'POST' : 'PATCH';
     _vendorSaveInFlight = true;
+    _vendorDroppedWord = null;
+    let saveFailed = false;
     const saveBtn = document.getElementById('vendoredit-save');
     if (saveBtn) saveBtn.disabled = true;
     fetch(url, {
@@ -4860,11 +4913,26 @@ window.vendorEditSave = () => {
             }
         })
         .catch(e => {
-            showErr(e.message || String(e));
+            saveFailed = true;
+            const msg = e.message || String(e);
+            // A hold set while the Save was out keeps its words: the Save's own failure
+            // goes after them (review round 5, R5P1).
+            if (_vendorEditHeld && errEl && !errEl.classList.contains('d-none') && errEl.innerText) {
+                errEl.innerText = `${errEl.innerText} The Save didn't go through either: ${msg}`;
+                showToast(msg, 'error', 7000);
+            } else {
+                showErr(msg);
+            }
         })
         .finally(() => {
             _vendorSaveInFlight = false;
-            if (saveBtn) saveBtn.disabled = false;
+            // Save comes back only when nothing held it meanwhile (R5P1).
+            if (saveBtn && !_vendorEditHeld) saveBtn.disabled = false;
+            // A word of this manufacturer that came while the Save was out, weighed now that a
+            // failed Save left the editor open (R5P1: it was dropped).
+            const word = _vendorDroppedWord;
+            _vendorDroppedWord = null;
+            if (saveFailed && word) _vendorEditFollow(word.vid, word.v);
         });
 };
 

@@ -1407,6 +1407,11 @@ def _vendor_merge_reads(src_vid, dst_vid, target_filaments=False, in_lock=False)
     dst, refused = _merge_vendor_end(dst_vid, kept)
     if refused:
         return None, refused
+    # Both ends read inside the lock: the kept one was there with no merge of it running
+    # either, so the page forgets an earlier press of it it couldn't account for too
+    # (review round 5, R5P4: only the merged one's were forgotten, and a ⇄'d press of the
+    # kept one later read as "the merge into X finished").
+    kept = dict(kept, target_kept=True) if in_lock else kept
     src_label, dst_label = _vendor_label(src), _vendor_label(dst)
     fils, unread = _vendor_filaments(src_vid, src_label)
     if unread:
@@ -1719,7 +1724,7 @@ def api_merge_vendor(src_vid, dst_vid):
                     state.logger.warning(
                         f"Manufacturer merge: copying onto vendor {dst_vid} reported a failure ({err}), but it landed")
                     out = rec
-                elif spoolman_api.is_vendor_record(rec, dst_vid):
+                elif spoolman_api.is_vendor_record(rec, dst_vid) and not spoolman_api.write_may_have_landed(err):
                     state.add_log_entry(
                         f"❌ Manufacturer merge {src_html} → {dst_html}: couldn't copy {fields_html} onto "
                         f"{dst_html}: {html.escape(err, quote=False)}",
@@ -1727,11 +1732,20 @@ def api_merge_vendor(src_vid, dst_vid):
                     return jsonify({
                         "success": False,
                         "source_kept": True,
+                        "target_kept": True,
                         "vendor": rec,
                         "msg": (f"Couldn't copy {src_label}'s {fields} onto {dst_label}: "
                                 f"{_sentence(spoolman_api.refusal_words(err))} Nothing was moved; try again in a moment."),
                     }), 502
                 else:
+                    # No answer FCC could read back, or a lost answer whose read-back doesn't show
+                    # the carry yet: its PATCH may still be waiting in Spoolman (review round 5,
+                    # R5S2: logged "couldn't copy", and the record from before it given to every
+                    # window as current). No record goes out (`carry_unsure`: the page holds an
+                    # editor on the kept one instead of reading it).
+                    said = spoolman_api.refusal_words(err)
+                    if spoolman_api.is_vendor_record(rec, dst_vid):
+                        said = said.rstrip(". ") + ", and it may still land."
                     state.add_log_entry(
                         f"⚠️ Manufacturer merge {src_html} → {dst_html}: FCC couldn't tell whether {fields_html} "
                         f"was copied onto {dst_html}: {html.escape(err, quote=False)}",
@@ -1739,8 +1753,10 @@ def api_merge_vendor(src_vid, dst_vid):
                     return jsonify({
                         "success": False,
                         "source_kept": True,
+                        "target_kept": True,
+                        "carry_unsure": True,
                         "msg": (f"FCC couldn't tell whether {src_label}'s {fields} was copied onto {dst_label}: "
-                                f"{_sentence(spoolman_api.refusal_words(err))} Nothing was moved; try again in a moment."),
+                                f"{_sentence(said)} Nothing was moved; try again in a moment."),
                     }), 502
             if isinstance(out, dict):
                 vendor_after = out
@@ -1878,6 +1894,7 @@ def api_merge_vendor(src_vid, dst_vid):
             return jsonify({
                 "success": False,
                 "source_kept": True,
+                "target_kept": True,
                 "moved_filament_ids": moved,
                 "left_meanwhile": gone_by,
                 "unknown": unknown,
@@ -1948,6 +1965,7 @@ def api_merge_vendor(src_vid, dst_vid):
             return jsonify({
                 "success": False,
                 "source_kept": True,
+                "target_kept": True,
                 "moved_filament_ids": moved_now,
                 "filament_errors": filament_errors,
                 "still_on_source": still,
@@ -1967,7 +1985,11 @@ def api_merge_vendor(src_vid, dst_vid):
             if answered and isinstance(rec, dict) and rec.get("id") is None:
                 state.logger.warning(
                     f"Manufacturer merge: deleting vendor {src_vid} reported a failure ({err}), but it is gone")
-            elif spoolman_api.is_vendor_record(rec, src_vid):
+            elif spoolman_api.is_vendor_record(rec, src_vid) and not spoolman_api.write_may_have_landed(err):
+                # Only a refusal Spoolman answered (or one never sent) leaves it for sure: a
+                # lost answer's DELETE may still be waiting in Spoolman's database while reads
+                # go on (review round 5, R5S1 / R5P5: answered source_kept, the page forgot
+                # the press, and when the delete landed no window heard the merge).
                 said = lead(f"{src_label} couldn't be deleted", f"{src_label} held no filaments, but couldn't be deleted")
                 state.add_log_entry(
                     f"❌ Manufacturer merge {src_html} → {dst_html}: "
@@ -1976,6 +1998,7 @@ def api_merge_vendor(src_vid, dst_vid):
                 return jsonify({
                     "success": False,
                     "source_kept": True,
+                    "target_kept": True,
                     "moved_filament_ids": moved,
                     "left_meanwhile": left_meanwhile,
                     "unknown": unknown,
@@ -1993,6 +2016,7 @@ def api_merge_vendor(src_vid, dst_vid):
                 return jsonify({
                     "success": False,
                     "may_have_deleted": True,
+                    "target_kept": True,
                     "moved_filament_ids": moved,
                     "left_meanwhile": left_meanwhile,
                     "unknown": unknown,

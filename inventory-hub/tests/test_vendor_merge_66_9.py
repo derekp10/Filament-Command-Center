@@ -1180,10 +1180,14 @@ class TestReviewRound3:
     def test_a_same_name_merge_says_nothing_of_labels_for_a_lost_move(self, client):
         fake = _stocked()
         fake.canned[("PATCH", "/api/v1/filament/162")] = requests.exceptions.ReadTimeout("read timed out")
-        r, _ = _merge(client, fake, 35, 4)
+        r, logged = _merge(client, fake, 35, 4)
         body = r.get_json()
         assert body["still_on_source"] == [162] and body["labels_flagged"] is None
         assert "label" not in body["msg"]
+        # Review round 5 (R5S3): Derek's pairs share their names, and the words still say why.
+        assert "#162 may move yet (the answer to its move was lost)." in body["msg"]
+        assert any("Sunlu #35 still holds #162, so it was kept. #162 may move yet" in m
+                   for m in _lines(logged, "WARNING"))
 
     def test_a_lost_move_read_back_on_a_third_manufacturer_left_meanwhile(self, client):
         # R3S4 (M1).
@@ -1458,6 +1462,9 @@ class TestReviewRound4:
         r, _ = _merge(client, fake, 35, 4)
         body = r.get_json()
         assert r.status_code == 502 and body["nothing_written"] is True and body["source_kept"] is True
+        # Review round 5 (R5P4): the merged one's list is read after both ends; the kept end's
+        # own refusal proves nothing about the kept one.
+        assert body.get("target_kept") is (None if where == "the kept end" else True)
 
     def test_the_kept_one_gone_says_the_merged_one_was_kept(self, client):
         fake = _stocked()
@@ -1467,16 +1474,21 @@ class TestReviewRound4:
         r, _ = _merge(client, fake, 35, 4)
         body = r.get_json()
         assert r.status_code == 404 and body["gone"] == 4 and body["source_kept"] is True
+        assert "target_kept" not in body
 
     def test_the_merged_ones_own_refusal_and_a_dry_run_never_say_it_was_kept(self, client):
         fake = _stocked()
         fake.canned[("GET", "/api/v1/vendor/35")] = _Resp(503, {"message": "database is locked"})
         r, _ = _merge(client, fake, 35, 4)
-        assert r.status_code == 502 and "source_kept" not in r.get_json()
+        assert r.status_code == 502 and "source_kept" not in r.get_json() and "target_kept" not in r.get_json()
         fake = _stocked()
         fake.canned[("GET", "/api/v1/vendor/4")] = _Resp(503, {"message": "database is locked"})
         r, _ = _merge(client, fake, 35, 4, body={"dry_run": True})
-        assert r.status_code == 502 and "source_kept" not in r.get_json()
+        assert r.status_code == 502 and "source_kept" not in r.get_json() and "target_kept" not in r.get_json()
+        fake = _stocked()
+        fake.canned[("LIST", 1)] = _Resp(503, {"message": "database is locked"})
+        r, _ = _merge(client, fake, 35, 4, body={"dry_run": True})
+        assert r.status_code == 502 and "target_kept" not in r.get_json()
 
     def test_the_carrys_refusals_say_the_merged_one_was_kept_and_may_have_written(self, client):
         # R4S4: never nothing_written (the "couldn't tell" one may have written, and the
@@ -1486,13 +1498,16 @@ class TestReviewRound4:
         r, _ = _merge(client, fake, 35, 4)
         body = r.get_json()
         assert body["source_kept"] is True and "nothing_written" not in body and body["vendor"]["id"] == 4
+        assert body["target_kept"] is True and "carry_unsure" not in body
         fake = _stocked()
         fake.land_then_raise[("PATCH", "/api/v1/vendor/4")] = requests.exceptions.ReadTimeout("read timed out")
         fake.get_hooks["/api/v1/vendor/4"] = (
             lambda n: requests.exceptions.ConnectionError("down (test)") if n >= 2 else None)
         r, _ = _merge(client, fake, 35, 4)
         body = r.get_json()
-        assert set(body) == {"success", "source_kept", "msg"} and body["source_kept"] is True
+        # Review round 5: target_kept (R5P4) and carry_unsure (R5S2) join it; still no record.
+        assert set(body) == {"success", "source_kept", "target_kept", "carry_unsure", "msg"}
+        assert body["source_kept"] is True and body["carry_unsure"] is True
 
 
 class TestWizardFilamentAnswerWords:
@@ -1538,3 +1553,58 @@ class TestWizardFilamentAnswerWords:
         body = self._post(client, monkeypatch, 'HTTP 500: {"message": "database is locked"}',
                           {"comment": "", "location": "SHELF-2"})
         assert body["msg"].endswith("#77 was not moved to SHELF-2 either: save again to move it.")
+
+
+class TestReviewRound5:
+    """Review round 5: a lost answer of the delete (R5S1 / R5P5) or the carry (R5S2) that
+    hasn't landed yet is never called refused; target_kept on every refusal made after both
+    ends were read inside the lock (R5P4)."""
+
+    def test_a_lost_delete_answer_whose_delete_hasnt_landed_yet_may_still_delete(self, client):
+        fake = _stocked()
+        fake.canned[("DELETE", "/api/v1/vendor/35")] = requests.exceptions.ReadTimeout("read timed out")
+        r, logged = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and 35 in fake.records["vendor"]          # not deleted (yet)
+        assert body["may_have_deleted"] is True and "source_kept" not in body and body["target_kept"] is True
+        assert "FCC couldn't tell whether Sunlu #35 was deleted" in body["msg"]
+        assert "couldn't be deleted" not in body["msg"]
+        assert not any("couldn't be deleted" in m for m in _lines(logged, "ERROR"))
+        assert any("couldn't tell whether Sunlu #35 was deleted" in m for m in _lines(logged, "WARNING"))
+
+    @pytest.mark.parametrize("how", ["refused", "never sent"])
+    def test_a_delete_that_wrote_nothing_still_says_it_couldnt_be_deleted(self, client, how):
+        fake = _stocked()
+        fake.canned[("DELETE", "/api/v1/vendor/35")] = (
+            _Resp(500, {"message": "database is locked"}) if how == "refused"
+            else requests.exceptions.ConnectionError("Max retries exceeded with url: /api/v1/vendor/35 (test)"))
+        r, logged = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["source_kept"] is True and body["target_kept"] is True
+        assert "may_have_deleted" not in body and "couldn't be deleted" in body["msg"]
+        assert any("couldn't be deleted" in m for m in _lines(logged, "ERROR"))
+
+    def test_a_carry_whose_answer_was_lost_is_never_called_refused(self, client):
+        fake = _stocked()
+        fake.canned[("PATCH", "/api/v1/vendor/4")] = requests.exceptions.ReadTimeout("read timed out")
+        r, logged = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and "vendor" not in body
+        assert body["carry_unsure"] is True and body["source_kept"] is True and body["target_kept"] is True
+        assert body["msg"].startswith("FCC couldn't tell whether Sunlu #35's External ID “Sunlu” was copied onto Sunlu #4: ")
+        assert "it may still land. Nothing was moved; try again in a moment." in body["msg"]
+        assert "Couldn't copy" not in body["msg"]
+        assert not any("couldn't copy" in m for m in _lines(logged, "ERROR"))
+        assert any("FCC couldn't tell whether" in m for m in _lines(logged, "WARNING"))
+        assert fake.filament_moves() == []
+
+    @pytest.mark.parametrize("where", ["a refused move", "an unread re-list"])
+    def test_every_answer_after_both_ends_were_read_says_the_kept_one_was_there(self, client, where):
+        fake = _stocked()
+        if where == "a refused move":
+            fake.canned[("PATCH", "/api/v1/filament/162")] = _Resp(500, {"message": "database is locked"})
+        else:
+            fake.canned[("LIST", 2)] = _Resp(503, {"message": "database is locked"})
+        r, _ = _merge(client, fake, 35, 4)
+        body = r.get_json()
+        assert r.status_code == 502 and body["source_kept"] is True and body["target_kept"] is True

@@ -346,6 +346,9 @@ window.wizardSetFilEmptyWeightInherited = (value, source) => {
 // before it stays), its change runs again for that pick, and a toast says so; the scan goes
 // on without that jump glued in front. Here the changed flag, the post-create lock (Save and
 // its status line) and the touched sets go back too: a scan is no edit. Older than Group 66.
+// So does the change count (Group 66.9 review round 5, R5W8): the type-ahead's picks and the
+// rollback's own change each counted one, so the answer of a Save that was out read the
+// form as changed, and closing asked about changes that were all saved.
 (function () {
     const wizEl = document.getElementById('wizardModal');
     if (!wizEl) return;
@@ -395,7 +398,8 @@ window.wizardSetFilEmptyWeightInherited = (value, source) => {
     const formNow = (sel) => {
         const msg = document.getElementById('wiz-status-msg');
         const btn = document.getElementById('btn-wiz-submit');
-        return { value: sel.value, dirty: wizardState.isDirty, locked: wizardState.lockedAfterSuccess,
+        return { value: sel.value, dirty: wizardState.isDirty, seq: wizardState.changeSeq || 0,
+            locked: wizardState.lockedAfterSuccess,
             touchedExtras: new Set(wizardState.touchedExtras || []),
             touchedNative: new Set(wizardState.touchedNative || []),
             status: msg ? msg.innerHTML : null, saveOff: btn ? btn.disabled : null };
@@ -430,6 +434,7 @@ window.wizardSetFilEmptyWeightInherited = (value, source) => {
                 `The list is back to "${opt ? opt.textContent.trim() : was.value}": the scan's letters had changed it`, 'info', 4000);
         }
         wizardState.isDirty = was.dirty;
+        wizardState.changeSeq = was.seq;
         wizardState.touchedExtras = was.touchedExtras;
         wizardState.touchedNative = was.touchedNative;
         if (was.locked && !wizardState.lockedAfterSuccess) {
@@ -3647,10 +3652,16 @@ window.wizardMultiselectKeydown = (event, entityType, key) => {
         }
         wizardAddMultiChoiceChip(entityType, key); // Fallback to current text
     } else if (event.key === 'Backspace' && input.value === '') {
-        // Find last chip and remove it
+        // Find last chip and remove it. Its removal is the person's change, as a click on a
+        // chip is (Group 66.9 review round 5, R5W5, older than 66.9): nothing noticed it, so
+        // a close asked nothing, the answer of a Save that was out marked it saved, and with
+        // the last chip gone Edit Spool's Save sent no clear (only a touched field's goes).
         const container = document.getElementById(`chip-container-${entityType}-${key}`);
-        if (container && container.lastElementChild) {
-            container.removeChild(container.lastElementChild);
+        const chip = container && container.lastElementChild;
+        if (chip) {
+            window.wizardNoteExtraTouched(chip);   // while it is in its box: it finds the box by closest()
+            container.removeChild(chip);
+            if (typeof window.wizardMarkChanged === 'function') window.wizardMarkChanged();
         }
     }
 };
@@ -3855,6 +3866,10 @@ window.wizardPromptNewChoice = (entityType, key) => {
 };
 
 // --- COLOR GRADIENT LOGIC ---
+// The person's ➕ (modals_wizard.html) and a row's 🗑️ mark the form changed (Group 66.9
+// review round 5, R5W6, older than 66.9): neither fires input or change, so a close asked
+// nothing and the answer of a Save that was out marked the change saved. Never from this
+// function itself: wizardPopulateColors calls it while it fills the form.
 window.wizardAddColorHex = () => {
     const container = document.getElementById('wiz-fil-color-extra-container');
     const idx = container.children.length + 1;
@@ -3862,7 +3877,7 @@ window.wizardAddColorHex = () => {
         <div class="input-group input-group-sm mb-1 mt-1">
             <input type="color" class="form-control form-control-color bg-dark border-secondary px-1" value="#000000" oninput="this.nextElementSibling.value = this.value.toUpperCase()">
             <input type="text" class="form-control bg-dark text-white border-secondary font-monospace pb-wiz-color" placeholder="#Hex" value="#000000" id="wiz-fil-color_hex_${idx}" autocomplete="off" oninput="this.previousElementSibling.value = (this.value.startsWith('#') ? this.value : '#' + this.value).padEnd(7, '0').substring(0,7)">
-            <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove(); if(document.getElementById('wiz-fil-color-extra-container').children.length === 0) { const w = document.getElementById('wiz-fil-color-direction-wrapper'); if (w) w.style.display='none'; }" title="Remove color">🗑️</button>
+            <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove(); window.wizardMarkChanged && window.wizardMarkChanged(); if(document.getElementById('wiz-fil-color-extra-container').children.length === 0) { const w = document.getElementById('wiz-fil-color-direction-wrapper'); if (w) w.style.display='none'; }" title="Remove color">🗑️</button>
         </div>
     `;
     container.insertAdjacentHTML('beforeend', html);
@@ -5262,6 +5277,17 @@ function wizardSavedLinks(sent) {
 // one a dashboard scan had saved meanwhile).
 const WIZ_LINK_UNSURE = '\u0000unsure';
 
+// The "Make a change to add more" note a create that landed writes 3 s later belongs to
+// that Save (Group 66.9 review round 5, R5W1): each Save clears it as it starts, and the
+// catch clears it before its own words. A create that landed, then a change and a second
+// create whose answer was lost within those 3 s: since round 4 the catch locks Create,
+// the lock the timer checks, so the first create's note replaced the second's "search
+// for them before creating them again", as if it had landed. The same handle keeps an
+// edit's own 3 s "clear the status, free Save" step (its success, and an answered move's):
+// it fired into a second Save still on its way, freed Save under it and wiped its
+// "Processing…" (round 5, older than 66.9: a second press could send while one was out).
+let _wizLockNoteTimer = null;
+
 const _wizardSubmitInner = async () => {
     // Fix review 4 (UP5) and 5 (VP4): the session this Save belongs to, and its spool,
     // noted first, so an answer (or no answer) after the wizard was opened again is told
@@ -5270,6 +5296,8 @@ const _wizardSubmitInner = async () => {
     const editAtSave = wizardState.mode === 'edit_spool';
     const sidAtSave = wizardState.editSpoolId;
     document.getElementById('btn-wiz-submit').disabled = true;
+    clearTimeout(_wizLockNoteTimer);      // R5W1: an earlier Save's note says nothing of this one
+    _wizLockNoteTimer = null;
     const msg = document.getElementById('wiz-status-msg');
     if (wizardState.editLoadFailed) {
         // Fix review 5 (VP5): whatever pressed it (a key, a script), a form that never
@@ -5734,9 +5762,10 @@ const _wizardSubmitInner = async () => {
             // Review round 1 (R4-02): the spool's link is saved; the row says so. Only the
             // link this Save carried (Group 66.9 review round 3, R3W8, older than 66.9: a QR
             // checked while the Save was out was marked saved, and its fills read as no
-            // change: the form is still changed while the row waits for a Save).
+            // change: the form is still changed while the row waits for a Save). It reads
+            // linked only when the Product Link this Save sent holds the QR (round 5, R5W4).
             if (isWizardEdit && sameForm) {
-                window.wizardSettleLinkRow(linkAtSave);
+                window.wizardSettleLinkRow(linkAtSave, linksSent.product_url);
                 const row0 = (wizardState.spoolRows || [])[0];
                 if (row0 && row0.status === 'linked-new') wizardState.isDirty = true;
             }
@@ -5843,8 +5872,9 @@ const _wizardSubmitInner = async () => {
                     const qtyEl = document.getElementById('wiz-spool-qty');
                     if (qtyEl) qtyEl.value = 1;
                     if (window.wizardResetSpoolRows) window.wizardResetSpoolRows();
-                    setTimeout(() => {
-                        if (wizardState.lockedAfterSuccess) {
+                    _wizLockNoteTimer = setTimeout(() => {      // R5W1: this Save's own, in its session
+                        _wizLockNoteTimer = null;
+                        if (wizardState.lockedAfterSuccess && wizardState.session === session) {
                             msg.innerHTML = `<span class="text-info">Make a change to add more — submit is locked until you scan, edit, or pick a new filament.</span>`;
                         }
                     }, 3000);
@@ -5914,7 +5944,12 @@ const _wizardSubmitInner = async () => {
                             wizardState.editSpoolLocation = _wizLocKey(now);
                             msg.innerHTML = `<span class="text-success fw-bold">Success! Spool Updated.</span>`;
                             document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-                            setTimeout(() => { msg.innerHTML = ""; if (btn) btn.disabled = false; }, 3000);
+                            clearTimeout(_wizLockNoteTimer);
+                            _wizLockNoteTimer = setTimeout(() => {      // this Save's own (see _wizLockNoteTimer)
+                                _wizLockNoteTimer = null;
+                                msg.innerHTML = "";
+                                if (btn) btn.disabled = false;
+                            }, 3000);
                         } else {
                             const why = outcome === 'refused'
                                 ? ((res && res.msg) || data.msg || `Saved your other changes, but #${editSid} was not moved.`)
@@ -5928,7 +5963,8 @@ const _wizardSubmitInner = async () => {
                     },
                 });
             } else if (sameForm) {
-                setTimeout(() => {
+                _wizLockNoteTimer = setTimeout(() => {      // this Save's own (see _wizLockNoteTimer)
+                    _wizLockNoteTimer = null;
                     msg.innerHTML = "";
                     document.getElementById('btn-wiz-submit').disabled = false;
                 }, 3000);
@@ -5969,7 +6005,7 @@ const _wizardSubmitInner = async () => {
                 // put the boxes back, and the next Save cleared the saved links).
                 if (sameForm) {
                     wizardSavedLinks(linksSent);
-                    window.wizardSettleLinkRow(linkAtSave);
+                    window.wizardSettleLinkRow(linkAtSave, linksSent.product_url);
                 }
             }
             // The filament's answer was lost (it may have landed): the next Save sends the
@@ -6008,8 +6044,14 @@ const _wizardSubmitInner = async () => {
                 ? `FCC answered, but this page hit an error showing it (${why}): search for the new spool(s) before creating them again.`
                 : `FCC didn't answer, so the new spool(s) may or may not have been created (${why}): search for them before creating them again.`;
         }
-        msg.innerHTML = `<span class="text-danger">${said}</span>`;
         const createSent = posted && !editAtSave;
+        // Such a create waits for a change, and says so (Group 66.9 review round 5, R5W7): a
+        // success explains its lock 3 s later, while here Create was off under words telling
+        // the person to create again once they had searched.
+        if (createSent) said += ' Create stays off until you change something in the form.';
+        clearTimeout(_wizLockNoteTimer);      // R5W1: no Save's delayed note writes over these words
+        _wizLockNoteTimer = null;
+        msg.innerHTML = `<span class="text-danger">${said}</span>`;
         if (createSent) wizardState.lockedAfterSuccess = true;
         document.getElementById('btn-wiz-submit').disabled = createSent;
         // Group 66.9 review rounds 2-3: a Save that went out and got no answer FCC could
@@ -7037,12 +7079,24 @@ window.wizardRenderLinkNote = () => {
 };
 
 // Put back what an earlier link of this row filled in (each box only while it still
-// shows the value put there: a box the person changed since stays theirs).
+// shows the value put there: a box the person changed since stays theirs). A box put
+// back is the person's change (the row's ✕, or another link), and a Prusament detail put
+// back counts as touched (Group 66.9 review round 5, R5W2): a ✕ pressed while the Save
+// that carried the link was out changed no count, so its answer marked the form saved, a
+// close asked nothing, and the next Save left the date and length that Save wrote in
+// Spoolman under blank boxes. The server drops a clear of a key Spoolman doesn't hold
+// (compute_dirty_extras), so one sent for a link that was never saved writes nothing.
 const _wizUndoLink = (row) => {
+    let undone = false;
     for (const f of (row.linkFills || [])) {
         const el = document.getElementById(f.id);
-        if (el && el.value === f.value) el.value = f.before;
+        if (el && el.value === f.value) {
+            el.value = f.before;
+            undone = true;
+            if (el.classList && el.classList.contains('dynamic-extra-spool-field')) window.wizardNoteExtraTouched(el);
+        }
     }
+    if (undone && typeof window.wizardMarkChanged === 'function') window.wizardMarkChanged();
     row.linkFills = [];
     row.linkValue = '';
     row.linkedText = '';
@@ -7084,13 +7138,20 @@ const _wizLinkMismatch = (temp, sid) => {
 // link, never by Product Link's text, which a hand edit may change). A refusal over a
 // waiting link the Save carried settles that link and keeps the refusal (R4W5, older than
 // 66.9: the row kept saying the earlier QR "still links at Save", and a second ✕ cleared
-// the saved links). Called with nothing, it settles a waiting link as before.
-window.wizardSettleLinkRow = (carried) => {
+// the saved links). So does a newer QR's check still on its way (round 5, R5W3, older
+// than 66.9: the row kept the saved link as one waiting, so a refusal said it "still links
+// at Save" and its second ✕ cleared it, and an accepted QR replaced it unasked). And the
+// row says "Linked to this QR" only when the Product Link that Save sent
+// (`productSaved`) holds the QR (round 5, R5W4: a link typed over it by hand, or emptied,
+// was saved, and the row said the spool was linked, though a scan of that QR finds it by
+// its Product Link); otherwise it says so, and its ✕ keeps every box. Called with
+// nothing, it settles a waiting link as before.
+window.wizardSettleLinkRow = (carried, productSaved) => {
     if (wizardState.mode !== 'edit_spool') return;
     const row = (wizardState.spoolRows || [])[0];
     if (!row || !row.linkValue) return;
     if (carried !== undefined && String(carried || '') !== String(row.linkValue)) return;
-    if (row.status === 'refused') {
+    if (row.status === 'refused' || row.status === 'pending') {
         row.linkFills = [];
         row.linkValue = '';
         row.linkedText = '';
@@ -7103,13 +7164,26 @@ window.wizardSettleLinkRow = (carried) => {
         return;
     }
     if (row.status !== 'linked-new') return;
+    const qr = _wizPrusamentLink(row.linkValue);
+    const holds = productSaved === undefined
+        || !!(qr && qr[2] && _wizLinkHolds(productSaved, qr[1], String(qr[2]).toLowerCase()));
     row.linkFills = [];
     row.linkValue = '';
     row.linkedText = '';
     row.linkedNote = '';
-    row.status = 'linked';
-    row.errorMsg = 'Linked to this QR';
-    row.linkNote = '';
+    if (holds) {
+        row.status = 'linked';
+        row.errorMsg = 'Linked to this QR';
+        row.linkNote = '';
+    } else {
+        const sid = wizardState.editSpoolId;
+        row.status = 'refused';
+        row.errorMsg = 'Not linked';
+        row.linkNote = String(productSaved || '').trim()
+            ? `Saved with the 📄 Product Link you typed, so #${sid} isn't linked to this QR.`
+            : `Saved with 📄 Product Link empty, so #${sid} isn't linked to this QR.`;
+        row.unlinked = true;      // its text, unchanged, isn't checked again (wizardLinkPrusament)
+    }
     window.wizardRenderSpoolRowBadge(0);
     window.wizardRenderLinkNote();
     window.wizardUpdateSubmitGate();
@@ -7122,7 +7196,12 @@ window.wizardLinkPrusament = async (idx, rawUrl) => {
     // Review round 1 of Group 66: the row's text unchanged since its link (or its check on
     // its way) is checked again for nothing (R5-01: a Tab through the row re-ran it, and a
     // refusal then emptied the boxes the link filled; R4-03: two checks of one link raced).
-    if (url && row.url === url && ['linked', 'linked-new', 'pending'].includes(row.status)) return;
+    // So is a row a landed Save settled as not linked (round 5, R5W4): checked again on a Tab
+    // through it, a Product Link emptied by hand was filled again, "Links at Save". Any
+    // other check, a ✕ included, ends that.
+    if (url && row.url === url && (['linked', 'linked-new', 'pending'].includes(row.status)
+        || (row.status === 'refused' && row.unlinked))) return;
+    row.unlinked = false;
     // Each check has its own token: only the newest may fill or record (R4-03).
     const token = row.linkToken = (row.linkToken || 0) + 1;
     // An earlier link's fills are put back only once this one is decided (R5-01): a ✕ (no

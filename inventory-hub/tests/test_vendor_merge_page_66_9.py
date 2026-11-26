@@ -2452,3 +2452,404 @@ def test_an_open_forgets_the_last_windows_merges(wiz):
     assert wiz.evaluate("() => wizardState.vendorMerges['9']") == "4"
     _wiz_edit(wiz)
     assert wiz.evaluate("() => Object.keys(wizardState.vendorMerges).length") == 0
+
+
+# --- review round 5 (2026-11-26): the page and editor findings, pinned ---------------------
+
+OVT_PLAN_1_4 = dict(PLAN, default_keep=4, plan=dict(
+    PLAN["plan"], source=ROWS[1], target=ROWS[4], carry={"external_id": "OVT"},
+    carry_words=["External ID “OVT”"], filaments=[{"id": 300, "name": "Blue", "material": "PLA"}]))
+SUNLU4_OVT = dict(SUNLU4, external_id="OVT")
+MERGED_1_4 = dict(MERGED, source_vendor_id=1, target_vendor_id=4, vendor=SUNLU4_OVT, moved_filament_ids=[300],
+                  msg="Merged Overture #1 into Sunlu #4: 1 filament moved, Overture #1 deleted.")
+CARRY_UNSURE_NOW = {"__status": 502, "__body": dict(CARRY_UNSURE["__body"], source_kept=True, target_kept=True,
+                                                    carry_unsure=True)}
+
+
+def _grab_held(page, name):
+    page.wait_for_function("() => !!(window.__held && window.__held['/api/vendors'])")
+    page.evaluate("(n) => { window[n] = window.__held['/api/vendors']; delete window.__held['/api/vendors']; }", name)
+
+
+def _press_then_gone_with_the_read_held(page, then_answers=None):
+    """35 -> 4 pressed with no answer (the check still lists #35), its plan asked again
+    answers gone 35: the settle read (S) is held, kept as window.__S."""
+    page.evaluate("""(a) => { window.__goneNow = false;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run)
+            ? (window.__goneNow ? a.gone : a.plan) : '__reject__';
+        Object.assign(window.__answers, a.more || {}); }""", {"plan": PLAN, "gone": GONE35, "more": then_answers})
+    _ask_pair(page, 4)
+    page.evaluate("(v) => { let n = 0; window.__goneNow = true;"
+                  " window.__answers['/api/vendors'] = () => (++n === 1 ? v : '__hold__'); }", VENDORS)
+    page.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    _grab_held(page, "__S")
+    page.wait_for_timeout(100)
+
+
+def _merge_1_into_4_meanwhile(page, answer):
+    page.evaluate("(a) => { window.__answers['POST /api/vendors/1/merge_into/4'] = (req) =>"
+                  " (req.body && req.body.dry_run) ? a.p : a.m; window.__answers['/api/vendors/4/merge_options'] = a.o; }",
+                  {"p": OVT_PLAN_1_4, "m": answer, "o": options(4)})
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(750)
+    page.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="1"][data-vm-dst="4"]').first.click()
+    _plan_painted(page)
+    _yes_by_keyboard(page)
+
+
+def test_a_settle_read_a_newer_merge_overtook_tells_the_merge_but_no_record(vm):
+    """R5P2: S, sent before 1 -> 4 merged (its carry gave #4 External ID OVT), lands with
+    #4 from before that carry: the merge of #35 is told (the deleted id goes) with no record,
+    and the editor keeps OVT; its Save sends it."""
+    _press_then_gone_with_the_read_held(vm)
+    _merge_1_into_4_meanwhile(vm, MERGED_1_4)
+    vm.wait_for_function("() => window.__ev.filter((e) => e[0] === 'vendor:merged').length === 1")
+    vm.wait_for_timeout(150)
+    assert _editor_state(vm)["ext"] == "OVT"
+    vm.evaluate("(v) => window.__S(v)", {"success": True, "vendors": [SUNLU4, OVERTURE, ACME]})
+    vm.wait_for_timeout(250)
+    st = _editor_state(vm)
+    assert (st["ext"], st["saveOff"], st["banner"]) == ("OVT", False, "")
+    ev = _merged_events(vm)
+    assert len(ev) == 2 and (ev[1][1]["from"], ev[1][1]["into"]) == ("35", "4")
+    assert ev[1][1]["vendor"] is None and ev[1][1].get("stale") is True
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    sent = _save_editor_with_a_note(vm, 4, SUNLU4_OVT)
+    assert len(sent) == 1 and sent[0]["body"]["data"]["external_id"] == "OVT"
+
+
+def test_a_settle_read_that_fails_after_a_newer_merge_holds_nothing(vm):
+    """R5P2: S fails late, after 1 -> 4 filled the editor: no hold over a filled editor."""
+    _press_then_gone_with_the_read_held(vm)
+    _merge_1_into_4_meanwhile(vm, MERGED_1_4)
+    vm.wait_for_function("() => window.__ev.filter((e) => e[0] === 'vendor:merged').length === 1")
+    vm.wait_for_timeout(150)
+    vm.evaluate("() => window.__S({ success: false, msg: 'blip' }, 502)")
+    vm.wait_for_timeout(250)
+    st = _editor_state(vm)
+    assert (st["ext"], st["saveOff"], st["banner"]) == ("OVT", False, "")
+
+
+def test_a_settle_read_never_silences_a_read_sent_after_it(vm):
+    """R5P2: S (sent first) lands first with #4 from before; T, a newer read after a 409
+    on 1 -> 4, brings OVT and is told."""
+    _press_then_gone_with_the_read_held(vm)
+    _merge_1_into_4_meanwhile(vm, BUSY)
+    _grab_held(vm, "__T")
+    vm.evaluate("(v) => window.__S(v)", {"success": True, "vendors": [SUNLU4, OVERTURE, ACME]})
+    vm.wait_for_timeout(200)
+    vm.evaluate("(v) => window.__T(v)", {"success": True, "vendors": [SUNLU4_OVT, OVERTURE, ACME]})
+    vm.wait_for_timeout(200)
+    assert _editor_state(vm)["ext"] == "OVT"
+
+
+def test_a_stale_merge_tells_an_editor_on_the_one_merged_away_to_open_the_kept_one(vm):
+    """R5P2: the editor on #35; S is overtaken by a newer word of #4: the editor can't stay on
+    a deleted manufacturer, and says to open #4."""
+    _answer_merge(vm, merge="__reject__")
+    vm.evaluate("(a) => { window.__goneNow = false; window.__answers['POST /api/vendors/35/merge_into/4'] = (req) =>"
+                " (req.body && req.body.dry_run) ? (window.__goneNow ? a.gone : a.plan) : '__reject__'; }",
+                {"plan": PLAN, "gone": GONE35})
+    _ask_pair(vm, 35)
+    vm.evaluate("(v) => { let n = 0; window.__goneNow = true;"
+                " window.__answers['/api/vendors'] = () => (++n === 1 ? v : '__hold__'); }", VENDORS)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    _grab_held(vm, "__S")
+    vm.wait_for_timeout(100)
+    vm.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } }))",
+                SUNLU4_OVT)
+    vm.evaluate("(v) => window.__S(v)", {"success": True, "vendors": [SUNLU4, OVERTURE, ACME]})
+    vm.wait_for_timeout(250)
+    st = _editor_state(vm)
+    assert st["saveOff"] and st["banner"] == "Manufacturer #35 was merged into #4: close this window and open #4 to edit it."
+
+
+def test_target_kept_ends_an_unaccounted_press_of_the_kept_one(vm):
+    """R5P4: ⇄ 4 -> 35 pressed with no answer, then 35 -> 4 answered partial after both ends
+    were read (target_kept): #4 deleted another way later is said as gone, no merge told."""
+    vm.evaluate("""(a) => {
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run) ? a.plan : a.partial;
+        window.__answers['POST /api/vendors/4/merge_into/35'] = (req) => (req.body && req.body.dry_run) ? a.swapped : '__reject__'; }""",
+                {"plan": PLAN, "partial": {"__status": 502, "__body": dict(PARTIAL, target_kept=True)}, "swapped": SWAPPED})
+    _ask_pair(vm, 4)
+    _click_by_keyboard(vm, "swap")
+    vm.wait_for_timeout(150)
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    _click_by_keyboard(vm, "swap")
+    vm.wait_for_timeout(150)
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    _close_question_and_window(vm)
+    _reopen_window_gone(vm, 4, [SUNLU35, OVERTURE, ACME])
+    assert _merged_events(vm) == []
+    assert "isn't in Spoolman any more" in vm.locator("#fcc-vendor-merge [data-vm-body]").inner_text()
+
+
+def test_the_editors_save_waits_while_a_settle_read_is_out(vm):
+    """R5P1: the question closed, the window closed, S still out: the editor's Save sends
+    nothing and says why; once S lands, Save works."""
+    _press_then_gone_with_the_read_held(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.evaluate("(v) => { window.__answers['PATCH /api/vendors/4'] = { success: true, vendor: v }; }", SUNLU4_AFTER)
+    vm.fill("#vendoredit-comment", "a note")
+    vm.locator("#vendoredit-save").click()
+    vm.wait_for_timeout(150)
+    assert [x for x in vm.evaluate("window.__posts") if x["url"].endswith("/api/vendors/4")] == []
+    assert _editor_state(vm)["banner"] == ("FCC is still reading manufacturer #4 after the merge, so nothing was saved: "
+                                           "press Save again in a moment.")
+    vm.evaluate("(v) => window.__S(v)", AFTER)
+    vm.wait_for_timeout(250)
+    st = _editor_state(vm)
+    assert vm.locator("#vendoredit-comment").input_value() == "a note"
+    assert st["saveOff"] and st["banner"].startswith("Manufacturer #4 was merged with #35 while this window had unsaved")
+
+
+def test_the_editors_save_waits_while_a_read_after_a_refusal_is_out(vm):
+    """R5P1: a 409's read of the kept one is out after the question and window closed."""
+    _answer_merge(vm, merge=BUSY)
+    _ask_pair(vm, 4)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = '__hold__'; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    _grab_held(vm, "__T")
+    _plan_painted(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.evaluate("(v) => { window.__answers['PATCH /api/vendors/4'] = { success: true, vendor: v }; }", SUNLU4)
+    vm.locator("#vendoredit-save").click()
+    vm.wait_for_timeout(150)
+    assert [x for x in vm.evaluate("window.__posts") if x["url"].endswith("/api/vendors/4")] == []
+    vm.evaluate("(v) => window.__T(v)", VENDORS)
+    vm.wait_for_timeout(200)
+    vm.locator("#vendoredit-save").click()
+    vm.wait_for_timeout(150)
+    assert len([x for x in vm.evaluate("window.__posts") if x["url"].endswith("/api/vendors/4")]) == 1
+
+
+def test_a_carry_fcc_couldnt_place_holds_the_kept_ones_editor(vm):
+    """R5S2 / R5P1: the carry's answer was lost and may still land: no read that could come
+    before it; the editor on the kept one holds, and its Save sends nothing."""
+    _answer_merge(vm, merge=CARRY_UNSURE_NOW)
+    _ask_pair(vm, 4)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = '__hold__'; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    _plan_painted(vm)
+    st = _editor_state(vm)
+    assert st["saveOff"] and st["banner"].startswith("FCC couldn't read manufacturer #4 after a merge was tried")
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.locator("#vendoredit-save").click(force=True)
+    vm.wait_for_timeout(150)
+    assert [x for x in vm.evaluate("window.__posts") if x["url"].endswith("/api/vendors/4")] == []
+
+
+def test_a_hold_set_during_the_editors_own_save_stays_after_it_fails(ef):
+    """R5P1: a merge's hold arrives while the editor's Save is out; the Save fails: Save stays
+    off and both are said; the word that came meanwhile is weighed, not lost."""
+    _open_editor(ef, 4)
+    ef.fill("#vendoredit-comment", "a note")
+    ef.evaluate("() => { window.__answers['PATCH /api/vendors/4'] = '__hold__'; }")
+    ef.locator("#vendoredit-save").click()
+    ef.wait_for_timeout(60)
+    ef.evaluate("""(v) => { document.dispatchEvent(new CustomEvent('vendor:merged', { detail:
+        { from: '35', into: '4', vendor: v, moved: [] } }));
+        document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } })); }""", SUNLU4_AFTER)
+    ef.wait_for_timeout(60)
+    ef.evaluate("() => window.__held['/api/vendors/4']({ success: false, msg: 'Spoolman refused it: database is locked' }, 502)")
+    ef.wait_for_timeout(150)
+    st = _editor_state(ef)
+    assert st["saveOff"]
+    assert st["banner"].startswith("Manufacturer #4 was merged with #35 while this window had unsaved changes")
+    assert st["banner"].endswith("The Save didn't go through either: Spoolman refused it: database is locked")
+    assert ef.locator("#vendoredit-comment").input_value() == "a note"
+
+
+def test_a_change_told_during_the_editors_own_save_is_weighed_when_it_fails(ef):
+    """R5P1: a word of the shown manufacturer that came while its Save was out was dropped:
+    after a failed Save the editor showed #4 as before with Save on."""
+    _open_editor(ef, 4)
+    ef.fill("#vendoredit-comment", "a note")
+    ef.evaluate("() => { window.__answers['PATCH /api/vendors/4'] = '__hold__'; }")
+    ef.locator("#vendoredit-save").click()
+    ef.wait_for_timeout(60)
+    ef.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } }))",
+                SUNLU4_AFTER)
+    ef.wait_for_timeout(30)
+    ef.evaluate("() => window.__held['/api/vendors/4']({ success: false, msg: 'Spoolman refused it: database is locked' }, 502)")
+    ef.wait_for_timeout(150)
+    st = _editor_state(ef)
+    assert st["saveOff"] and st["banner"].startswith("Manufacturer #4 changed while this window was open")
+    assert ef.locator("#vendoredit-comment").input_value() == "a note"
+
+
+def test_a_check_read_a_newer_word_overtook_tells_the_merge_but_no_record(vm):
+    """R5P2 (the check's landed path): a press with no answer; while its check read is out,
+    a newer word of #4 is told (OVT); the read finds #35 gone with #4 from before: the merge
+    is told with no record, and the editor keeps OVT."""
+    _answer_merge(vm, merge="__reject__")
+    _ask_pair(vm, 4)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = '__hold__'; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    _grab_held(vm, "__C")
+    vm.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } }))",
+                SUNLU4_OVT)
+    vm.wait_for_timeout(60)
+    vm.evaluate("(v) => window.__C(v)", {"success": True, "vendors": [SUNLU4, OVERTURE, ACME]})
+    vm.wait_for_timeout(250)
+    ev = _merged_events(vm)
+    assert len(ev) == 1 and ev[0][1]["vendor"] is None and ev[0][1].get("stale") is True
+    st = _editor_state(vm)
+    assert (st["ext"], st["saveOff"]) == ("OVT", False)
+
+
+@pytest.mark.parametrize("rec", [
+    dict(SUNLU4, comment="a\r\nb"),
+    dict(SUNLU4, extra={"website": '"https://a.example/ "'}),
+    dict(SUNLU4, name=" Sunlu ", external_id=" E "),
+    dict(SUNLU4, empty_spool_weight=0.30000000000000004),
+    dict(SUNLU4, empty_spool_weight=None, comment=None, external_id=None, extra=None),
+], ids=["crlf-notes", "website-spaces", "spaced-names", "float-weight", "blanks"])
+def test_a_record_compares_as_its_boxes_show_it(ef, rec):
+    """R5P7: _vendorBoxesFor reads a record as the boxes do."""
+    _open_editor(ef, 4)
+    out = ef.evaluate("(v) => { _vendorEditFill(v); return { boxes: _vendorEditBoxes(), forv: _vendorBoxesFor(v) }; }", rec)
+    assert out["boxes"] == out["forv"]
+
+
+def test_a_hold_lifts_for_a_record_with_crlf_notes(ef):
+    """R5P7 through the release path: the editor shows the record; a read fails (hold); the
+    same record comes back: the hold lifts."""
+    rec = dict(SUNLU4, comment="line one\r\nline two", extra={"website": '"https://a.example/ "'})
+    ef.evaluate("(v) => { window.__answers['/api/vendors'] = { success: true, vendors: [v] }; }", rec)
+    _open_editor(ef, 4)
+    ef.evaluate("() => document.dispatchEvent(new CustomEvent('vendor:unread', { detail: { id: '4' } }))")
+    ef.wait_for_timeout(30)
+    assert _editor_state(ef)["saveOff"]
+    ef.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } }))", rec)
+    ef.wait_for_timeout(30)
+    st = _editor_state(ef)
+    assert (st["saveOff"], st["banner"]) == (False, "")
+
+
+def test_a_held_then_typed_editor_keeps_its_typing_through_a_merge(ef):
+    """R5P6 (Mh): held by an unread word, the person types; a merge's record never fills over
+    the typing."""
+    _open_editor(ef, 4)
+    ef.evaluate("() => document.dispatchEvent(new CustomEvent('vendor:unread', { detail: { id: '4' } }))")
+    ef.wait_for_timeout(30)
+    ef.fill("#vendoredit-comment", "typed under the hold")
+    ef.evaluate("""(v) => { document.dispatchEvent(new CustomEvent('vendor:merged', { detail:
+        { from: '35', into: '4', vendor: v, moved: [] } }));
+        document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } })); }""", SUNLU4_AFTER)
+    ef.wait_for_timeout(60)
+    assert ef.locator("#vendoredit-comment").input_value() == "typed under the hold"
+    assert _editor_state(ef)["saveOff"]
+
+
+def test_a_merge_that_changed_nothing_on_the_kept_one_leaves_the_typing_and_save(ef):
+    """R5P8: the record is what the editor last filled: no hold at any point."""
+    _open_editor(ef, 4)
+    ef.fill("#vendoredit-comment", "a note")
+    ef.evaluate("""(v) => { document.dispatchEvent(new CustomEvent('vendor:merged', { detail:
+        { from: '35', into: '4', vendor: v, moved: [] } }));
+        window.__afterMerged = { save: document.getElementById('vendoredit-save').disabled,
+            shown: !document.getElementById('vendoredit-error').classList.contains('d-none') };
+        document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '4', vendor: v } })); }""", SUNLU4)
+    ef.wait_for_timeout(60)
+    assert ef.evaluate("window.__afterMerged") == {"save": False, "shown": False}
+    st = _editor_state(ef)
+    assert (st["saveOff"], st["banner"]) == (False, "")
+    assert ef.locator("#vendoredit-comment").input_value() == "a note"
+
+
+def test_typing_in_the_box_keeps_the_keyboard_there_when_a_merge_settles(vm):
+    """R5P3."""
+    _press_then_gone_with_the_read_held(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.keyboard.press("/")
+    vm.keyboard.type("Ov", delay=120)
+    assert _on(vm) == "box"
+    vm.evaluate("(o) => { window.__answers['/api/vendors/4/merge_options'] = o; }", AFTER_OPTIONS)
+    vm.evaluate("(v) => window.__S(v)", AFTER)
+    vm.wait_for_timeout(300)
+    assert len(_merged_events(vm)) == 1 and _on(vm) == "box"
+    assert vm.locator("#fcc-vendor-merge [data-vm-box]").input_value() == "Ov"
+
+
+def test_a_newer_read_after_an_older_failed_one_is_told(vm):
+    """R5P6 (Me): vendor:unread carries its read's number: the older read A fails first (the
+    editor holds); the newer B finds #4 as the editor showed it and lifts the hold."""
+    _answer_merge(vm, merge=BUSY)
+    _ask_pair(vm, 4)
+    vm.evaluate("() => { window.__answers['/api/vendors'] = '__hold__'; }")
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    _grab_held(vm, "__A")
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)
+    _grab_held(vm, "__B")
+    vm.evaluate("() => window.__A({ success: false, msg: 'blip' }, 502)")
+    vm.wait_for_timeout(100)
+    assert _editor_state(vm)["saveOff"]
+    vm.evaluate("(v) => window.__B(v)", VENDORS)
+    vm.wait_for_timeout(200)
+    st = _editor_state(vm)
+    assert (st["saveOff"], st["banner"]) == (False, "")
+
+
+def test_the_reverse_question_tells_its_own_of_two_pairs(vm):
+    """R5P6 (Ma): 35 -> 4 and 35 -> 1 pressed with no answer; the 4 -> 35 question (the
+    first pair asked the other way round) meeting gone 35 is the 35 -> 4 merge."""
+    vm.evaluate("""(a) => { window.__goneNow = false;
+        window.__answers['POST /api/vendors/35/merge_into/4'] = (req) => (req.body && req.body.dry_run) ? a.plan : '__reject__';
+        window.__answers['POST /api/vendors/4/merge_into/35'] = (req) => (req.body && req.body.dry_run)
+            ? (window.__goneNow ? a.gone : a.swapped) : '__reject__';
+        window.__answers['POST /api/vendors/1/merge_into/35'] = (req) => a.p1_35;
+        window.__answers['POST /api/vendors/35/merge_into/1'] = (req) => (req.body && req.body.dry_run) ? a.p35_1 : '__reject__'; }""",
+                {"plan": PLAN, "swapped": SWAPPED, "gone": GONE35, "p1_35": PLAN_1_35, "p35_1": PLAN_35_1})
+    _open_window(vm, 35)
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="35"][data-vm-dst="4"]').first.click()
+    _plan_painted(vm)
+    vm.locator('#fcc-vendor-merge-confirm [data-vmq="yes"]').click()
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="1"][data-vm-dst="35"]').click()
+    _plan_painted(vm)
+    _yes_by_keyboard(vm)
+    vm.wait_for_timeout(250)
+    _plan_painted(vm)
+    vm.keyboard.press("Escape")
+    vm.wait_for_timeout(750)
+    vm.evaluate("(v) => { window.__goneNow = true; window.__answers['/api/vendors'] = v; }", AFTER)
+    vm.locator('#fcc-vendor-merge button.fcc-vm-row[data-vm-src="35"][data-vm-dst="4"]').first.click()
+    _plan_painted(vm)
+    _click_by_keyboard(vm, "swap")
+    vm.wait_for_timeout(300)
+    ev = _merged_events(vm)
+    assert len(ev) == 1 and (ev[0][1]["from"], ev[0][1]["into"]) == ("35", "4")
+
+
+def test_a_weightless_manufacturer_shown_as_it_was_lifts_the_hold(ef):
+    """R5P6 (Mm): Sunlu #35 has no empty weight."""
+    _open_editor(ef, 35)
+    ef.evaluate("() => document.dispatchEvent(new CustomEvent('vendor:unread', { detail: { id: '35' } }))")
+    ef.wait_for_timeout(30)
+    ef.evaluate("(v) => document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: '35', vendor: v } }))",
+                SUNLU35)
+    ef.wait_for_timeout(30)
+    st = _editor_state(ef)
+    assert (st["saveOff"], st["banner"]) == (False, "")

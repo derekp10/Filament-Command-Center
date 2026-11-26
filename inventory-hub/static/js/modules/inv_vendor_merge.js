@@ -93,6 +93,15 @@ console.log("🚀 Loaded Module: VENDOR MERGE");
     // first silenced a newer one). A read's own word carries its number (`fccSeq`).
     let _seq = 0;
     const _toldSeq = {};
+    // Reads of a kept manufacturer sent after a merge that may have changed it, still out
+    // (review round 5, R5P1: the manufacturer editor's Save went out meanwhile with the boxes
+    // from before the carry, and cleared it). The editor's Save waits while one is out.
+    const _readsOut = {};
+    const _readOut = (id, d) => {
+        const k = String(id);
+        _readsOut[k] = Math.max(0, (_readsOut[k] || 0) + d);
+    };
+    window.vendorMergeReading = (id) => (_readsOut[String(id)] || 0) > 0;
     const _noteTold = (id, n) => {
         if (id == null || id === '') return;
         const k = String(id);
@@ -748,16 +757,25 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
     // id), whether or not the question or the window is still up.
     // `pair`: the merge told, when it isn't the question's own pair (an earlier press's,
     // found finished; R3P4). `q` may be a bare stand-in for a window with no question.
-    function _merged(q, data, pair) {
+    // `at`: the number of the read the merge is told from (_settleUnsure, _qCheckLanded),
+    // so its words never outrank a word sent after that read; when a newer word of the kept
+    // one was told since, the record it brings is older than what the windows show, and the
+    // merge is told with no record, `stale` (the deleted id must still go; review round 5,
+    // R5P2: told as the newest word, an older record refilled the editor over a newer
+    // merge's carry, and silenced a newer read).
+    function _merged(q, data, pair, at) {
         const from = String(pair ? pair.src : q.src);
         const into = String(pair ? pair.dst : q.dst);
-        const vendor = data.vendor || null;
+        const fromRead = typeof at === 'number';
+        const stale = fromRead && _toldNewer(into, at);
+        const vendor = stale ? null : (data.vendor || null);
+        const numbered = (detail) => (fromRead && !stale ? Object.assign(detail, { fccSeq: at }) : detail);
         _forgetUnsure(from);
         _forgetUnsure(into);
-        document.dispatchEvent(new CustomEvent('vendor:merged', {
-            detail: { from, into, vendor, moved: Array.isArray(data.moved_filament_ids) ? data.moved_filament_ids : [] },
-        }));
-        if (vendor) document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: into, vendor } }));
+        const merged = { from, into, vendor, moved: Array.isArray(data.moved_filament_ids) ? data.moved_filament_ids : [] };
+        if (stale) merged.stale = true;
+        document.dispatchEvent(new CustomEvent('vendor:merged', { detail: numbered(merged) }));
+        if (vendor) document.dispatchEvent(new CustomEvent('vendor:updated', { detail: numbered({ id: into, vendor }) }));
         document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
         const msg = String(data.msg || `Merged ${from} into ${into}.`) + _labelTroubleWords(data);
         const trouble = !!_labelTroubleWords(data);
@@ -779,9 +797,14 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
             // window's elements counted, and the read's callback then lit row 0).
             const free = !a || a === document.body || !a.isConnected || a === _box(win)
                 || !!(q.handle && q.handle.element && q.handle.element.contains(a));
+            // Row 0 only when this merge put the keyboard in the box (review round 5, R5P3: a
+            // person typing in the box lost it to row 0 once the list landed in a pause, and
+            // the rest of the word went to the scan path).
+            const moved = !another && free && a !== _box(win);
             if (!another && free) _focusBox(win);
             const typed = _box(win).value;
             _read(win, () => {
+                if (!moved) return;
                 // The first row takes the keyboard only while it is still where the merge
                 // left it (review round 2, R2P4: a read slower than the person moved it from
                 // the box they were typing in, whose next keys went to a row and on to the
@@ -822,7 +845,9 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
     // finish tells the windows the kept one's record from it.
     function _qCheckLanded(q, data) {
         const at = ++_seq;
+        _readOut(q.dst, 1);
         return _readVendors().then((r) => {
+            _readOut(q.dst, -1);
             const kept = _keptIn(q, r);
             const seen = { landed: false, read: r.read, kept, at };
             if (!r.read || !kept || r.vendors.some((v) => v && String(v.id) === String(q.src))) return seen;
@@ -831,7 +856,7 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
                 moved_filament_ids: (data && data.moved_filament_ids) || [],
                 labels_flagged: data && data.labels_flagged,
                 msg: `${_qName(q, q.src)} is gone from Spoolman: the merge into ${label(kept)} finished.`,
-            });
+            }, null, at);
             seen.landed = true;
             return seen;
         });
@@ -844,6 +869,13 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
     // showing the fields from before the carry, and its Save cleared what the carry copied).
     function _qTellKept(q, data, seen) {
         const dst = String(q.dst);
+        // The carry's answer was lost and FCC couldn't see it land: it may still land, so a
+        // read now may come before it. The kept one's editor holds instead (review round 5,
+        // R5S2: the record from before the carry was told as current).
+        if (data && data.carry_unsure) {
+            document.dispatchEvent(new CustomEvent('vendor:unread', { detail: { id: dst, fccSeq: ++_seq } }));
+            return;
+        }
         if (data && data.vendor && String(data.vendor.id) === dst) {
             document.dispatchEvent(new CustomEvent('vendor:updated', { detail: { id: dst, vendor: data.vendor } }));
             return;
@@ -860,7 +892,8 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         };
         if (seen) { settle(seen, seen.at || 0); return; }
         const at = ++_seq;
-        _readVendors().then((r) => settle({ read: r.read, kept: _keptIn(q, r) }, at));
+        _readOut(dst, 1);
+        _readVendors().then((r) => { _readOut(dst, -1); settle({ read: r.read, kept: _keptIn(q, r) }, at); });
     }
 
     // The server's 404 `gone` names a manufacturer of the pair that isn't in Spoolman any
@@ -894,7 +927,10 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
         const via = q || { win, src: pair.src, dst: pair.dst, plan: null, lastPlan: null, handle: null, closed: true };
         const srcName = _qName(via, pair.src);
         const dstName = _qName(via, pair.dst);
+        const at = ++_seq;
+        _readOut(pair.dst, 1);
         _readVendors().then((r) => {
+            _readOut(pair.dst, -1);
             if (q) q.inFlight = false;
             const kept = r.read ? r.vendors.find((v) => v && String(v.id) === pair.dst) || null : null;
             if (r.read && !kept) {
@@ -909,7 +945,7 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
                 vendor: kept,
                 moved_filament_ids: [],
                 msg: `${srcName} is gone from Spoolman: the merge into ${kept ? label(kept) : dstName} finished.`,
-            }, pair);
+            }, pair, at);
         });
     }
 
@@ -956,6 +992,9 @@ ${Q} .fcc-vmq-flash:empty { display:none; }
                 // running and it was there: any earlier one FCC couldn't account for has
                 // ended without deleting it (review round 4, R4P1).
                 if (data && data.source_kept) _forgetUnsure(pair.src);
+                // ...and so does the kept one's, read after it inside the lock (review round 5,
+                // R5P4: a ⇄'d press of it stayed, and a later gone of it read as that merge).
+                if (data && data.target_kept) _forgetUnsure(pair.dst);
                 if (data && data.gone != null) { _qSettleGone(q, msg, data.gone); return; }
                 // An answer FCC couldn't read, or a delete it couldn't confirm: this pair's
                 // merge may have run, or be running still (review round 2, R2S8).
